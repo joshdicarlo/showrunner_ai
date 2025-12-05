@@ -1,0 +1,5 @@
+{
+  "name": "ShowrunnerAI",
+  "description": "A node-based creative workflow app for building stories, iterating ideas, and generating assets using Nano Banana and Veo.",
+  "requestFramePermissions": []
+}
