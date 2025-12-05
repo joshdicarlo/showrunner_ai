@@ -34,6 +34,7 @@ export interface NodeData {
   model?: string;
   label?: string; // For groups
   collapsed?: boolean; // For groups
+  driveId?: string; // Link to Google Drive file
 }
 
 export interface FlowNode {
@@ -63,6 +64,7 @@ export interface ProjectAsset {
   summary?: string;
   thumbnailUrl?: string;
   parentId?: string; // For hierarchical assets (e.g. Shots inside Sequences)
+  driveId?: string; // Folder ID or File ID in Drive
 }
 
 export interface Project {
@@ -74,6 +76,8 @@ export interface Project {
   nodes: FlowNode[];
   connections: FlowConnection[];
   updatedAt: Date;
+  driveFolderId?: string; // Root folder for this project in Drive
+  driveDbId?: string; // Sheet ID
 }
 
 export interface StorySeed {
@@ -86,4 +90,9 @@ export interface StorySeed {
 export interface GeminiConfig {
     model: string;
     systemInstruction?: string;
+}
+
+export interface DriveConfig {
+    clientId: string;
+    scope: string;
 }

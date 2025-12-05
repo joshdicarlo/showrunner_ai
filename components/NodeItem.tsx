@@ -20,6 +20,7 @@ interface NodeItemProps {
   isThumbnail?: boolean;
   isDragOver?: boolean; 
   projectAssets?: ProjectAsset[];
+  assetThumbnails?: Record<string, string>;
 }
 
 const MarkdownToolbar: React.FC<{ 
@@ -82,13 +83,16 @@ const MarkdownToolbar: React.FC<{
     );
 };
 
-const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, activeAsset, isThumbnail, isDragOver, projectAssets }) => {
+const NodeItemComponent: React.FC<NodeItemProps> = ({ 
+    node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, 
+    activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {} 
+}) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsedEditMode, setCollapsedEditMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const textImportInputRef = useRef<HTMLInputElement>(null); // For importing text files
+  const textImportInputRef = useRef<HTMLInputElement>(null); 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Co-Pilot State
@@ -102,19 +106,33 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
     let resolved = text;
     
     try {
-        // 1. Resolve Global Project Asset References (@Zax, @Neo, etc.)
+        // 1. Resolve Global Project Asset References (@Zax, @Neo, etc.) AND Dot Syntax (@Zax.Look)
         if (projectAssets) {
-            // Sort by title length desc to ensure we match "@RoboCop" before "@Robo"
+            // Sort by title length desc
             const sortedAssets = [...projectAssets].sort((a, b) => b.title.length - a.title.length);
             
+            // Regex to find @Word or @Word.Word
+            // We'll iterate manually to handle the logic
+            
             for (const asset of sortedAssets) {
+                // Case 1: Dot Syntax (@Asset.Child)
                 const safeTitle = asset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const regex = new RegExp(`@${safeTitle}\\b`, 'gi');
+                const dotRegex = new RegExp(`@${safeTitle}\\.([a-zA-Z0-9_]+)\\b`, 'gi');
                 
-                if (regex.test(resolved)) {
+                resolved = resolved.replace(dotRegex, (match, childName) => {
+                    const child = projectAssets.find(c => c.parentId === asset.id && c.title.toLowerCase() === childName.toLowerCase());
+                    if (child) {
+                        return `${asset.description}, wearing ${child.description}`; 
+                    }
+                    return match; // Keep original if child not found
+                });
+
+                // Case 2: Standard Syntax (@Asset)
+                const standardRegex = new RegExp(`@${safeTitle}\\b`, 'gi');
+                if (standardRegex.test(resolved)) {
                     let replacement = asset.description;
                     
-                    // Inheritance Logic: If no visual style, check parent
+                    // Inheritance Logic
                     let effectiveStyle = asset.visualStyle;
                     if (!effectiveStyle && asset.parentId) {
                          const parent = projectAssets.find(p => p.id === asset.parentId);
@@ -124,7 +142,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                     if (effectiveStyle) {
                         replacement += `, visual style: ${effectiveStyle}`;
                     }
-                    resolved = resolved.replace(regex, replacement);
+                    resolved = resolved.replace(standardRegex, replacement);
                 }
             }
         }
@@ -153,13 +171,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
             if (parentDesc) {
                  resolved = resolved.replace(/@parent/gi, parentDesc);
             }
-            
-            // Explicit Title fallback if not caught by global loop (redundant but safe)
-            if (!projectAssets) {
-                const safeTitle = activeAsset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const nameRegex = new RegExp(`@${safeTitle}`, 'gi');
-                resolved = resolved.replace(nameRegex, replacement);
-            }
         }
     } catch (e) {
         console.warn("Prompt resolution failed", e);
@@ -167,12 +178,30 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
     return resolved;
   };
 
+  // --- Reference Image Finder ---
+  const resolveReferenceImage = (text: string): string | undefined => {
+      if (!projectAssets) return undefined;
+      // Find first mentioned asset that has a thumbnail
+      for (const asset of projectAssets) {
+          if (text.toLowerCase().includes(`@${asset.title.toLowerCase()}`)) {
+              // Check if we have a thumbnail
+              const thumb = assetThumbnails[asset.id] || asset.thumbnailUrl;
+              if (thumb) return thumb;
+          }
+      }
+      // If we are in asset context and referencing @character
+      if (activeAsset && text.toLowerCase().includes('@character')) {
+           const thumb = assetThumbnails[activeAsset.id] || activeAsset.thumbnailUrl;
+           if (thumb) return thumb;
+      }
+      return undefined;
+  };
+
+
   // --- Handlers ---
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    // If expanded, don't trigger drag
     if (isExpanded) return;
-
     const target = e.target as HTMLElement;
     if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'LABEL', 'OPTION'].includes(target.tagName)) {
         e.stopPropagation();
@@ -183,7 +212,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
 
   const handleToggleExpand = (e: React.MouseEvent) => {
       e.stopPropagation();
-      // When collapsing, always exit simple edit mode
       if (isExpanded) setCollapsedEditMode(false); 
       setIsExpanded(!isExpanded);
   };
@@ -220,14 +248,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
 
       onUpdate(node.id, { ...node.data, text: newText });
       
-      // Defer focus to next tick to ensure value update
       setTimeout(() => {
           textarea.focus();
           textarea.setSelectionRange(newCursorPos, newCursorPos);
       }, 0);
   };
 
-  // --- File Ops (Text Node) ---
+  // --- File Ops ---
 
   const handleLocalFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -250,43 +277,33 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
   };
 
   const handleDriveImport = async () => {
-      // In a real app, this would open the Google Picker
       const content = await FileService.simulateDriveImport();
       const current = node.data.text || '';
       onUpdate(node.id, { ...node.data, text: current + (current ? '\n\n' : '') + content });
   };
 
   const handleDriveSave = async () => {
-      // In a real app, this would upload to Drive
       setIsProcessing(true);
       await FileService.simulateDriveSave(node.data.text || '');
       setIsProcessing(false);
-      // Ideally show a toast here
   };
 
-
   // --- Co-Pilot Logic ---
-  
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const val = e.target.value;
       onUpdate(node.id, { ...node.data, text: val });
-      
-      // Clear suggestion on input
       if (suggestion) setSuggestion('');
 
       if (!isCoPilotEnabled) return;
 
-      // Debounce Fetch
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-      
       typingTimerRef.current = setTimeout(async () => {
           if (!val.trim()) return;
-          // Only fetch if cursor is at end (simplified logic for now)
           if (e.target.selectionEnd === val.length) {
                const completion = await GeminiService.generateTextCompletion(val);
                if (completion) setSuggestion(completion);
           }
-      }, 500); // 500ms delay for faster response
+      }, 500); 
   };
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -300,7 +317,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
       }
   };
 
-  // ----------------------
+  // --- Gen Logic ---
 
   const handleTextGen = async () => {
     setIsProcessing(true);
@@ -322,14 +339,19 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
     try {
       const rawPrompt = node.data.prompt || (activeAsset ? `@${activeAsset.title}` : "A cinematic shot");
       const finalPrompt = resolvePrompt(rawPrompt);
-      
-      // Use selected model or default
       const model = node.data.model || MODELS.IMAGE_GEN;
+
+      // Check for Reference Image Injection
+      // Only if user hasn't uploaded their own image to edit? 
+      // Actually AI_IMAGE_GEN doesn't support manual upload in this app design (only AI_IMAGE_EDIT).
+      // So we can always try to find a reference.
+      const refImage = resolveReferenceImage(rawPrompt);
 
       const result = await GeminiService.generateImage(
           finalPrompt,
           node.data.aspectRatio || "16:9",
-          model
+          model,
+          refImage
       );
       onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review' });
     } catch (e) {
@@ -358,11 +380,19 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
       setIsProcessing(true);
       setError(null);
       try {
-          const prompt = resolvePrompt(node.data.prompt || "A video scene");
+          const rawPrompt = node.data.prompt || "A video scene";
+          const finalPrompt = resolvePrompt(rawPrompt);
+          
+          // Use manual upload OR auto-injected reference
+          let refImage = node.data.imageUrl;
+          if (!refImage) {
+               refImage = resolveReferenceImage(rawPrompt);
+          }
+
           const result = await GeminiService.generateVideo(
-              prompt,
+              finalPrompt,
               (node.data.aspectRatio as "16:9" | "9:16") || "16:9",
-              node.data.imageUrl 
+              refImage
           );
           onUpdate(node.id, { ...node.data, videoUrl: result, status: 'review' });
       } catch(e) {
@@ -422,7 +452,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
         if (expanded) {
             return (
                 <div className="flex flex-col h-full max-w-7xl mx-auto w-full bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden shadow-2xl">
-                    {/* Expanded Mode: Toolbar + Split View */}
                     <MarkdownToolbar 
                         onInsert={handleInsertMarkdown} 
                         onImportClick={() => textImportInputRef.current?.click()}
@@ -430,16 +459,9 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                         onDriveImport={handleDriveImport}
                         onDriveSave={handleDriveSave}
                     />
-                    <input 
-                        type="file" 
-                        ref={textImportInputRef} 
-                        className="hidden" 
-                        onChange={handleLocalFileImport} 
-                        accept=".txt,.md,.json,.rtf" 
-                    />
+                    <input type="file" ref={textImportInputRef} className="hidden" onChange={handleLocalFileImport} accept=".txt,.md,.json,.rtf" />
 
                     <div className="flex-1 flex min-h-0">
-                        {/* Editor */}
                         <div className="flex-1 flex flex-col border-r border-zinc-800 relative bg-zinc-900">
                              <div className="bg-zinc-900 px-3 py-1 text-[10px] text-zinc-500 font-mono border-b border-zinc-800 flex justify-between items-center">
                                  <span>EDITOR (MARKDOWN)</span>
@@ -447,12 +469,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                              </div>
                              
                              <div className="relative flex-1">
-                                {/* Ghost Text Overlay */}
                                 {isCoPilotEnabled && suggestion && (
-                                    <div 
-                                        className="absolute inset-0 p-4 font-mono text-sm text-transparent whitespace-pre-wrap break-words pointer-events-none z-0"
-                                        aria-hidden="true"
-                                    >
+                                    <div className="absolute inset-0 p-4 font-mono text-sm text-transparent whitespace-pre-wrap break-words pointer-events-none z-0" aria-hidden="true">
                                         {node.data.text}<span className="text-zinc-500/70">{suggestion}</span>
                                     </div>
                                 )}
@@ -468,7 +486,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                                 />
                              </div>
                         </div>
-                        {/* Preview */}
                         <div className="flex-1 flex flex-col bg-zinc-950">
                             <div className="bg-zinc-950 px-3 py-1 text-[10px] text-zinc-500 font-mono border-b border-zinc-800">PREVIEW</div>
                             <div className="flex-1 p-8 overflow-y-auto markdown-preview">
@@ -480,17 +497,12 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
             );
         }
         
-        // Collapsed Mode
         return (
           <div className="h-full flex flex-col relative group/input">
              {collapsedEditMode ? (
                  <div className="relative w-full h-full">
-                     {/* Ghost Text for Collapsed Mode */}
                      {isCoPilotEnabled && suggestion && (
-                         <div 
-                            className="absolute inset-0 p-3 text-sm leading-relaxed font-sans text-transparent whitespace-pre-wrap break-words pointer-events-none z-0"
-                            aria-hidden="true"
-                         >
+                         <div className="absolute inset-0 p-3 text-sm leading-relaxed font-sans text-transparent whitespace-pre-wrap break-words pointer-events-none z-0" aria-hidden="true">
                              {node.data.text}<span className="text-zinc-500/70">{suggestion}</span>
                          </div>
                      )}
@@ -505,10 +517,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                      />
                  </div>
              ) : (
-                 <div 
-                    className="h-full p-4 overflow-y-auto markdown-preview text-xs select-text"
-                    onDoubleClick={handleToggleExpand} // Still expand on double click
-                 >
+                 <div className="h-full p-4 overflow-y-auto markdown-preview text-xs select-text" onDoubleClick={handleToggleExpand}>
                      <ReactMarkdown>{node.data.text || ''}</ReactMarkdown>
                      {!node.data.text && <span className="text-zinc-600 italic">Empty note...</span>}
                  </div>
@@ -517,11 +526,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
         );
 
       case NodeType.AI_TEXT_GEN:
-        // INVERTED LAYOUT: Output on Top, Prompt on Bottom
         return (
           <div className={`flex flex-col h-full ${expanded ? 'max-w-4xl mx-auto w-full' : ''}`}>
-             
-             {/* Output Area (Flex Grow) */}
              <div className="flex-1 p-2 overflow-y-auto min-h-0 markdown-preview bg-zinc-950/30 rounded-t">
                  {node.data.text ? (
                      <ReactMarkdown>{node.data.text}</ReactMarkdown>
@@ -532,7 +538,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                  )}
              </div>
 
-             {/* Prompt Area (Fixed Bottom) */}
              <div className="border-t border-zinc-800 p-2 bg-zinc-900/50 rounded-b space-y-2">
                  <TextArea 
                     value={node.data.prompt || ''}
@@ -540,12 +545,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                     placeholder={activeAsset ? `Write about @${activeAsset.title}...` : "Describe what to write..."}
                     className={`${expanded ? 'min-h-[80px] text-base' : 'h-16 text-xs'}`}
                  />
-                 <Button 
-                     onClick={handleTextGen} 
-                     disabled={isProcessing || !node.data.prompt} 
-                     className="w-full py-1"
-                     size="sm"
-                 >
+                 <Button onClick={handleTextGen} disabled={isProcessing || !node.data.prompt} className="w-full py-1" size="sm">
                    {isProcessing ? "Thinking..." : "Generate"}
                  </Button>
              </div>
@@ -612,11 +612,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                             >
                                 {ASPECT_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
                             </Select>
-                            <Button 
-                                onClick={handleImageGen} 
-                                disabled={isProcessing || !node.data.prompt} 
-                                className="px-4 py-1"
-                            >
+                            <Button onClick={handleImageGen} disabled={isProcessing || !node.data.prompt} className="px-4 py-1">
                                 {isProcessing ? "..." : "Gen"}
                             </Button>
                         </div>
@@ -659,12 +655,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                             placeholder={activeAsset ? `Make @${activeAsset.title} look older...` : "Add sunglasses..."}
                             className="flex-1"
                         />
-                        <Button 
-                            onClick={handleImageEdit} 
-                            disabled={isProcessing || !node.data.prompt || !node.data.imageUrl} 
-                            variant="secondary"
-                            className="whitespace-nowrap"
-                        >
+                        <Button onClick={handleImageEdit} disabled={isProcessing || !node.data.prompt || !node.data.imageUrl} variant="secondary" className="whitespace-nowrap">
                             <Sparkles size={14} className="mr-1"/>
                             {isProcessing ? "Editing..." : "Apply Edit"}
                         </Button>
@@ -705,19 +696,11 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                             className={`${expanded ? 'h-20' : 'h-16'} text-xs flex-1`}
                         />
                         <div className="flex flex-col gap-2">
-                            <Select 
-                                value={node.data.aspectRatio || '16:9'} 
-                                onChange={(e) => onUpdate(node.id, { ...node.data, aspectRatio: e.target.value })}
-                                className="w-24"
-                            >
+                            <Select value={node.data.aspectRatio || '16:9'} onChange={(e) => onUpdate(node.id, { ...node.data, aspectRatio: e.target.value })} className="w-24">
                                 <option value="16:9">16:9</option>
                                 <option value="9:16">9:16</option>
                             </Select>
-                            <Button 
-                                onClick={handleVideoGen} 
-                                disabled={isProcessing || (!node.data.prompt && !node.data.imageUrl)} 
-                                className="flex-1 py-1 text-xs"
-                            >
+                            <Button onClick={handleVideoGen} disabled={isProcessing || (!node.data.prompt && !node.data.imageUrl)} className="flex-1 py-1 text-xs">
                                 <Film size={14} className="mr-1"/>
                                 {isProcessing ? "Generating..." : "Generate"}
                             </Button>
@@ -732,8 +715,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
     }
   };
 
-  // --- Node Chrome ---
-  
   const getHeaderColor = () => {
       if (node.type === NodeType.GROUP) return "bg-zinc-800 border-zinc-700 text-zinc-400";
       if (node.data.status === 'approved') return "bg-green-900/40 border-green-800 text-green-200";
@@ -772,14 +753,11 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
       }
   }
 
-  // Group Styling
   const isGroup = node.type === NodeType.GROUP;
 
-  // Render Expanded View (Portal)
   if (isExpanded) {
       return createPortal(
           <div className="fixed inset-0 z-[100] bg-zinc-950 flex flex-col animate-in fade-in zoom-in-95 duration-200 text-zinc-200 font-sans">
-               {/* Expanded Header */}
                <div className={`flex items-center justify-between px-6 py-3 border-b border-zinc-800 ${getHeaderColor()}`}>
                    <div className="flex items-center gap-3">
                        <span className="text-lg font-bold flex items-center gap-2">
@@ -790,29 +768,17 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
                        <span className="text-sm opacity-50 px-2 border-l border-white/20">Full Screen Mode</span>
                    </div>
                    <div className="flex items-center gap-2">
-                        {/* Co-Pilot Toggle in Expanded Mode */}
                         {node.type === NodeType.TEXT_INPUT && (
-                            <button 
-                                onClick={handleToggleCoPilot}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${isCoPilotEnabled ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-zinc-800 text-zinc-500'}`}
-                                title="Toggle Co-Pilot Auto-Complete"
-                            >
-                                <Bot size={14} />
-                                {isCoPilotEnabled ? "Co-Pilot ON" : "Co-Pilot OFF"}
+                            <button onClick={handleToggleCoPilot} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${isCoPilotEnabled ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'bg-zinc-800 text-zinc-500'}`}>
+                                <Bot size={14} /> {isCoPilotEnabled ? "Co-Pilot ON" : "Co-Pilot OFF"}
                             </button>
                         )}
-
-                        <button 
-                                onClick={handleToggleExpand} 
-                                className="p-2 hover:bg-white/10 rounded-full transition-colors text-zinc-400 hover:text-white"
-                                title="Minimize"
-                            >
+                        <button onClick={handleToggleExpand} className="p-2 hover:bg-white/10 rounded-full transition-colors text-zinc-400 hover:text-white" title="Minimize">
                             <Minimize2 size={20} />
                         </button>
                    </div>
                </div>
                
-               {/* Expanded Content */}
                <div className="flex-1 overflow-y-auto bg-zinc-950/50 relative p-8">
                    {renderContent(true)}
                </div>
@@ -828,18 +794,11 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
   return (
     <div 
       className={`absolute flex flex-col rounded-lg shadow-md border transition-colors ${getBorderColor()} ${node.data.status === 'archived' ? 'opacity-50 grayscale' : 'opacity-100'} ${isGroup ? 'bg-zinc-950/30' : 'bg-zinc-900'}`}
-      style={{ 
-          left: node.position.x, 
-          top: node.position.y,
-          width: nodeWidth,
-          height: nodeHeight,
-          zIndex: zIndex
-      }}
+      style={{ left: node.position.x, top: node.position.y, width: nodeWidth, height: nodeHeight, zIndex: zIndex }}
       onClick={(e) => { e.stopPropagation(); onSelect(e, node.id); }}
       onMouseDown={handleMouseDown}
       onContextMenu={(e) => { if (onContextMenu) onContextMenu(e, node.id); }}
     >
-      {/* Header */}
       <div 
         className={`flex items-center justify-between px-3 py-2 rounded-t-lg border-b cursor-grab active:cursor-grabbing select-none ${getHeaderColor()}`}
         onDoubleClick={handleToggleExpand}
@@ -860,71 +819,42 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({ node, isSelected, onSelect
         </div>
         
         <div className="flex items-center gap-1">
-            {/* Co-Pilot Toggle for Text Nodes */}
             {node.type === NodeType.TEXT_INPUT && (
-                <button
-                    onClick={handleToggleCoPilot}
-                    className={`p-1 rounded mr-1 transition-colors ${isCoPilotEnabled ? 'text-blue-400 hover:text-blue-300' : 'text-zinc-600 hover:text-zinc-400'}`}
-                    title={`Co-Pilot ${isCoPilotEnabled ? 'Enabled' : 'Disabled'}`}
-                >
+                <button onClick={handleToggleCoPilot} className={`p-1 rounded mr-1 transition-colors ${isCoPilotEnabled ? 'text-blue-400 hover:text-blue-300' : 'text-zinc-600 hover:text-zinc-400'}`}>
                     <Bot size={14} />
                 </button>
             )}
-
-            {/* Edit Toggle for Writer Nodes in Collapsed Mode */}
             {node.type === NodeType.TEXT_INPUT && !isExpanded && (
-                <button 
-                    onClick={handleToggleCollapsedEdit} 
-                    className="text-zinc-400 hover:text-white mr-1"
-                    title={collapsedEditMode ? "View Markdown" : "Quick Edit"}
-                >
+                <button onClick={handleToggleCollapsedEdit} className="text-zinc-400 hover:text-white mr-1">
                     {collapsedEditMode ? <Eye size={14} /> : <Edit size={14} />}
                 </button>
             )}
-            <button onClick={handleToggleExpand} className="text-white/50 hover:text-white" title="Maximize">
+            <button onClick={handleToggleExpand} className="text-white/50 hover:text-white">
                 <Maximize2 size={14} />
             </button>
         </div>
       </div>
 
-      {/* Body */}
       <div className={`relative flex-1 ${isGroup && node.data.collapsed ? 'hidden' : ''}`}>
         {renderContent(false)}
         {error && <div className="px-3 pb-2 text-[10px] text-red-400">{error}</div>}
       </div>
 
-      {/* Workflow Footer - Hide for Groups */}
       {!isGroup && (
       <div className="flex items-center border-t border-zinc-800 p-1 gap-1 bg-zinc-950/50 rounded-b-lg">
           {node.data.status === 'archived' ? (
-            <button 
-                onClick={(e) => { e.stopPropagation(); setStatus('draft'); }}
-                className="flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors text-zinc-400 hover:bg-zinc-800 hover:text-green-400"
-                title="Restore to Draft"
-            >
+            <button onClick={(e) => { e.stopPropagation(); setStatus('draft'); }} className="flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors text-zinc-400 hover:bg-zinc-800 hover:text-green-400">
                 <RotateCcw size={10} /> Restore
             </button>
           ) : (
             <>
-                <button 
-                    onClick={(e) => { e.stopPropagation(); setStatus('approved'); }}
-                    className={`flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors ${node.data.status === 'approved' ? 'bg-green-900 text-green-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-green-400'}`}
-                    title="Approve Asset"
-                >
+                <button onClick={(e) => { e.stopPropagation(); setStatus('approved'); }} className={`flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors ${node.data.status === 'approved' ? 'bg-green-900 text-green-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-green-400'}`}>
                     <CheckCircle size={10} /> Approve
                 </button>
-                <button 
-                    onClick={(e) => { e.stopPropagation(); setStatus('review'); }}
-                    className={`flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors ${node.data.status === 'review' ? 'bg-yellow-900 text-yellow-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-yellow-400'}`}
-                    title="Mark for Review"
-                >
+                <button onClick={(e) => { e.stopPropagation(); setStatus('review'); }} className={`flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors ${node.data.status === 'review' ? 'bg-yellow-900 text-yellow-200' : 'text-zinc-500 hover:bg-zinc-800 hover:text-yellow-400'}`}>
                     <AlertCircle size={10} /> Review
                 </button>
-                <button 
-                    onClick={(e) => { e.stopPropagation(); setStatus('archived'); }}
-                    className={`flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300`}
-                    title="Archive"
-                >
+                <button onClick={(e) => { e.stopPropagation(); setStatus('archived'); }} className={`flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300`}>
                     <Archive size={10} /> Archive
                 </button>
             </>

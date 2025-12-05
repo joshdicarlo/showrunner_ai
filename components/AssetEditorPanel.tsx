@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { ProjectAsset, DepartmentType } from '../types';
 import { Input, TextArea, Button, Select } from './UI';
-import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User } from 'lucide-react';
+import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers } from 'lucide-react';
 import { generateSummary } from '../services/geminiService';
 
 interface AssetEditorPanelProps {
@@ -13,6 +12,8 @@ interface AssetEditorPanelProps {
     onGenerateOutline: () => void;
     approvedImages: string[];
     onNavigateToAsset?: (assetId: string) => void;
+    onGenerateRefSheet?: (assetId: string) => void;
+    assetThumbnails?: Record<string, string>;
 }
 
 const VISUAL_STYLES = [
@@ -20,7 +21,17 @@ const VISUAL_STYLES = [
     "Retro 80s", "Concept Art", "Photorealistic", "Noir", "Gothic"
 ];
 
-export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ asset, projectAssets, onUpdate, onGenerateConcepts, onGenerateOutline, approvedImages, onNavigateToAsset }) => {
+export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ 
+    asset, 
+    projectAssets, 
+    onUpdate, 
+    onGenerateConcepts, 
+    onGenerateOutline, 
+    approvedImages, 
+    onNavigateToAsset,
+    onGenerateRefSheet,
+    assetThumbnails = {}
+}) => {
     const [title, setTitle] = useState(asset.title);
     const [description, setDescription] = useState(asset.description);
     const [visualStyle, setVisualStyle] = useState(asset.visualStyle || "");
@@ -103,6 +114,9 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ asset, proje
         e.stopPropagation();
         setBtnContextMenu({ x: e.clientX, y: e.clientY, visible: true });
     };
+    
+    // Effective Thumbnail
+    const effectiveThumbnail = assetThumbnails[asset.id] || asset.thumbnailUrl;
 
     return (
         <div className="w-80 h-full bg-surface border-l border-border flex flex-col z-10 shadow-xl">
@@ -114,6 +128,19 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ asset, proje
             </div>
             
             <div className="p-4 space-y-6 overflow-y-auto custom-scrollbar flex-1">
+                {/* Preview Header */}
+                <div className="flex flex-col items-center">
+                    <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-zinc-700 shadow-xl mb-3 bg-black">
+                        {effectiveThumbnail ? (
+                            <img src={effectiveThumbnail} className="w-full h-full object-cover" />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center text-zinc-600">
+                                <User size={32}/>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
                 {/* Title Section */}
                 <div className="space-y-2">
                     <label className="text-xs uppercase font-bold text-zinc-500">Name</label>
@@ -171,7 +198,9 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ asset, proje
                                     title={`Go to ${char.title}`}
                                 >
                                     <div className="w-16 h-16 rounded-full overflow-hidden border border-zinc-800 group-hover:border-blue-500 transition-colors bg-zinc-900 mb-1">
-                                        {char.thumbnailUrl ? (
+                                        {assetThumbnails && assetThumbnails[char.id] ? (
+                                            <img src={assetThumbnails[char.id]} alt={char.title} className="w-full h-full object-cover"/>
+                                        ) : char.thumbnailUrl ? (
                                             <img src={char.thumbnailUrl} alt={char.title} className="w-full h-full object-cover"/>
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-zinc-600">
@@ -263,7 +292,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ asset, proje
             {btnContextMenu && (
                 <div 
                     className="fixed bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 z-50 min-w-[180px] overflow-hidden animate-in fade-in zoom-in-95 duration-100"
-                    style={{ left: btnContextMenu.x, top: btnContextMenu.y - 80 }} // Position above cursor
+                    style={{ left: btnContextMenu.x, top: btnContextMenu.y - 120 }} // Position above cursor
                     onClick={(e) => e.stopPropagation()}
                 >
                     <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">
@@ -283,6 +312,15 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ asset, proje
                             className="w-full text-left px-3 py-2 text-xs hover:bg-blue-900/30 text-blue-200 flex items-center gap-2"
                         >
                             <FileText size={12} /> Generate Script Outline
+                        </button>
+                    )}
+
+                    {asset.department === DepartmentType.CASTING_WARDROBE && onGenerateRefSheet && (
+                        <button 
+                            onClick={() => { onGenerateRefSheet(asset.id); setBtnContextMenu(null); }}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-200 flex items-center gap-2"
+                        >
+                            <Layers size={12} /> Generate Ref Sheet
                         </button>
                     )}
                 </div>

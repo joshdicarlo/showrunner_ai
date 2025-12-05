@@ -1,15 +1,16 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
 import { DepartmentPanel } from './components/DepartmentPanel';
 import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed } from './types';
-import { DEPARTMENTS } from './constants';
+import { DEPARTMENTS, MODELS } from './constants';
 import { Button, Input, Modal, TextArea } from './components/UI';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5 } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff } from 'lucide-react';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene } from './services/geminiService';
+import * as GoogleDriveService from './services/googleDriveService';
 
 type View = 'dashboard' | 'project';
 
@@ -63,6 +64,18 @@ const App: React.FC = () => {
   const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
   const [analysisType, setAnalysisType] = useState<string>(''); // 'Characters', 'Locations', 'Story'
   const [analysisParentId, setAnalysisParentId] = useState<string | null>(null); // For creating child assets during analysis
+
+  // Drive State
+  const [isDriveConnected, setIsDriveConnected] = useState(false);
+  const [isMockDrive, setIsMockDrive] = useState(false);
+  const [driveFolderMap, setDriveFolderMap] = useState<Record<string, string>>({});
+
+  // Initialize Google Drive API
+  useEffect(() => {
+      GoogleDriveService.initGapi().then(() => {
+          console.log("Google API Initialized");
+      });
+  }, []);
 
   // Mock initial data load
   useEffect(() => {
@@ -141,6 +154,77 @@ const App: React.FC = () => {
   const activeAsset = activeProject?.assets.find(a => a.id === currentAssetId);
   const activeDeptConfig = DEPARTMENTS.find(d => d.id === currentDept);
 
+  // --- Effective Thumbnails ---
+  // Memoized map of AssetID -> ImageURL (from Latest Approved Node OR Asset Prop)
+  const assetThumbnails = useMemo(() => {
+      if (!activeProject) return {};
+      const map: Record<string, string> = {};
+      
+      activeProject.assets.forEach(asset => {
+          // 1. Check explicit thumbnail
+          if (asset.thumbnailUrl) {
+              map[asset.id] = asset.thumbnailUrl;
+          } else {
+              // 2. Find latest approved AI_IMAGE_GEN node
+              const candidates = activeProject.nodes.filter(n => 
+                  n.assetId === asset.id && 
+                  n.type === NodeType.AI_IMAGE_GEN && 
+                  n.data.status === 'approved' && 
+                  n.data.imageUrl
+              );
+              // Simple sort by ID timestamp (works because ID is date-based)
+              if (candidates.length > 0) {
+                   const latest = candidates.sort((a, b) => b.id.localeCompare(a.id))[0];
+                   if (latest.data.imageUrl) map[asset.id] = latest.data.imageUrl;
+              }
+          }
+      });
+      return map;
+  }, [activeProject?.nodes, activeProject?.assets]);
+
+
+  // --- Drive Handlers ---
+  const handleConnectDrive = async () => {
+      try {
+          await GoogleDriveService.signIn();
+          // Check mock status after sign in attempt
+          if (GoogleDriveService.isMockMode()) {
+              setIsMockDrive(true);
+          } else {
+              setIsMockDrive(false);
+          }
+          setIsDriveConnected(true);
+      } catch (e) {
+          console.error("Drive connection failed", e);
+          // Auto fallback on failure
+          GoogleDriveService.enableMockMode();
+          setIsMockDrive(true);
+          setIsDriveConnected(true);
+      }
+  };
+
+  const handleForceOffline = () => {
+      GoogleDriveService.enableMockMode();
+      setIsMockDrive(true);
+      setIsDriveConnected(true);
+  }
+
+  const syncToDrive = useCallback(async (project: Project) => {
+      if (!isDriveConnected || !project.driveDbId) return;
+      await GoogleDriveService.updateProjectDB(project.driveDbId, project.assets);
+  }, [isDriveConnected]);
+
+  // Auto-Save Effect
+  useEffect(() => {
+      if (activeProject && isDriveConnected) {
+          const timer = setTimeout(() => {
+              syncToDrive(activeProject);
+          }, 3000); // Debounce 3s
+          return () => clearTimeout(timer);
+      }
+  }, [activeProject?.assets, isDriveConnected, syncToDrive]);
+
+
   // --- Project Handlers ---
 
   const resetProjectModal = () => {
@@ -164,33 +248,33 @@ const App: React.FC = () => {
       }
   }
 
-  const handleCreateProject = () => {
+  const handleCreateProject = async () => {
+      let title = newProjectTitle;
+      let summary = '';
+      let initialAssets: ProjectAsset[] = [];
+      let initialNodes: FlowNode[] = [];
+      let type: Project['type'] = 'Feature';
+      let visualStyle = '';
+
       if (creationMode === 'blank') {
           if (!newProjectTitle) return;
-          const newProj: Project = {
-              id: `p-${Date.now()}`,
-              title: newProjectTitle,
-              summary: '',
-              type: 'Feature',
-              assets: [],
-              nodes: [],
-              connections: [],
-              updatedAt: new Date()
-          };
-          setProjects([...projects, newProj]);
-          setCurrentProjectId(newProj.id);
-          setView('project');
-          resetProjectModal();
       } else {
           // From Seed
           if (selectedSeedIdx === null || !generatedSeeds[selectedSeedIdx]) return;
-          
           const seed = generatedSeeds[selectedSeedIdx];
-          const newProjId = `p-${Date.now()}`;
+          title = seed.title;
+          summary = seed.logline;
+          visualStyle = seed.visualStyle;
           
-          const initialNodes: FlowNode[] = [];
-          
-          // Auto Generate Assets logic
+          initialAssets.push({
+              id: `asset-bible-${Date.now()}`,
+              department: DepartmentType.STORY,
+              title: "Story Bible",
+              description: `Logline: ${summary}\n\nGenre: ${seed.genre}`,
+              visualStyle: visualStyle,
+              summary: summary
+          });
+
           if (autoGenAssets) {
              const groupId = `group-seed-${Date.now()}`;
              initialNodes.push({
@@ -202,8 +286,6 @@ const App: React.FC = () => {
                 height: 550,
                 data: { label: "Seed Generation", collapsed: false }
              });
-
-             // Beat Sheet Node
              initialNodes.push({
                  id: `seed-beat-${Date.now()}`,
                  type: NodeType.AI_TEXT_GEN,
@@ -213,12 +295,10 @@ const App: React.FC = () => {
                  width: 400,
                  height: 400,
                  data: {
-                     prompt: `Write a beat sheet for a ${seed.genre} film called "${seed.title}".\nLogline: ${seed.logline}`,
+                     prompt: `Write a beat sheet for a ${seed.genre} film called "${title}".\nLogline: ${summary}`,
                      status: 'generating'
                  }
              });
-
-             // Script Node
              initialNodes.push({
                  id: `seed-script-${Date.now()}`,
                  type: NodeType.AI_TEXT_GEN,
@@ -228,38 +308,44 @@ const App: React.FC = () => {
                  width: 400,
                  height: 400,
                  data: {
-                     prompt: `Write the opening sequence script for "${seed.title}".\nGenre: ${seed.genre}.\nLogline: ${seed.logline}`,
+                     prompt: `Write the opening sequence script for "${title}".\nGenre: ${seed.genre}.\nLogline: ${summary}`,
                      status: 'generating'
                  }
              });
           }
-
-          const newProj: Project = {
-              id: newProjId,
-              title: seed.title,
-              summary: seed.logline,
-              type: 'Feature',
-              assets: [
-                  // Create a Story Bible Asset
-                  {
-                      id: `asset-bible-${Date.now()}`,
-                      department: DepartmentType.STORY,
-                      title: "Story Bible",
-                      description: `Logline: ${seed.logline}\n\nGenre: ${seed.genre}`,
-                      visualStyle: seed.visualStyle,
-                      summary: seed.logline
-                  }
-              ],
-              nodes: initialNodes,
-              connections: [],
-              updatedAt: new Date()
-          };
-
-          setProjects([...projects, newProj]);
-          setCurrentProjectId(newProj.id);
-          setView('project');
-          resetProjectModal();
       }
+
+      // Drive Integration
+      let driveData = {};
+      if (isDriveConnected) {
+          try {
+              const struct = await GoogleDriveService.createProjectDriveStructure(title);
+              driveData = {
+                  driveFolderId: struct.projectId,
+                  driveDbId: struct.dbId
+              };
+              setDriveFolderMap(struct.folders); // Store local map for session
+          } catch(e) {
+              console.error("Failed to create Drive structure", e);
+          }
+      }
+
+      const newProj: Project = {
+          id: `p-${Date.now()}`,
+          title,
+          summary,
+          type,
+          assets: initialAssets,
+          nodes: initialNodes,
+          connections: [],
+          updatedAt: new Date(),
+          ...driveData
+      };
+
+      setProjects([...projects, newProj]);
+      setCurrentProjectId(newProj.id);
+      setView('project');
+      resetProjectModal();
   };
 
   // --- Asset Handlers ---
@@ -290,7 +376,6 @@ const App: React.FC = () => {
       
       const newId = `asset-${Date.now()}`;
       
-      // Default Visual Style for Story Department
       let defaultVisualStyle = "";
       if (currentDept === DepartmentType.STORY) {
           defaultVisualStyle = "Storyboard";
@@ -301,12 +386,20 @@ const App: React.FC = () => {
           department: currentDept,
           title: newAssetTitle,
           description: newAssetDesc,
-          summary: "Generating AI summary...", // Placeholder
+          summary: "Generating AI summary...", 
           parentId: newAssetParentId,
           visualStyle: defaultVisualStyle
       };
 
-      // Update state immediately
+      // Drive: Sync Folder
+      if (isDriveConnected && activeProject) {
+          try {
+              // Ensure we have a folder ID for this asset (important for Sets/Prod)
+              const driveId = await GoogleDriveService.syncAssetFolder(newAsset, activeProject.driveFolderId!, driveFolderMap);
+              newAsset.driveId = driveId;
+          } catch(e) { console.error(e); }
+      }
+
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectId) {
               return { ...p, assets: [...p.assets, newAsset] };
@@ -355,18 +448,32 @@ const App: React.FC = () => {
       }));
   }, [currentProjectId]);
 
-  const handleSetThumbnail = useCallback((assetId: string, imageUrl: string) => {
+  const handleSetThumbnail = useCallback(async (assetId: string, imageUrl: string) => {
       if (!currentProjectId) return;
+      
+      let finalUrl = imageUrl;
+
+      // Drive Upload Logic
+      if (isDriveConnected && activeProject) {
+          const asset = activeProject.assets.find(a => a.id === assetId);
+          if (asset && asset.driveId) {
+             try {
+                 const driveLink = await GoogleDriveService.uploadFileToDrive(asset.driveId, `Thumbnail_${asset.title}.png`, imageUrl, 'image/png');
+                 finalUrl = driveLink; // Store the Drive Link!
+             } catch(e) { console.error("Thumbnail upload failed", e); }
+          }
+      }
+
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectId) {
               return {
                   ...p,
-                  assets: p.assets.map(a => a.id === assetId ? { ...a, thumbnailUrl: imageUrl } : a)
+                  assets: p.assets.map(a => a.id === assetId ? { ...a, thumbnailUrl: finalUrl } : a)
               };
           }
           return p;
       }));
-  }, [currentProjectId]);
+  }, [currentProjectId, isDriveConnected, activeProject]);
 
   const handleNavigateToAsset = (assetId: string) => {
       const asset = activeProject?.assets.find(a => a.id === assetId);
@@ -376,10 +483,12 @@ const App: React.FC = () => {
       }
   };
 
+  // --- Generation Workflows ---
+
   const handleGenerateConcepts = (count: number) => {
     if (!activeAsset || !currentProjectId || !activeProject) return;
 
-    // 1. Determine Bounding Box of existing nodes in this context to place below
+    // 1. Determine Bounding Box
     const contextNodes = activeProject.nodes.filter(n => 
         n.department === currentDept && 
         n.assetId === activeAsset.id &&
@@ -391,18 +500,16 @@ const App: React.FC = () => {
         maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
     }
 
-    // 2. Calculate placement
-    const startY = maxY > 0 ? maxY + 100 : 100; // 100px padding below lowest node
+    const startY = maxY > 0 ? maxY + 100 : 100;
     const startX = 100;
     const nodeWidth = 300;
     const nodeHeight = 450;
     const gap = 20;
     const padding = 20;
 
-    // 3. Create Group Node
     const groupId = `group-${Date.now()}`;
     const groupWidth = (nodeWidth * count) + (gap * (count - 1)) + (padding * 2);
-    const groupHeight = nodeHeight + (padding * 2) + 40; // +40 for header
+    const groupHeight = nodeHeight + (padding * 2) + 40;
 
     const groupNode: FlowNode = {
         id: groupId,
@@ -418,26 +525,24 @@ const App: React.FC = () => {
         }
     };
 
-    // 4. Create Child Nodes
     const newNodes: FlowNode[] = [];
-    
     for (let i = 0; i < count; i++) {
         const childX = startX + padding + (i * (nodeWidth + gap));
-        const childY = startY + 60; // Header offset
+        const childY = startY + 60;
 
         newNodes.push({
             id: `gen-${Date.now()}-${i}`,
             type: NodeType.AI_IMAGE_GEN,
             department: currentDept,
             assetId: activeAsset.id,
-            parentId: groupId, // Link to group
+            parentId: groupId,
             position: { x: childX, y: childY }, 
             width: nodeWidth,
             height: nodeHeight,
             data: {
                 prompt: `@${activeAsset.title}`,
                 aspectRatio: '1:1',
-                status: 'generating' // Auto-start
+                status: 'generating' 
             }
         });
     }
@@ -451,7 +556,6 @@ const App: React.FC = () => {
         return p;
     }));
 
-    // Trigger Focus
     setFocusNodeIds(allNewIds);
   };
 
@@ -470,7 +574,7 @@ const App: React.FC = () => {
 
       const startY = maxY > 0 ? maxY + 100 : 100;
       const startX = 100;
-      const nodeWidth = 600; // Wider for text
+      const nodeWidth = 600;
       const nodeHeight = 400;
       const padding = 20;
 
@@ -516,6 +620,89 @@ const App: React.FC = () => {
       setFocusNodeIds(allNewIds);
   };
 
+  const handleGenerateRefSheet = (assetId: string) => {
+      if (!currentProjectId || !activeProject) return;
+      const asset = activeProject.assets.find(a => a.id === assetId);
+      if (!asset) return;
+
+      const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === assetId &&
+          n.data.status !== 'archived'
+      );
+      let maxY = 0;
+      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
+
+      const startY = maxY > 0 ? maxY + 100 : 100;
+      const startX = 100;
+      const nodeWidth = 300;
+      const nodeHeight = 400;
+      const gap = 20;
+      const padding = 20;
+
+      // Dataset Plan: 8 Images
+      const prompts = [
+          "Full body shot of @character, front view, neutral pose, white background",
+          "Close up of @character face, front view, neutral expression, white background",
+          "Full body shot of @character, 3/4 left view, white background",
+          "Full body shot of @character, 3/4 right view, white background",
+          "Full body shot of @character, left profile view, white background",
+          "Full body shot of @character, right profile view, white background",
+          "Full body shot of @character, back view, white background",
+          "Close up of @character face, 3/4 view, cinematic lighting"
+      ];
+
+      const columns = 4;
+      const rows = 2;
+      const groupWidth = (nodeWidth * columns) + (gap * (columns - 1)) + (padding * 2);
+      const groupHeight = (nodeHeight * rows) + (gap * (rows - 1)) + (padding * 2) + 40;
+
+      const groupId = `group-ref-${Date.now()}`;
+      const groupNode: FlowNode = {
+          id: groupId,
+          type: NodeType.GROUP,
+          department: currentDept,
+          assetId: assetId,
+          position: { x: startX, y: startY },
+          width: groupWidth,
+          height: groupHeight,
+          data: { label: `Reference Sheet: ${asset.title}`, collapsed: false }
+      };
+
+      const newNodes: FlowNode[] = [];
+      prompts.forEach((p, i) => {
+          const col = i % columns;
+          const row = Math.floor(i / columns);
+          const childX = startX + padding + (col * (nodeWidth + gap));
+          const childY = startY + 60 + (row * (nodeHeight + gap));
+
+          newNodes.push({
+              id: `ref-gen-${Date.now()}-${i}`,
+              type: NodeType.AI_IMAGE_GEN,
+              department: currentDept,
+              assetId: assetId,
+              parentId: groupId,
+              position: { x: childX, y: childY },
+              width: nodeWidth,
+              height: nodeHeight,
+              data: {
+                  prompt: p,
+                  aspectRatio: "1:1", // Standard dataset ratio
+                  model: MODELS.IMAGE_EDIT, // Nano Banana usually best for ref consistency
+                  status: 'generating'
+              }
+          });
+      });
+
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
+          }
+          return p;
+      }));
+      setFocusNodeIds([groupId]);
+  }
+
   const handleUpdateNodes = useCallback((value: FlowNode[] | ((prev: FlowNode[]) => FlowNode[])) => {
       if (!currentProjectId) return;
       setProjects(prev => prev.map(p => {
@@ -547,14 +734,13 @@ const App: React.FC = () => {
       const asset = activeProject?.assets.find(a => a.id === assetId);
       if (!asset) return;
       
-      setAnalysisParentId(assetId); // IMPORTANT: Set this so new assets become children
+      setAnalysisParentId(assetId); 
       setAnalysisType("Shots");
       setIsAnalyzing(true);
       setIsAnalyzeModalOpen(true);
       setDetectedItems([]);
 
       try {
-          // Pass known characters to enable @ tagging
           const knownCharacters = activeProject?.assets
             .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
             .map(a => a.title) || [];
@@ -564,7 +750,7 @@ const App: React.FC = () => {
               name: s.title,
               description: s.description,
               type: s.type,
-              selected: true, // Auto-select shots
+              selected: true, 
               isDuplicate: false 
           })));
       } catch(e) {
@@ -577,12 +763,11 @@ const App: React.FC = () => {
   const handleAnalyzeScripts = async () => {
       if (!activeProject) return;
       
-      setAnalysisParentId(null); // Reset parent context
+      setAnalysisParentId(null); 
       setIsAnalyzing(true);
       setIsAnalyzeModalOpen(true);
       setDetectedItems([]);
       
-      // 1. Aggregate script content (Writers Room & Story nodes)
       const scriptNodes = activeProject.nodes.filter(n => 
           (n.department === DepartmentType.WRITERS_ROOM || n.department === DepartmentType.STORY) &&
           (n.type === NodeType.TEXT_INPUT || n.type === NodeType.AI_TEXT_GEN) &&
@@ -598,7 +783,6 @@ const App: React.FC = () => {
       }
 
       try {
-          // Switch based on Department
           if (currentDept === DepartmentType.CASTING_WARDROBE) {
               setAnalysisType("Characters");
               const profiles = await extractCharactersFromScript(combinedScript);
@@ -628,7 +812,7 @@ const App: React.FC = () => {
               setDetectedItems(locs.map(l => ({
                   name: l.name,
                   description: l.description,
-                  type: l.type, // INT/EXT
+                  type: l.type, 
                   selected: !existingLocs.has(l.name.toLowerCase().trim()),
                   isDuplicate: existingLocs.has(l.name.toLowerCase().trim())
               })));
@@ -636,7 +820,6 @@ const App: React.FC = () => {
           } else if (currentDept === DepartmentType.STORY) {
               setAnalysisType("Story Elements");
               
-              // Gather known character names to help with @ tagging
               const knownCharacters = activeProject.assets
                   .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
                   .map(a => a.title);
@@ -680,9 +863,9 @@ const App: React.FC = () => {
                   department: currentDept,
                   title: item.name,
                   description: item.description,
-                  visualStyle: currentDept === DepartmentType.STORY ? "Storyboard" : "", // Apply default
+                  visualStyle: currentDept === DepartmentType.STORY ? "Storyboard" : "", 
                   summary: `${item.type}. ${item.description.substring(0, 60)}...`,
-                  parentId: analysisParentId || undefined // Use tracked parent ID if available
+                  parentId: analysisParentId || undefined 
               }));
               return { ...p, assets: [...p.assets, ...newAssets] };
           }
@@ -691,7 +874,7 @@ const App: React.FC = () => {
 
       setIsAnalyzeModalOpen(false);
       setDetectedItems([]);
-      setAnalysisParentId(null); // Reset
+      setAnalysisParentId(null); 
   };
 
   const toggleItemSelection = (idx: number) => {
@@ -712,9 +895,29 @@ const App: React.FC = () => {
                     </h1>
                     <p className="text-zinc-400">Nano Banana Powered Creative Studio</p>
                 </div>
-                <Button onClick={() => setIsCreateProjectOpen(true)}>
-                    <FolderPlus className="mr-2"/> New Project
-                </Button>
+                <div className="flex gap-3">
+                     {!isDriveConnected ? (
+                         <div className="flex gap-2">
+                             <Button onClick={handleForceOffline} variant="ghost" className="text-zinc-400 hover:text-white border-zinc-700">
+                                <CloudOff size={16} className="mr-2" /> Work Offline
+                             </Button>
+                             <Button onClick={handleConnectDrive} variant="secondary">
+                                 <Cloud className="mr-2" size={16}/> Connect Drive
+                             </Button>
+                         </div>
+                     ) : isMockDrive ? (
+                         <div className="flex items-center gap-2 text-yellow-500 text-sm font-medium border border-yellow-900 bg-yellow-900/20 px-3 py-2 rounded" title="Offline Mode (Mock Drive)">
+                             <CloudOff size={16}/> Offline Mode
+                         </div>
+                     ) : (
+                         <div className="flex items-center gap-2 text-green-400 text-sm font-medium border border-green-900 bg-green-900/20 px-3 py-2 rounded">
+                             <Cloud size={16}/> Drive Connected
+                         </div>
+                     )}
+                     <Button onClick={() => setIsCreateProjectOpen(true)}>
+                        <FolderPlus className="mr-2"/> New Project
+                     </Button>
+                </div>
             </header>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -739,7 +942,6 @@ const App: React.FC = () => {
         {isCreateProjectOpen && (
             <Modal title="Create New Project" onClose={resetProjectModal} maxWidth="max-w-4xl">
                 <div className="min-h-[400px] flex flex-col">
-                    {/* Creation Mode Tabs */}
                     <div className="flex gap-4 border-b border-zinc-800 mb-6">
                         <button 
                             onClick={() => setCreationMode('blank')}
@@ -766,7 +968,6 @@ const App: React.FC = () => {
                             </div>
                         ) : (
                             <div className="space-y-6">
-                                {/* Seed Input */}
                                 <div className="flex gap-2 items-end">
                                     <div className="flex-1">
                                         <label className="block text-xs uppercase font-bold text-zinc-500 mb-1">Story Seed / Theme (Optional)</label>
@@ -782,7 +983,6 @@ const App: React.FC = () => {
                                     </Button>
                                 </div>
 
-                                {/* Generated Cards */}
                                 {generatedSeeds.length > 0 && (
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         {generatedSeeds.map((seed, idx) => (
@@ -821,7 +1021,6 @@ const App: React.FC = () => {
                                     </div>
                                 )}
                                 
-                                {/* Auto Gen Option */}
                                 {generatedSeeds.length > 0 && (
                                     <div className="flex items-center gap-2 pt-4 border-t border-zinc-800">
                                         <input 
@@ -840,7 +1039,6 @@ const App: React.FC = () => {
                         )}
                     </div>
                     
-                    {/* Footer Actions */}
                     <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-zinc-800">
                         <Button variant="ghost" onClick={resetProjectModal}>Cancel</Button>
                         <Button 
@@ -860,14 +1058,12 @@ const App: React.FC = () => {
   // Project View
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-zinc-200">
-      {/* Primary Navigation */}
       <Sidebar 
         currentDept={currentDept} 
-        onChangeDept={(d) => { setCurrentDept(d); setCurrentAssetId(null); }} // Reset asset selection on dept change
+        onChangeDept={(d) => { setCurrentDept(d); setCurrentAssetId(null); }} 
         onBack={() => setView('dashboard')}
       />
       
-      {/* Secondary Context Panel (Left) */}
       {activeProject && (
           <DepartmentPanel 
             department={currentDept}
@@ -878,11 +1074,11 @@ const App: React.FC = () => {
             onCreateAsset={handleOpenCreateAssetModal}
             onAnalyzeScripts={handleAnalyzeScripts}
             onDiscoverShots={handleDiscoverShots}
+            assetThumbnails={assetThumbnails}
           />
       )}
 
       <div className="flex-1 flex flex-col relative min-w-0">
-          {/* Top Bar / Breadcrumbs */}
           <div className="h-14 border-b border-border flex items-center justify-between px-6 bg-surface/50 backdrop-blur z-10 shrink-0">
              <div className="flex flex-col overflow-hidden">
                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-500 font-bold">
@@ -906,6 +1102,12 @@ const App: React.FC = () => {
              </div>
              
              <div className="flex items-center gap-3 shrink-0">
+                 {isDriveConnected && (
+                     <div className={`text-[10px] flex items-center gap-1 ${isMockDrive ? 'text-yellow-500 bg-yellow-900/10 border-yellow-900/30' : 'text-green-500 bg-green-900/10 border-green-900/30'} px-2 py-1 rounded border`} title={isMockDrive ? "Saving locally (Mock)" : "Auto-saving to Google Drive"}>
+                         {isMockDrive ? <CloudOff size={10} /> : <Cloud size={10} />} 
+                         {isMockDrive ? "Offline Save" : "Auto-Save On"}
+                     </div>
+                 )}
                  {currentAssetId && (
                      <Button size="sm" variant="ghost" onClick={() => setCurrentAssetId(null)} className="text-xs px-2 h-8">
                          <CornerUpLeft size={14} className="mr-1"/> Return to Dept
@@ -915,7 +1117,6 @@ const App: React.FC = () => {
              </div>
           </div>
 
-          {/* Canvas Area */}
           <div className="flex-1 relative bg-black overflow-hidden">
               {activeProject && (
                   <Canvas 
@@ -934,7 +1135,6 @@ const App: React.FC = () => {
           </div>
       </div>
       
-      {/* Right Sidebar (Inspector) */}
       {activeAsset && currentAssetId && activeProject && (
           <AssetEditorPanel 
             asset={activeAsset} 
@@ -944,12 +1144,13 @@ const App: React.FC = () => {
             onGenerateOutline={handleGenerateOutline}
             approvedImages={getApprovedImages()}
             onNavigateToAsset={handleNavigateToAsset}
+            onGenerateRefSheet={handleGenerateRefSheet}
+            assetThumbnails={assetThumbnails}
           />
       )}
 
       <ChatBot />
 
-      {/* Create Asset Modal */}
       {isCreateAssetOpen && (
         <Modal title={`Add New ${activeDeptConfig?.assetLabel}`} onClose={() => setIsCreateAssetOpen(false)}>
             <div className="space-y-4">
@@ -972,7 +1173,6 @@ const App: React.FC = () => {
                     />
                 </div>
                 
-                {/* Actions Footer */}
                 <div className="flex items-center justify-between mt-4 pt-2 border-t border-zinc-800/50">
                     <button 
                         onClick={handleEnhanceDescription}
@@ -993,7 +1193,6 @@ const App: React.FC = () => {
         </Modal>
       )}
 
-      {/* Enhancement Options Modal */}
       {showEnhanceModal && (
         <Modal title="Select Enhancement" onClose={() => setShowEnhanceModal(false)}>
              <div className="space-y-3">
@@ -1021,7 +1220,6 @@ const App: React.FC = () => {
         </Modal>
       )}
 
-      {/* Analysis Modal (Characters, Locations, Story) */}
       {isAnalyzeModalOpen && (
           <Modal title={`Auto-Detect ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)}>
               <div className="space-y-4">

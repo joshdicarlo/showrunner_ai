@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { DepartmentType, ProjectAsset, FlowNode } from '../types';
 import { DEPARTMENTS } from '../constants';
-import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard } from 'lucide-react';
+import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard, Shirt } from 'lucide-react';
 
 interface DepartmentPanelProps {
   department: DepartmentType;
@@ -12,6 +12,7 @@ interface DepartmentPanelProps {
   onCreateAsset: (parentId?: string) => void;
   onAnalyzeScripts?: () => void;
   onDiscoverShots?: (assetId: string) => void;
+  assetThumbnails?: Record<string, string>; // Effective thumbnails (approved or manual)
 }
 
 export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({ 
@@ -22,7 +23,8 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
     onSelectAsset,
     onCreateAsset,
     onAnalyzeScripts,
-    onDiscoverShots
+    onDiscoverShots,
+    assetThumbnails = {}
 }) => {
   const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
   
@@ -35,7 +37,11 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   // Helper to count items in an asset (for UI info)
   const getAssetNodeCount = (assetId: string) => nodes.filter(n => n.assetId === assetId).length;
 
-  const getIconForAsset = () => {
+  const getIconForAsset = (asset: ProjectAsset) => {
+      // Logic for child icons
+      if (department === DepartmentType.CASTING_WARDROBE && asset.parentId) {
+          return <Shirt size={16} />;
+      }
       switch(department) {
           case DepartmentType.CASTING_WARDROBE: return <User size={16} />;
           case DepartmentType.SET_DESIGN: return <MapPin size={16} />;
@@ -63,7 +69,10 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   };
 
   // --- Recursive/Hierarchical Rendering ---
-  const isHierarchical = department === DepartmentType.STORY || department === DepartmentType.PRODUCTION;
+  const isHierarchical = 
+    department === DepartmentType.STORY || 
+    department === DepartmentType.PRODUCTION || 
+    department === DepartmentType.CASTING_WARDROBE;
 
   const renderAssetRow = (asset: ProjectAsset, depth = 0) => {
       const isActive = currentAssetId === asset.id;
@@ -71,6 +80,9 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
       const children = deptAssets.filter(a => a.parentId === asset.id);
       const hasChildren = children.length > 0;
       const isExpanded = expandedAssets.has(asset.id);
+      
+      // Effective Thumbnail
+      const effectiveThumbnail = assetThumbnails[asset.id] || asset.thumbnailUrl;
 
       return (
         <React.Fragment key={asset.id}>
@@ -93,10 +105,10 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
 
                 {/* Icon/Thumbnail */}
                 <div className={`relative w-8 h-8 rounded overflow-hidden flex items-center justify-center shrink-0 transition-colors ${isActive ? 'bg-blue-900/30 text-blue-400' : 'bg-zinc-950 text-zinc-500 group-hover:text-zinc-300'}`}>
-                    {asset.thumbnailUrl ? (
-                        <img src={asset.thumbnailUrl} alt={asset.title} className="w-full h-full object-cover" />
+                    {effectiveThumbnail ? (
+                        <img src={effectiveThumbnail} alt={asset.title} className="w-full h-full object-cover" />
                     ) : (
-                        getIconForAsset()
+                        getIconForAsset(asset)
                     )}
                 </div>
                 
@@ -118,7 +130,7 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
                 {isHierarchical && (
                     <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                         {/* Discover Shots Action for Scenes */}
-                        {!asset.parentId && onDiscoverShots && (
+                        {!asset.parentId && department === DepartmentType.STORY && onDiscoverShots && (
                             <button
                                 onClick={(e) => { e.stopPropagation(); onDiscoverShots(asset.id); }}
                                 className="p-1 hover:bg-purple-600 hover:text-white rounded text-zinc-500 mr-1"
@@ -132,7 +144,7 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
                         <button 
                             onClick={(e) => { e.stopPropagation(); onCreateAsset(asset.id); setExpandedAssets(prev => new Set(prev).add(asset.id)); }}
                             className="p-1 hover:bg-blue-600 hover:text-white rounded text-zinc-500"
-                            title="Add Child Asset"
+                            title={`Add Child (Look/Shot)`}
                         >
                             <Plus size={12} />
                         </button>

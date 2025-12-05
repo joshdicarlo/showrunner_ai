@@ -439,7 +439,8 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
 export const generateImage = async (
   prompt: string,
   aspectRatio: string = "16:9",
-  model: string = MODELS.IMAGE_GEN
+  model: string = MODELS.IMAGE_GEN,
+  referenceImage?: string // Optional Base64 or URL
 ): Promise<string> => {
   
   const win = window as unknown as AIStudioWindow;
@@ -457,6 +458,8 @@ export const generateImage = async (
       
       // IMAGEN 4 Routing
       if (model.includes('imagen')) {
+           // Imagen doesn't support 'referenceImage' in the same way as Gemini multimodal
+           // So we ignore it here or could implement a different endpoint if available.
            const response = await ai.models.generateImages({
                 model: model,
                 prompt: prompt,
@@ -475,28 +478,65 @@ export const generateImage = async (
       
       // GEMINI Routing
       else {
+          // Construct config based on model capabilities
+          const imageConfig: any = {
+              aspectRatio: aspectRatio,
+          };
+          
+          // Only add imageSize for the Pro model (Nano Banana does not support it)
+          if (model === 'gemini-3-pro-image-preview') {
+              imageConfig.imageSize = "1K";
+          }
+
+          // Build Parts
+          const parts: any[] = [];
+          
+          // Add Reference Image if provided (and valid)
+          if (referenceImage) {
+              const cleanBase64 = referenceImage.includes(',') ? referenceImage.split(',')[1] : referenceImage;
+              // Detect MIME or default to png
+              let mimeType = "image/png";
+              if (referenceImage.startsWith("data:image/jpeg")) mimeType = "image/jpeg";
+              if (referenceImage.startsWith("data:image/webp")) mimeType = "image/webp";
+
+              parts.push({
+                  inlineData: {
+                      mimeType: mimeType,
+                      data: cleanBase64
+                  }
+              });
+              
+              // If we have a reference image, we might want to guide the prompt
+              // prompt = `Using the first image as reference, ${prompt}`;
+          }
+
+          parts.push({ text: prompt });
+
           const response = await ai.models.generateContent({
             model: model,
             contents: {
-              parts: [{ text: prompt }]
+              parts: parts
             },
             config: {
-              imageConfig: {
-                  aspectRatio: aspectRatio,
-                  imageSize: "1K" // Supported on 3 Pro
-              }
+              imageConfig: imageConfig
             }
           });
 
-          const parts = response.candidates?.[0]?.content?.parts;
-          if (parts) {
-              for (const part of parts) {
+          const responseParts = response.candidates?.[0]?.content?.parts;
+          if (responseParts) {
+              for (const part of responseParts) {
                   if (part.inlineData && part.inlineData.data) {
                        return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
                   }
               }
+              
+              // Fallback: Look for refusal text to provide better error info
+              const textPart = responseParts.find(p => p.text);
+              if (textPart?.text) {
+                  throw new Error(`Model Refusal: ${textPart.text}`);
+              }
           }
-          throw new Error("No image generated from Gemini");
+          throw new Error("No image generated from Gemini (Empty response)");
       }
   };
 

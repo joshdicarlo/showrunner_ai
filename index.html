@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ShowrunnerAI</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://accounts.google.com/gsi/client"></script>
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -32,6 +34,8 @@
         background-color: #09090b;
         color: #e4e4e7;
         overflow: hidden; /* Prevent body scroll for canvas app */
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
       /* Custom scrollbar for dark theme */
       ::-webkit-scrollbar {
@@ -112,6 +116,13 @@
       }
       .markdown-preview strong {
         color: #fff;
+      }
+
+      /* Fix Resolution Scaling */
+      .canvas-layer {
+          transform: translateZ(0);
+          backface-visibility: hidden;
+          will-change: transform;
       }
     </style>
   <script type="importmap">

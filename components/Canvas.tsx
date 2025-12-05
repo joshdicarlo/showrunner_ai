@@ -610,7 +610,7 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
             onMouseLeave={handleMouseUp}
         >
             <div 
-                className="origin-top-left w-full h-full absolute top-0 left-0 will-change-transform"
+                className="origin-top-left w-full h-full absolute top-0 left-0 canvas-layer"
                 style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
             >
                 {visibleNodes.map(node => (
