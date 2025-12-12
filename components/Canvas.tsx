@@ -3,8 +3,8 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData } from '../types';
 import { NodeItem } from './NodeItem';
 import { Button, Input } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText } from 'lucide-react';
-import { DEPARTMENTS } from '../constants';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile } from 'lucide-react';
+import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 
 interface CanvasProps {
   nodes: FlowNode[];
@@ -17,6 +17,8 @@ interface CanvasProps {
   focusNodes?: string[];
   onSetThumbnail?: (assetId: string, imageUrl: string) => void;
   projectAssets?: ProjectAsset[];
+  onRefineConcept?: (assetId: string, sourceImageUrl: string) => void;
+  refinedImagesMap?: Record<string, string[]>;
 }
 
 // Available Nodes for Tab Menu
@@ -34,7 +36,9 @@ interface HistoryState {
     connections: FlowConnection[];
 }
 
-export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets }) => {
+export const Canvas: React.FC<CanvasProps> = ({ 
+    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}
+}) => {
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const [showArchived, setShowArchived] = useState(false);
@@ -60,6 +64,56 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
   const isDraggingRef = useRef(false);
   const mousePosRef = useRef<{x: number, y: number}>({ x: 0, y: 0 });
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  // --- Smart Placement Helper ---
+  // Finds a position that doesn't overlap with existing nodes, starting from a preferred point
+  const findSmartPosition = useCallback((preferredX: number, preferredY: number, width: number, height: number): Position => {
+      const padding = 20;
+      let x = preferredX;
+      let y = preferredY;
+      let attempts = 0;
+      const maxAttempts = 50;
+
+      // Filter relevant nodes (visible in current context)
+      const visible = nodes.filter(n => n.department === currentDept && n.assetId === (currentAssetId || undefined));
+
+      const isColliding = (checkX: number, checkY: number) => {
+          return visible.some(n => {
+              const nW = n.width || 300;
+              const nH = n.height || 300;
+              return (
+                  checkX < n.position.x + nW + padding &&
+                  checkX + width + padding > n.position.x &&
+                  checkY < n.position.y + nH + padding &&
+                  checkY + height + padding > n.position.y
+              );
+          });
+      };
+
+      // Spiraling / Grid search pattern
+      // Simple strategy: check preferred, then move right, then move down
+      while (isColliding(x, y) && attempts < maxAttempts) {
+          x += width + padding;
+          // If we go too far right (arbitrary), wrap down
+          // For simplicity in this logic, we just shift right then shift down if multiple failures
+          if (attempts % 5 === 0 && attempts > 0) {
+              x = preferredX;
+              y += height + padding;
+          }
+          attempts++;
+      }
+      
+      return { x, y };
+  }, [nodes, currentDept, currentAssetId]);
+
+  // Find position BELOW all current content
+  const findBelowPosition = useCallback((width: number, height: number): Position => {
+      const visible = nodes.filter(n => n.department === currentDept && n.assetId === (currentAssetId || undefined));
+      if (visible.length === 0) return { x: 100, y: 100 };
+
+      const maxY = Math.max(...visible.map(n => n.position.y + (n.height || 400)));
+      return { x: 100, y: maxY + 50 };
+  }, [nodes, currentDept, currentAssetId]);
 
   // --- History Management ---
   const saveHistory = useCallback(() => {
@@ -143,7 +197,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
       const matchAsset = n.assetId === (currentAssetId || undefined);
       const notArchived = showArchived ? true : n.data.status !== 'archived';
       
-      // Check if parent is collapsed
       if (n.parentId) {
           const parent = nodes.find(p => p.id === n.parentId);
           if (parent && parent.data.collapsed) return false;
@@ -152,21 +205,20 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
       return matchDept && matchAsset && notArchived;
   }), [nodes, currentDept, currentAssetId, showArchived]);
 
-  // Reset View when context changes
   useEffect(() => {
       setOffset({ x: 0, y: 0 });
       setScale(1);
       setSelectedNodeIds([]);
       setContextMenu(null);
-      setHistory([]); // Clear history on context switch
+      setHistory([]); 
   }, [currentDept, currentAssetId]);
 
-  // Focus Logic (External)
   useEffect(() => {
       if (focusNodes && focusNodes.length > 0) {
           frameSelection(focusNodes);
       }
   }, [focusNodes]);
+
 
   // --- Actions ---
 
@@ -218,53 +270,58 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
   };
 
   const frameSelection = (targetIds?: string[]) => {
-      const idsToFrame = targetIds || (selectedNodeIds.length > 0 ? selectedNodeIds : visibleNodes.map(n => n.id));
-      if (idsToFrame.length === 0) {
-          setOffset({ x: 0, y: 0 });
-          setScale(1);
-          return;
-      }
+      // Use set timeout to allow React to render new nodes first
+      setTimeout(() => {
+          const idsToFrame = targetIds || (selectedNodeIds.length > 0 ? selectedNodeIds : visibleNodes.map(n => n.id));
+          if (idsToFrame.length === 0) {
+              setOffset({ x: 0, y: 0 });
+              setScale(1);
+              return;
+          }
 
-      const targets = visibleNodes.filter(n => idsToFrame.includes(n.id));
-      if (targets.length === 0) return;
+          const targets = nodes.filter(n => idsToFrame.includes(n.id)); // Use latest 'nodes' ref if possible, but here we depend on 'visibleNodes' which updates
+          if (targets.length === 0) return;
 
-      const minX = Math.min(...targets.map(n => n.position.x));
-      const maxX = Math.max(...targets.map(n => n.position.x + (n.width || 300)));
-      const minY = Math.min(...targets.map(n => n.position.y));
-      const maxY = Math.max(...targets.map(n => n.position.y + (n.height || 400)));
+          const minX = Math.min(...targets.map(n => n.position.x));
+          const maxX = Math.max(...targets.map(n => n.position.x + (n.width || 300)));
+          const minY = Math.min(...targets.map(n => n.position.y));
+          const maxY = Math.max(...targets.map(n => n.position.y + (n.height || 400)));
 
-      const centerW = (maxX - minX) / 2 + minX;
-      const centerH = (maxY - minY) / 2 + minY;
+          const centerW = (maxX - minX) / 2 + minX;
+          const centerH = (maxY - minY) / 2 + minY;
 
-      const viewportW = canvasRef.current?.clientWidth || window.innerWidth;
-      const viewportH = canvasRef.current?.clientHeight || window.innerHeight;
+          const viewportW = canvasRef.current?.clientWidth || window.innerWidth;
+          const viewportH = canvasRef.current?.clientHeight || window.innerHeight;
 
-      const padding = 100;
-      const scaleX = viewportW / (maxX - minX + padding * 2);
-      const scaleY = viewportH / (maxY - minY + padding * 2);
-      const newScale = Math.min(1, Math.min(scaleX, scaleY)); 
+          const padding = 100;
+          const scaleX = viewportW / (maxX - minX + padding * 2);
+          const scaleY = viewportH / (maxY - minY + padding * 2);
+          const newScale = Math.min(1, Math.min(scaleX, scaleY)); 
 
-      const newX = (viewportW / 2) - (centerW * newScale);
-      const newY = (viewportH / 2) - (centerH * newScale);
+          const newX = (viewportW / 2) - (centerW * newScale);
+          const newY = (viewportH / 2) - (centerH * newScale);
 
-      setScale(Math.max(0.2, Math.min(newScale, 1.5)));
-      setOffset({ x: newX, y: newY });
+          setScale(Math.max(0.2, Math.min(newScale, 1.5)));
+          setOffset({ x: newX, y: newY });
+      }, 50);
   };
 
   const addNodeAtLocation = (type: NodeType, clientX: number, clientY: number, initialData?: Partial<NodeData>) => {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       
-      // Calculate world position
       const worldX = (clientX - rect.left - offset.x) / scale;
       const worldY = (clientY - rect.top - offset.y) / scale;
+
+      // Smart Placement if likely to overlap
+      const pos = findSmartPosition(worldX, worldY, 300, 400);
 
       const newNode: FlowNode = {
           id: `node-${Date.now()}`,
           type,
           department: currentDept,
           assetId: currentAssetId || undefined,
-          position: { x: worldX, y: worldY },
+          position: pos,
           data: { 
               status: 'draft',
               prompt: activeAsset && type === NodeType.AI_IMAGE_GEN ? `@${activeAsset.title}` : undefined,
@@ -276,13 +333,12 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
   };
 
   // --- Callbacks for NodeItem ---
+  // ... (handleNodeSelect, onNodeDragStart ... unchanged)
 
   const handleNodeSelect = useCallback((e: React.MouseEvent, id: string) => {
-      // If we were dragging, do NOT trigger selection logic on mouse up/click
       if (isDraggingRef.current) return;
-      if (e.shiftKey) return; // Shift handled in DragStart
+      if (e.shiftKey) return; 
 
-      // Exclusive Select
       setSelectedNodeIds([id]);
   }, []);
 
@@ -290,9 +346,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
       e.stopPropagation();
       setContextMenu(null);
       setTabMenu(null);
-      
-      // Save history before drag starts (state snapshot)
-      // We do this here because handleMouseDown on canvas might trigger before we know it's a node drag
       saveHistory();
 
       isDraggingRef.current = false;
@@ -301,12 +354,9 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
 
       setSelectedNodeIds(prev => {
           if (e.shiftKey) {
-              // Toggle
               if (prev.includes(id)) return prev.filter(nid => nid !== id);
               return [...prev, id];
           } else {
-              // If node is not already in selection, select it exclusively
-              // If it IS in selection, keep selection (allows moving multiple)
               if (!prev.includes(id)) return [id];
               return prev;
           }
@@ -329,6 +379,145 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
       }
       setContextMenu(null);
   };
+  
+  const handleRefineAction = () => {
+      if (contextMenu && contextMenu.nodeId && onRefineConcept) {
+          const node = nodes.find(n => n.id === contextMenu.nodeId);
+          if (node && node.assetId && node.data.imageUrl) {
+               onRefineConcept(node.assetId, node.data.imageUrl);
+          }
+      }
+      setContextMenu(null);
+  };
+
+  const handleTurntableAction = () => {
+      if (contextMenu && contextMenu.nodeId) {
+          const node = nodes.find(n => n.id === contextMenu.nodeId);
+          if (node && node.data.imageUrl) {
+               // Use "Below" position
+               const width = 300;
+               const height = 400;
+               const pos = findBelowPosition(width, height);
+               
+               const model = MODELS.VIDEO_HQ;
+               const capabilities = VIDEO_MODEL_CAPABILITIES[model];
+               const supportsLastFrame = capabilities?.supportsLastFrame || false;
+
+               const newNode: FlowNode = {
+                   id: `vid-turntable-${Date.now()}`,
+                   type: NodeType.AI_VIDEO_GEN,
+                   department: currentDept,
+                   assetId: node.assetId,
+                   parentId: node.parentId,
+                   position: pos,
+                   width: width,
+                   height: height,
+                   data: {
+                       prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
+                       imageUrl: node.data.imageUrl, // Seed image
+                       // Loop it if supported
+                       lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
+                       model: model,
+                       aspectRatio: '16:9',
+                       status: 'draft',
+                       duration: '8', // Prefer long for turntable
+                       withAudio: false
+                   }
+               };
+               setNodes(prev => [...prev, newNode]);
+               setSelectedNodeIds([newNode.id]);
+               frameSelection([newNode.id]);
+          }
+      }
+      setContextMenu(null);
+  };
+
+  const handleGenerateExpressions = () => {
+      if (contextMenu && contextMenu.nodeId) {
+          const node = nodes.find(n => n.id === contextMenu.nodeId);
+          if (node && node.data.imageUrl) {
+               const emotions = [
+                   { name: 'Happiness', prompt: 'face closeup, expressing pure joy, smiling, eyes crinkling, cinematic lighting' },
+                   { name: 'Sadness', prompt: 'face closeup, expression of deep grief, frowning, looking down, subtle tears, moody lighting' },
+                   { name: 'Fear', prompt: 'face closeup, expression of terror, wide eyes, screaming, dramatic lighting' },
+                   { name: 'Anger', prompt: 'face closeup, expression of rage, clenched teeth, narrowed eyes, intense lighting' },
+                   { name: 'Surprise', prompt: 'face closeup, expression of shock, wide open mouth, wide eyes' },
+                   { name: 'Disgust', prompt: 'face closeup, expression of revulsion, wrinkled nose, grimace' },
+                   { name: 'Contempt', prompt: 'face closeup, expression of scorn, smirk, one raised eyebrow' }
+               ];
+
+               // Group Configuration
+               const columns = 4;
+               const rows = 2; // Math.ceil(7 / 4)
+               const nodeW = 300;
+               const nodeH = 400;
+               const gap = 20;
+               const padding = 20;
+               
+               const groupWidth = (nodeW * columns) + (gap * (columns - 1)) + (padding * 2);
+               const groupHeight = (nodeH * rows) + (gap * (rows - 1)) + (padding * 2) + 40; // 40 for header
+
+               // Find position for the GROUP
+               const groupPos = findBelowPosition(groupWidth, groupHeight);
+
+               // Create Group Node
+               const groupId = `group-expr-${Date.now()}`;
+               const groupNode: FlowNode = {
+                    id: groupId,
+                    type: NodeType.GROUP,
+                    department: currentDept,
+                    assetId: node.assetId,
+                    position: groupPos,
+                    width: groupWidth,
+                    height: groupHeight,
+                    data: {
+                        label: `Expressions Batch`,
+                        collapsed: false
+                    }
+               };
+               
+               // Model choice: Use fast video
+               const targetModel = MODELS.VIDEO_FAST;
+               const capabilities = VIDEO_MODEL_CAPABILITIES[targetModel];
+               const minDuration = capabilities ? capabilities.durations[0] : "4";
+
+               const newNodes: FlowNode[] = [];
+               
+               emotions.forEach((emo, idx) => {
+                   const col = idx % columns;
+                   const row = Math.floor(idx / columns);
+                   
+                   const childX = groupPos.x + padding + (col * (nodeW + gap));
+                   const childY = groupPos.y + 60 + (row * (nodeH + gap)); // 60 offset for header
+
+                   newNodes.push({
+                       id: `vid-expr-${Date.now()}-${idx}`,
+                       type: NodeType.AI_VIDEO_GEN,
+                       department: currentDept,
+                       assetId: node.assetId,
+                       parentId: groupId, // Link to group
+                       position: { x: childX, y: childY },
+                       width: nodeW,
+                       height: nodeH,
+                       data: {
+                           prompt: `@${activeAsset?.title || 'Character'}, ${emo.prompt}, neutral background, high quality`,
+                           imageUrl: node.data.imageUrl,
+                           model: targetModel,
+                           aspectRatio: '16:9',
+                           status: 'draft',
+                           duration: minDuration, // Force shortest
+                           withAudio: false // Force silent
+                       }
+                   });
+               });
+               
+               setNodes(prev => [...prev, groupNode, ...newNodes]);
+               setSelectedNodeIds(newNodes.map(n => n.id));
+               frameSelection([groupNode.id]);
+          }
+      }
+      setContextMenu(null);
+  };
 
   const deleteNode = useCallback((id: string) => {
       saveHistory(); // Snapshot before delete
@@ -345,9 +534,9 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
   }, [setNodes]);
 
   // --- Mouse Handlers ---
-
+  // ... (handleMouseDown, handleMouseMove, handleMouseUp, handleWheel ... unchanged)
+  
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Close menus
     if (contextMenu) setContextMenu(null);
     if (tabMenu) setTabMenu(null);
 
@@ -360,22 +549,16 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
     const isMiddle = e.button === 1;
     const isRight = e.button === 2;
 
-    // Context Menu
-    if (isRight) {
-        return; // Handled by onContextMenu
-    }
+    if (isRight) return; 
 
-    // Pan Logic (Middle OR Left+Space OR Left on Background)
     if (isMiddle || (isLeft && isSpacePressed) || (isLeft && !e.shiftKey)) {
          setInteractionMode('panning');
          if (isLeft && !isSpacePressed) {
-             // Standard app behavior: clicking background deselects
              setSelectedNodeIds([]); 
          }
          return;
     }
 
-    // Selection Logic (Left + Shift)
     if (isLeft && e.shiftKey) {
          const relX = e.clientX - rect.left;
          const relY = e.clientY - rect.top;
@@ -385,7 +568,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    // Track mouse globally for Tab menu spawn
     mousePosRef.current = { x: e.clientX, y: e.clientY };
 
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -412,7 +594,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
         const deltaX = e.movementX / zoomFactor;
         const deltaY = e.movementY / zoomFactor;
         
-        // --- Drag to Group Detection ---
         const mouseX = (e.clientX - rect.left - offset.x) / scale;
         const mouseY = (e.clientY - rect.top - offset.y) / scale;
         
@@ -427,7 +608,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
         );
 
         setDragTargetGroupId(targetGroup ? targetGroup.id : null);
-        // -------------------------------
 
         setNodes(prev => {
             const movingIds = new Set<string>();
@@ -477,18 +657,14 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
             return (selLeft < nodeX + nodeW && selRight > nodeX && selTop < nodeY + nodeH && selBottom > nodeY);
         }).map(n => n.id);
         
-        // Additive selection for Shift+Drag
         setSelectedNodeIds(prev => [...new Set([...prev, ...newSelected])]);
     }
 
-    // --- Drop Node into Group ---
     if (interactionMode === 'draggingNode' && dragTargetGroupId) {
         const targetGroup = nodes.find(n => n.id === dragTargetGroupId);
         if (targetGroup) {
-             // Determine nodes being dropped
              const nodesToDrop = selectedNodeIds.length > 0 ? selectedNodeIds : [draggingNodeId!];
              
-             // Calculate union of group + new children to resize group
              const allChildrenIds = nodes.filter(n => n.parentId === dragTargetGroupId).map(n => n.id);
              const newMemberIds = nodesToDrop;
              const unionIds = [...new Set([...allChildrenIds, ...newMemberIds])];
@@ -506,7 +682,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
 
                  setNodes(prev => prev.map(n => {
                      if (n.id === dragTargetGroupId) {
-                         // Update Group Dimensions
                          return {
                              ...n,
                              position: { x: minX - padding, y: minY - padding - headerHeight },
@@ -515,7 +690,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
                          };
                      }
                      if (newMemberIds.includes(n.id)) {
-                         // Assign Parent
                          return { ...n, parentId: dragTargetGroupId };
                      }
                      return n;
@@ -523,7 +697,6 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
              }
         }
     }
-    // ----------------------------
 
     setInteractionMode('none');
     setSelectionBox(null);
@@ -539,13 +712,11 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Standard Zoom to Point Logic
     const zoomSensitivity = -0.001;
     const delta = e.deltaY * zoomSensitivity;
     const oldScale = scale;
     const newScale = Math.min(Math.max(0.1, oldScale + delta), 3);
 
-    // Calculate new offset to maintain mouse position in world space
     const newOffsetX = mouseX - (mouseX - offset.x) * (newScale / oldScale);
     const newOffsetY = mouseY - (mouseY - offset.y) * (newScale / oldScale);
 
@@ -589,7 +760,7 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
         className="w-full h-full bg-black relative overflow-hidden font-sans select-none"
         onContextMenu={handleCanvasContextMenu}
     >
-        {/* Grid Background */}
+        {/* ... (Background grid ... unchanged) */}
         <div 
             className="absolute inset-0 opacity-10 pointer-events-none"
             style={{
@@ -627,6 +798,8 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
                         isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl}
                         isDragOver={dragTargetGroupId === node.id}
                         projectAssets={projectAssets}
+                        assetThumbnails={onSetThumbnail ? {} : undefined} // Not needed for Canvas rendering directly, but can be passed if needed
+                        refinedImagesMap={refinedImagesMap}
                     />
                 ))}
             </div>
@@ -662,12 +835,40 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
                             const node = nodes.find(n => n.id === contextMenu.nodeId);
                             if (node?.data.imageUrl && node.assetId) {
                                 return (
-                                    <button 
-                                        onClick={handleSetThumbnailAction}
-                                        className="w-full text-left px-3 py-2 text-xs hover:bg-blue-900/30 text-zinc-200 hover:text-blue-300 flex items-center gap-2"
-                                    >
-                                        <UserCheck size={12} /> Set Thumbnail
-                                    </button>
+                                    <>
+                                        <button 
+                                            onClick={handleSetThumbnailAction}
+                                            className="w-full text-left px-3 py-2 text-xs hover:bg-blue-900/30 text-zinc-200 hover:text-blue-300 flex items-center gap-2"
+                                        >
+                                            <UserCheck size={12} /> Set Thumbnail
+                                        </button>
+
+                                        {/* Refine Option for Approved Concepts in Casting */}
+                                        {node.department === DepartmentType.CASTING_WARDROBE && node.data.status === 'approved' && (
+                                            <>
+                                                {onRefineConcept && (
+                                                    <button 
+                                                        onClick={handleRefineAction}
+                                                        className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-zinc-200 hover:text-green-300 flex items-center gap-2"
+                                                    >
+                                                        <ScanFace size={12} /> Refine Character
+                                                    </button>
+                                                )}
+                                                <button 
+                                                    onClick={handleTurntableAction}
+                                                    className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/30 text-zinc-200 hover:text-red-300 flex items-center gap-2"
+                                                >
+                                                    <Rotate3d size={12} /> Generate 3D Turntable
+                                                </button>
+                                                <button 
+                                                    onClick={handleGenerateExpressions}
+                                                    className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-zinc-200 hover:text-purple-300 flex items-center gap-2"
+                                                >
+                                                    <Smile size={12} /> Generate Expressions
+                                                </button>
+                                            </>
+                                        )}
+                                    </>
                                 );
                             }
                             return null;
@@ -681,13 +882,12 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
                         </button>
                     </>
                 ) : (
-                    // Canvas Context Menu
+                    // Canvas Context Menu (Unchanged logic)
                     <>
                          <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">
                             Canvas Actions
                         </div>
 
-                         {/* Writer's Room Specific Actions */}
                          {currentDept === DepartmentType.WRITERS_ROOM && (
                              <>
                                 <button 
@@ -741,7 +941,7 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
             </div>
         )}
 
-        {/* Tab Menu (Node Search) */}
+        {/* Tab Menu ... (unchanged) */}
         {tabMenu && (
             <div 
                 className="fixed z-50 flex flex-col bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-64 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
@@ -784,10 +984,9 @@ export const Canvas: React.FC<CanvasProps> = ({ nodes, connections, setNodes, se
             </div>
         )}
 
-        {/* Floating Toolbar */}
+        {/* Floating Toolbar ... (unchanged) */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40">
             <div className="flex items-center gap-1 px-2 border-r border-zinc-700">
-                 {/* Quick Add Buttons */}
                 <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.TEXT_INPUT, window.innerWidth/2, window.innerHeight/2)} title="Add Note">
                     <Type size={18} />
                 </Button>

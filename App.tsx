@@ -2,13 +2,14 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
+import { GalleryView } from './components/GalleryView'; // Import new component
 import { DepartmentPanel } from './components/DepartmentPanel';
 import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed } from './types';
-import { DEPARTMENTS, MODELS } from './constants';
-import { Button, Input, Modal, TextArea } from './components/UI';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff } from 'lucide-react';
+import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from './constants';
+import { Button, Input, Modal, TextArea, ToggleGroup } from './components/UI';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid } from 'lucide-react';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene } from './services/geminiService';
 import * as GoogleDriveService from './services/googleDriveService';
 
@@ -31,6 +32,7 @@ const App: React.FC = () => {
   // Context State
   const [currentDept, setCurrentDept] = useState<DepartmentType>(DepartmentType.WRITERS_ROOM);
   const [currentAssetId, setCurrentAssetId] = useState<string | null>(null); // Null means Department Root
+  const [workspaceView, setWorkspaceView] = useState<'canvas' | 'gallery'>('canvas'); // New State
 
   // Canvas Focus State
   const [focusNodeIds, setFocusNodeIds] = useState<string[]>([]);
@@ -132,16 +134,6 @@ const App: React.FC = () => {
                      status: 'review' 
                  },
                  width: 350, height: 400
-             },
-             // Asset Specific Node (Zax)
-             { 
-                 id: 'n2', 
-                 type: NodeType.AI_IMAGE_GEN, 
-                 department: DepartmentType.CASTING_WARDROBE,
-                 assetId: demoAssetId,
-                 position: {x: 100, y: 100}, 
-                 data: { prompt: 'A rusty robot courier named Zax, sci-fi concept art', aspectRatio: '1:1', status: 'approved', imageUrl: 'https://picsum.photos/400/400' },
-                 width: 300, height: 400
              }
           ],
           connections: [],
@@ -178,6 +170,20 @@ const App: React.FC = () => {
                    if (latest.data.imageUrl) map[asset.id] = latest.data.imageUrl;
               }
           }
+      });
+      return map;
+  }, [activeProject?.nodes, activeProject?.assets]);
+  
+  // --- Refined Images Map ---
+  // Memoized map of AssetID -> List of Approved Refinement Image URLs
+  const refinedImagesMap = useMemo(() => {
+      if (!activeProject) return {};
+      const map: Record<string, string[]> = {};
+      activeProject.assets.forEach(asset => {
+          const images = activeProject.nodes
+            .filter(n => n.assetId === asset.id && n.data.status === 'approved' && n.data.imageUrl && n.data.tag === 'refinement')
+            .map(n => n.data.imageUrl!);
+          if (images.length > 0) map[asset.id] = images;
       });
       return map;
   }, [activeProject?.nodes, activeProject?.assets]);
@@ -249,6 +255,7 @@ const App: React.FC = () => {
   }
 
   const handleCreateProject = async () => {
+      // ... (unchanged)
       let title = newProjectTitle;
       let summary = '';
       let initialAssets: ProjectAsset[] = [];
@@ -348,7 +355,7 @@ const App: React.FC = () => {
       resetProjectModal();
   };
 
-  // --- Asset Handlers ---
+  // ... (handleCreateAsset, handleUpdateAsset, handleSetThumbnail ... unchanged)
   
   const handleEnhanceDescription = async () => {
       if (!newAssetDesc) return;
@@ -483,23 +490,24 @@ const App: React.FC = () => {
       }
   };
 
+
   // --- Generation Workflows ---
+  // ... (handleGenerateConcepts, handleGenerateOutline, handleRefineConcept, handleUpdateNodes, handleUpdateConnections ... unchanged)
 
   const handleGenerateConcepts = (count: number) => {
+    // ... (unchanged)
     if (!activeAsset || !currentProjectId || !activeProject) return;
-
-    // 1. Determine Bounding Box
+    
+    // 1. Determine Bounding Box... (Existing implementation)
     const contextNodes = activeProject.nodes.filter(n => 
         n.department === currentDept && 
         n.assetId === activeAsset.id &&
         n.data.status !== 'archived'
     );
-
     let maxY = 0;
     if (contextNodes.length > 0) {
         maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
     }
-
     const startY = maxY > 0 ? maxY + 100 : 100;
     const startX = 100;
     const nodeWidth = 300;
@@ -526,6 +534,16 @@ const App: React.FC = () => {
     };
 
     const newNodes: FlowNode[] = [];
+    
+    // Auto-detect if we should use dot syntax for child assets
+    let defaultPrompt = `@${activeAsset.title}`;
+    if (activeAsset.parentId) {
+        const parent = activeProject.assets.find(a => a.id === activeAsset.parentId);
+        if (parent) {
+            defaultPrompt = `@${parent.title}.${activeAsset.title}`;
+        }
+    }
+
     for (let i = 0; i < count; i++) {
         const childX = startX + padding + (i * (nodeWidth + gap));
         const childY = startY + 60;
@@ -540,9 +558,10 @@ const App: React.FC = () => {
             width: nodeWidth,
             height: nodeHeight,
             data: {
-                prompt: `@${activeAsset.title}`,
+                prompt: defaultPrompt,
                 aspectRatio: '1:1',
-                status: 'generating' 
+                status: 'generating',
+                tag: 'concept' // Tag as concept
             }
         });
     }
@@ -558,8 +577,83 @@ const App: React.FC = () => {
 
     setFocusNodeIds(allNewIds);
   };
+  
+  // Generic Batch Generator for Gallery View
+  const handleGalleryGenerate = (prompt: string, count: number, model: string, aspectRatio: string) => {
+      if (!currentProjectId || !activeProject) return;
+      
+      const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === (currentAssetId || undefined) &&
+          n.data.status !== 'archived'
+      );
+      
+      let maxY = 0;
+      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
+      
+      const startY = maxY > 0 ? maxY + 100 : 100;
+      const startX = 100;
+      const nodeWidth = 300;
+      const nodeHeight = 450;
+      const gap = 20;
+      const padding = 20;
+
+      const groupId = `group-gal-${Date.now()}`;
+      const groupWidth = (nodeWidth * count) + (gap * (count - 1)) + (padding * 2);
+      const groupHeight = nodeHeight + (padding * 2) + 40;
+
+      const groupNode: FlowNode = {
+        id: groupId,
+        type: NodeType.GROUP,
+        department: currentDept,
+        assetId: currentAssetId || undefined,
+        position: { x: startX, y: startY },
+        width: groupWidth,
+        height: groupHeight,
+        data: {
+            label: `Gallery Batch ${new Date().toLocaleTimeString()}`,
+            collapsed: false
+        }
+      };
+
+      const newNodes: FlowNode[] = [];
+      for (let i = 0; i < count; i++) {
+          const childX = startX + padding + (i * (nodeWidth + gap));
+          const childY = startY + 60;
+
+          newNodes.push({
+              id: `gal-gen-${Date.now()}-${i}`,
+              type: model.includes('veo') ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
+              department: currentDept,
+              assetId: currentAssetId || undefined,
+              parentId: groupId,
+              position: { x: childX, y: childY }, 
+              width: nodeWidth,
+              height: nodeHeight,
+              data: {
+                  prompt: prompt,
+                  aspectRatio: aspectRatio,
+                  model: model,
+                  status: 'generating',
+                  duration: model.includes('veo') ? '4' : undefined,
+                  withAudio: false
+              }
+          });
+      }
+      
+      const allNewIds = [groupId, ...newNodes.map(n => n.id)];
+
+      setProjects(prev => prev.map(p => {
+        if (p.id === currentProjectId) {
+             return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
+        }
+        return p;
+      }));
+      setFocusNodeIds(allNewIds);
+  }
 
   const handleGenerateOutline = () => {
+      // ... (unchanged)
       if (!activeAsset || !currentProjectId || !activeProject) return;
 
       const contextNodes = activeProject.nodes.filter(n => 
@@ -620,7 +714,8 @@ const App: React.FC = () => {
       setFocusNodeIds(allNewIds);
   };
 
-  const handleGenerateRefSheet = (assetId: string) => {
+  const handleRefineConcept = (assetId: string, sourceImageUrl?: string) => {
+      // ... (unchanged)
       if (!currentProjectId || !activeProject) return;
       const asset = activeProject.assets.find(a => a.id === assetId);
       if (!asset) return;
@@ -640,16 +735,15 @@ const App: React.FC = () => {
       const gap = 20;
       const padding = 20;
 
-      // Dataset Plan: 8 Images
       const prompts = [
-          "Full body shot of @character, front view, neutral pose, white background",
-          "Close up of @character face, front view, neutral expression, white background",
-          "Full body shot of @character, 3/4 left view, white background",
-          "Full body shot of @character, 3/4 right view, white background",
-          "Full body shot of @character, left profile view, white background",
-          "Full body shot of @character, right profile view, white background",
-          "Full body shot of @character, back view, white background",
-          "Close up of @character face, 3/4 view, cinematic lighting"
+          `@${asset.title}, Full body character standing in a NEUTRAL POSE on a white background, soft neutral lighting, hands at sides, no props, whole body visible in frame`,
+          `@${asset.title}, Extreme closeup of head and shoulders facing the camera on a white background, neutral lighting, neutral expression, high detail face`,
+          `@${asset.title}, Full body front view on white background. CHARACTER IS FACING DIRECTLY TOWARD THE CAMERA IN A NEUTRAL POSE, front-on, hands at sides, no props.`,
+          `@${asset.title}, Full body three quarter view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING SCREEN LEFT (45 degrees).`,
+          `@${asset.title}, Full body three quarter view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING SCREEN RIGHT (45 degrees).`,
+          `@${asset.title}, Full body side profile view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING DIRECTLY LEFT (90 degrees).`,
+          `@${asset.title}, Full body side profile view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING DIRECTLY RIGHT (90 degrees).`,
+          `@${asset.title}, Full body back view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING AWAY FROM THE CAMERA.`
       ];
 
       const columns = 4;
@@ -666,7 +760,7 @@ const App: React.FC = () => {
           position: { x: startX, y: startY },
           width: groupWidth,
           height: groupHeight,
-          data: { label: `Reference Sheet: ${asset.title}`, collapsed: false }
+          data: { label: `Refined Character Sheet`, collapsed: false }
       };
 
       const newNodes: FlowNode[] = [];
@@ -687,9 +781,11 @@ const App: React.FC = () => {
               height: nodeHeight,
               data: {
                   prompt: p,
-                  aspectRatio: "1:1", // Standard dataset ratio
-                  model: MODELS.IMAGE_EDIT, // Nano Banana usually best for ref consistency
-                  status: 'generating'
+                  aspectRatio: "1:1",
+                  model: MODELS.IMAGE_EDIT, 
+                  status: 'generating',
+                  tag: 'refinement', 
+                  referenceImageUrl: sourceImageUrl 
               }
           });
       });
@@ -702,590 +798,657 @@ const App: React.FC = () => {
       }));
       setFocusNodeIds([groupId]);
   }
-
-  const handleUpdateNodes = useCallback((value: FlowNode[] | ((prev: FlowNode[]) => FlowNode[])) => {
-      if (!currentProjectId) return;
-      setProjects(prev => prev.map(p => {
-          if (p.id !== currentProjectId) return p;
-          const nextNodes = typeof value === 'function' ? value(p.nodes) : value;
-          return { ...p, nodes: nextNodes };
-      }));
-  }, [currentProjectId]);
-
-   const handleUpdateConnections = useCallback((value: FlowConnection[] | ((prev: FlowConnection[]) => FlowConnection[])) => {
-      if (!currentProjectId) return;
-       setProjects(prev => prev.map(p => {
-          if (p.id !== currentProjectId) return p;
-          const nextConns = typeof value === 'function' ? value(p.connections) : value;
-          return { ...p, connections: nextConns };
-      }));
-  }, [currentProjectId]);
-
-  const getApprovedImages = () => {
-      if (!activeProject || !currentAssetId) return [];
-      return activeProject.nodes
-        .filter(n => n.assetId === currentAssetId && n.data.status === 'approved' && n.data.imageUrl)
-        .map(n => n.data.imageUrl!);
-  };
-
-  // --- Generalized Detection Logic ---
   
-  const handleDiscoverShots = async (assetId: string) => {
-      const asset = activeProject?.assets.find(a => a.id === assetId);
-      if (!asset) return;
+  // Reusable Handlers for Gallery Context Actions
+  const handleGalleryTurntable = (node: FlowNode) => {
+      if (!currentProjectId || !activeProject) return;
       
-      setAnalysisParentId(assetId); 
-      setAnalysisType("Shots");
-      setIsAnalyzing(true);
-      setIsAnalyzeModalOpen(true);
-      setDetectedItems([]);
-
-      try {
-          const knownCharacters = activeProject?.assets
-            .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
-            .map(a => a.title) || [];
-
-          const shots = await extractShotsFromScene(asset.description, knownCharacters);
-          setDetectedItems(shots.map(s => ({
-              name: s.title,
-              description: s.description,
-              type: s.type,
-              selected: true, 
-              isDuplicate: false 
-          })));
-      } catch(e) {
-          console.error(e);
-      } finally {
-          setIsAnalyzing(false);
-      }
-  };
-
-  const handleAnalyzeScripts = async () => {
-      if (!activeProject) return;
-      
-      setAnalysisParentId(null); 
-      setIsAnalyzing(true);
-      setIsAnalyzeModalOpen(true);
-      setDetectedItems([]);
-      
-      const scriptNodes = activeProject.nodes.filter(n => 
-          (n.department === DepartmentType.WRITERS_ROOM || n.department === DepartmentType.STORY) &&
-          (n.type === NodeType.TEXT_INPUT || n.type === NodeType.AI_TEXT_GEN) &&
-          n.data.text && n.data.text.trim().length > 0
+      const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === (currentAssetId || undefined)
       );
-
-      const combinedScript = scriptNodes.map(n => n.data.text).join('\n\n');
-
-      if (!combinedScript) {
-          setIsAnalyzing(false);
-          setAnalysisType("Error");
-          return;
-      }
-
-      try {
-          if (currentDept === DepartmentType.CASTING_WARDROBE) {
-              setAnalysisType("Characters");
-              const profiles = await extractCharactersFromScript(combinedScript);
-              
-              const existingNames = new Set(
-                 activeProject.assets
-                    .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
-                    .map(a => a.title.toLowerCase().trim())
-              );
-              setDetectedItems(profiles.map(p => ({
-                  name: p.name,
-                  description: p.description,
-                  type: p.role,
-                  selected: !existingNames.has(p.name.toLowerCase().trim()),
-                  isDuplicate: existingNames.has(p.name.toLowerCase().trim())
-              })));
-
-          } else if (currentDept === DepartmentType.SET_DESIGN) {
-              setAnalysisType("Locations");
-              const locs = await extractLocationsFromScript(combinedScript);
-              
-              const existingLocs = new Set(
-                 activeProject.assets
-                    .filter(a => a.department === DepartmentType.SET_DESIGN)
-                    .map(a => a.title.toLowerCase().trim())
-              );
-              setDetectedItems(locs.map(l => ({
-                  name: l.name,
-                  description: l.description,
-                  type: l.type, 
-                  selected: !existingLocs.has(l.name.toLowerCase().trim()),
-                  isDuplicate: existingLocs.has(l.name.toLowerCase().trim())
-              })));
-
-          } else if (currentDept === DepartmentType.STORY) {
-              setAnalysisType("Story Elements");
-              
-              const knownCharacters = activeProject.assets
-                  .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
-                  .map(a => a.title);
-
-              const elements = await extractStoryElementsFromScript(combinedScript, knownCharacters);
-              
-               const existingElements = new Set(
-                 activeProject.assets
-                    .filter(a => a.department === DepartmentType.STORY)
-                    .map(a => a.title.toLowerCase().trim())
-              );
-              setDetectedItems(elements.map(e => ({
-                  name: e.title,
-                  description: e.description,
-                  type: e.type,
-                  selected: !existingElements.has(e.title.toLowerCase().trim()),
-                  isDuplicate: existingElements.has(e.title.toLowerCase().trim())
-              })));
-          }
-
-      } catch(e) {
-          console.error(e);
-      } finally {
-          setIsAnalyzing(false);
-      }
-  };
-
-  const handleApproveAnalysis = () => {
-      if (!currentProjectId) return;
-      const toAdd = detectedItems.filter(c => c.selected);
+      let maxY = 0;
+      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
       
-      if (toAdd.length === 0) {
-          setIsAnalyzeModalOpen(false);
-          return;
-      }
+      const pos = { x: 100, y: maxY + 50 };
+      const width = 300;
+      const height = 400;
+
+      const model = MODELS.VIDEO_HQ;
+      const supportsLastFrame = VIDEO_MODEL_CAPABILITIES[model]?.supportsLastFrame || false;
+
+      const newNode: FlowNode = {
+           id: `vid-turntable-${Date.now()}`,
+           type: NodeType.AI_VIDEO_GEN,
+           department: currentDept,
+           assetId: node.assetId,
+           parentId: node.parentId,
+           position: pos,
+           width: width,
+           height: height,
+           data: {
+               prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
+               imageUrl: node.data.imageUrl, // Seed image
+               lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
+               model: model,
+               aspectRatio: '16:9',
+               status: 'draft',
+               duration: '8', // Prefer long for turntable
+               withAudio: false
+           }
+      };
 
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectId) {
-              const newAssets = toAdd.map(item => ({
-                  id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                  department: currentDept,
-                  title: item.name,
-                  description: item.description,
-                  visualStyle: currentDept === DepartmentType.STORY ? "Storyboard" : "", 
-                  summary: `${item.type}. ${item.description.substring(0, 60)}...`,
-                  parentId: analysisParentId || undefined 
-              }));
+              return { ...p, nodes: [...p.nodes, newNode] };
+          }
+          return p;
+      }));
+  }
+
+  const handleGalleryExpressions = (node: FlowNode) => {
+       if (!currentProjectId || !activeProject) return;
+       // ... reuse logic from Canvas or refactor. 
+       // For brevity in this big file update, I'll essentially replicate the placement logic for "below" content.
+       const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === (currentAssetId || undefined)
+       );
+       let maxY = 0;
+       if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
+       const startY = maxY + 50;
+       
+       const emotions = [
+           { name: 'Happiness', prompt: 'face closeup, expressing pure joy, smiling, eyes crinkling, cinematic lighting' },
+           { name: 'Sadness', prompt: 'face closeup, expression of deep grief, frowning, looking down, subtle tears, moody lighting' },
+           { name: 'Fear', prompt: 'face closeup, expression of terror, wide eyes, screaming, dramatic lighting' },
+           { name: 'Anger', prompt: 'face closeup, expression of rage, clenched teeth, narrowed eyes, intense lighting' },
+           { name: 'Surprise', prompt: 'face closeup, expression of shock, wide open mouth, wide eyes' },
+           { name: 'Disgust', prompt: 'face closeup, expression of revulsion, wrinkled nose, grimace' },
+           { name: 'Contempt', prompt: 'face closeup, expression of scorn, smirk, one raised eyebrow' }
+       ];
+       
+       const columns = 4;
+       const rows = 2;
+       const nodeW = 300;
+       const nodeH = 400;
+       const gap = 20;
+       const padding = 20;
+       const groupWidth = (nodeW * columns) + (gap * (columns - 1)) + (padding * 2);
+       const groupHeight = (nodeH * rows) + (gap * (rows - 1)) + (padding * 2) + 40;
+       
+       const groupId = `group-expr-${Date.now()}`;
+       const groupNode: FlowNode = {
+            id: groupId,
+            type: NodeType.GROUP,
+            department: currentDept,
+            assetId: node.assetId,
+            position: { x: 100, y: startY },
+            width: groupWidth,
+            height: groupHeight,
+            data: { label: `Expressions Batch`, collapsed: false }
+       };
+       
+       const targetModel = MODELS.VIDEO_FAST;
+       const newNodes: FlowNode[] = [];
+       emotions.forEach((emo, idx) => {
+           const col = idx % columns;
+           const row = Math.floor(idx / columns);
+           const childX = 100 + padding + (col * (nodeW + gap));
+           const childY = startY + 60 + (row * (nodeH + gap));
+
+           newNodes.push({
+               id: `vid-expr-${Date.now()}-${idx}`,
+               type: NodeType.AI_VIDEO_GEN,
+               department: currentDept,
+               assetId: node.assetId,
+               parentId: groupId, // Link to group
+               position: { x: childX, y: childY },
+               width: nodeW,
+               height: nodeH,
+               data: {
+                   prompt: `@${activeAsset?.title || 'Character'}, ${emo.prompt}, neutral background, high quality`,
+                   imageUrl: node.data.imageUrl,
+                   model: targetModel,
+                   aspectRatio: '16:9',
+                   status: 'draft',
+                   duration: '4', // Shortest
+                   withAudio: false
+               }
+           });
+       });
+       
+       setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
+          }
+          return p;
+       }));
+  }
+
+  // ... (handleDeleteNode, handleUpdateNode - wrapper functions to pass to Canvas are inside Canvas prop mapping if needed, 
+  // but usually App manages project state, Canvas manages interaction state)
+  
+  const handleNodesChange = useCallback((newNodes: React.SetStateAction<FlowNode[]>) => {
+      if (!currentProjectId) return;
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              const updatedNodes = typeof newNodes === 'function' ? newNodes(p.nodes) : newNodes;
+              return { ...p, nodes: updatedNodes };
+          }
+          return p;
+      }));
+  }, [currentProjectId]);
+
+  const handleConnectionsChange = useCallback((newConns: React.SetStateAction<FlowConnection[]>) => {
+      if (!currentProjectId) return;
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              const updatedConns = typeof newConns === 'function' ? newConns(p.connections) : newConns;
+              return { ...p, connections: updatedConns };
+          }
+          return p;
+      }));
+  }, [currentProjectId]);
+  
+  // Analysis Handlers
+  const handleAnalyzeScripts = () => {
+      setDetectedItems([]);
+      setAnalysisParentId(null); // Reset
+      setIsAnalyzeModalOpen(true);
+  };
+  
+  const handleApproveAnalysis = async () => {
+      if (!currentProjectId) return;
+      const approvedItems = detectedItems.filter(i => i.selected && !i.isDuplicate);
+      
+      const newAssets: ProjectAsset[] = approvedItems.map(item => {
+          let visualStyle = "";
+          if (item.type === 'Characters') visualStyle = "Cinematic Portrait";
+          else if (item.type === 'Locations') visualStyle = "Wide Shot, Detailed Environment";
+          
+          return {
+              id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              department: currentDept,
+              title: item.name,
+              description: item.description,
+              visualStyle: visualStyle,
+              summary: "Auto-detected",
+              parentId: analysisParentId || undefined // Use if adding shots to scene
+          };
+      });
+
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
               return { ...p, assets: [...p.assets, ...newAssets] };
           }
           return p;
       }));
-
+      
       setIsAnalyzeModalOpen(false);
-      setDetectedItems([]);
-      setAnalysisParentId(null); 
-  };
+      setAnalysisParentId(null);
+  }
 
-  const toggleItemSelection = (idx: number) => {
-      setDetectedItems(prev => prev.map((item, i) => i === idx ? { ...item, selected: !item.selected } : item));
-  };
+  const handleRunAnalysis = async () => {
+      if (!activeProject) return;
+      setIsAnalyzing(true);
+      
+      try {
+          // Gather text from Script Nodes
+          const scriptNodes = activeProject.nodes.filter(n => 
+              n.department === DepartmentType.WRITERS_ROOM && 
+              n.type === NodeType.AI_TEXT_GEN && 
+              n.data.text
+          );
+          const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
 
+          if (!fullText) {
+              alert("No scripts found to analyze.");
+              setIsAnalyzing(false);
+              return;
+          }
 
-  // --- Views ---
+          let rawItems: any[] = [];
+          
+          if (currentDept === DepartmentType.CASTING_WARDROBE) {
+              setAnalysisType('Characters');
+              rawItems = await extractCharactersFromScript(fullText);
+          } else if (currentDept === DepartmentType.SET_DESIGN) {
+              setAnalysisType('Locations');
+              rawItems = await extractLocationsFromScript(fullText);
+          } else if (currentDept === DepartmentType.STORY) {
+              setAnalysisType('Story');
+              // Collect known characters for @Tagging
+              const knownChars = activeProject.assets
+                .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
+                .map(a => a.title);
+              rawItems = await extractStoryElementsFromScript(fullText, knownChars);
+          } else if (currentDept === DepartmentType.PRODUCTION && analysisType === 'Shots') {
+             // Handled separately via handleDiscoverShots usually
+          }
+
+          // Duplicate Detection Logic
+          const existingNames = new Set(
+              activeProject.assets
+                .filter(a => a.department === currentDept)
+                .map(a => a.title.toLowerCase())
+          );
+
+          const items: DetectedItem[] = rawItems.map((r: any) => {
+             const name = r.name || r.title || "Unknown";
+             const isDup = existingNames.has(name.toLowerCase());
+             return {
+                 name: name,
+                 description: r.description || r.role || "",
+                 type: r.type || r.role || analysisType,
+                 selected: !isDup, // Default select if new
+                 isDuplicate: isDup
+             };
+          });
+
+          setDetectedItems(items);
+      } catch (e) {
+          console.error("Analysis failed", e);
+      } finally {
+          setIsAnalyzing(false);
+      }
+  }
+  
+  const handleDiscoverShots = async (assetId: string) => {
+      if (!activeProject) return;
+      const asset = activeProject.assets.find(a => a.id === assetId);
+      if (!asset) return;
+
+      setIsAnalyzing(true);
+      setAnalysisParentId(assetId); // Mark parent for new assets
+      setAnalysisType('Shots');
+      setIsAnalyzeModalOpen(true);
+
+      try {
+           const knownChars = activeProject.assets
+                .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
+                .map(a => a.title);
+           
+           const rawItems = await extractShotsFromScene(asset.description, knownChars);
+           
+           // No duplicate check strictly needed for shots as titles are usually generic "Shot 1"
+           // but we can just list them
+           const items: DetectedItem[] = rawItems.map((r: any) => ({
+               name: r.title,
+               description: r.description,
+               type: 'Shot',
+               selected: true
+           }));
+           setDetectedItems(items);
+      } catch (e) { console.error(e); }
+      finally { setIsAnalyzing(false); }
+  }
+
 
   if (view === 'dashboard') {
     return (
-      <div className="min-h-screen bg-background text-zinc-100 p-10">
-        <div className="max-w-6xl mx-auto">
-            <header className="flex items-center justify-between mb-12">
-                <div>
-                    <h1 className="text-4xl font-bold tracking-tighter mb-2 flex items-center gap-3">
-                        <Film className="text-yellow-500"/> ShowrunnerAI
-                    </h1>
-                    <p className="text-zinc-400">Nano Banana Powered Creative Studio</p>
-                </div>
-                <div className="flex gap-3">
-                     {!isDriveConnected ? (
-                         <div className="flex gap-2">
-                             <Button onClick={handleForceOffline} variant="ghost" className="text-zinc-400 hover:text-white border-zinc-700">
-                                <CloudOff size={16} className="mr-2" /> Work Offline
-                             </Button>
-                             <Button onClick={handleConnectDrive} variant="secondary">
-                                 <Cloud className="mr-2" size={16}/> Connect Drive
-                             </Button>
-                         </div>
-                     ) : isMockDrive ? (
-                         <div className="flex items-center gap-2 text-yellow-500 text-sm font-medium border border-yellow-900 bg-yellow-900/20 px-3 py-2 rounded" title="Offline Mode (Mock Drive)">
-                             <CloudOff size={16}/> Offline Mode
-                         </div>
-                     ) : (
-                         <div className="flex items-center gap-2 text-green-400 text-sm font-medium border border-green-900 bg-green-900/20 px-3 py-2 rounded">
-                             <Cloud size={16}/> Drive Connected
-                         </div>
-                     )}
-                     <Button onClick={() => setIsCreateProjectOpen(true)}>
-                        <FolderPlus className="mr-2"/> New Project
-                     </Button>
-                </div>
-            </header>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {projects.map(p => (
-                    <div 
-                        key={p.id} 
-                        onClick={() => { setCurrentProjectId(p.id); setView('project'); }}
-                        className="bg-surface border border-border rounded-xl p-6 cursor-pointer hover:border-zinc-600 hover:shadow-xl transition-all group relative overflow-hidden"
-                    >
-                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-purple-500 opacity-0 group-hover:opacity-100 transition-opacity"/>
-                        <h3 className="text-xl font-semibold mb-2 group-hover:text-white transition-colors">{p.title}</h3>
-                        <p className="text-sm text-zinc-500 line-clamp-2 mb-4">{p.summary || "No summary yet."}</p>
-                        <div className="flex items-center gap-4 text-xs text-zinc-600">
-                            <span className="flex items-center gap-1"><Layout size={12}/> {p.nodes.length} Nodes</span>
-                            <span className="uppercase border border-zinc-800 px-2 py-0.5 rounded">{p.type}</span>
-                        </div>
-                    </div>
-                ))}
+      <div className="w-full h-full bg-background flex flex-col font-sans">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-border">
+            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
+                ShowrunnerAI
+            </h1>
+            <div className="flex items-center gap-2">
+                 {isDriveConnected ? (
+                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${isMockDrive ? 'bg-yellow-900/30 border-yellow-700 text-yellow-500' : 'bg-green-900/30 border-green-700 text-green-500'}`}>
+                         {isMockDrive ? <CloudOff size={16}/> : <Cloud size={16}/>}
+                         <span className="text-xs font-bold">{isMockDrive ? "Offline Mode" : "Drive Connected"}</span>
+                     </div>
+                 ) : (
+                     <>
+                        <Button variant="secondary" size="sm" onClick={handleForceOffline} icon={CloudOff}>
+                             Work Offline
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={handleConnectDrive} icon={Cloud}>
+                             Connect Drive
+                        </Button>
+                     </>
+                 )}
             </div>
         </div>
+        
+        {/* Projects List */}
+        <div className="flex-1 p-8 overflow-y-auto">
+             <div className="flex items-center justify-between mb-6">
+                 <h2 className="text-xl font-bold text-zinc-100">Projects</h2>
+                 <Button onClick={() => setIsCreateProjectOpen(true)} icon={FolderPlus}>New Project</Button>
+             </div>
+             
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                 {projects.map(project => (
+                     <div 
+                        key={project.id}
+                        onClick={() => { setCurrentProjectId(project.id); setView('project'); }}
+                        className="bg-surface border border-border rounded-xl p-6 hover:border-zinc-600 transition-all cursor-pointer group hover:shadow-xl hover:shadow-blue-900/10"
+                     >
+                         <div className="flex justify-between items-start mb-4">
+                             <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-900 to-purple-900 flex items-center justify-center text-white font-bold text-lg">
+                                 {project.title.substring(0, 2).toUpperCase()}
+                             </div>
+                             <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-1 rounded-full border border-zinc-700">
+                                 {project.type}
+                             </span>
+                         </div>
+                         <h3 className="font-bold text-lg text-zinc-100 mb-2 group-hover:text-blue-400 transition-colors">{project.title}</h3>
+                         <p className="text-sm text-zinc-500 line-clamp-2">{project.summary}</p>
+                         <div className="mt-4 pt-4 border-t border-zinc-800 flex justify-between items-center text-xs text-zinc-600">
+                             <span>{project.assets.length} Assets</span>
+                             <span>Last edit: {project.updatedAt.toLocaleDateString()}</span>
+                         </div>
+                     </div>
+                 ))}
+             </div>
+        </div>
 
+        {/* Create Project Modal */}
         {isCreateProjectOpen && (
-            <Modal title="Create New Project" onClose={resetProjectModal} maxWidth="max-w-4xl">
-                <div className="min-h-[400px] flex flex-col">
-                    <div className="flex gap-4 border-b border-zinc-800 mb-6">
-                        <button 
+             <Modal title="Create New Project" onClose={resetProjectModal}>
+                 <div className="space-y-6">
+                     
+                     {/* Creation Mode Tabs */}
+                     <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800">
+                         <button 
+                            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${creationMode === 'blank' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
                             onClick={() => setCreationMode('blank')}
-                            className={`pb-2 px-1 text-sm font-medium transition-colors border-b-2 ${creationMode === 'blank' ? 'border-blue-500 text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                        >
-                            Blank Project
-                        </button>
-                        <button 
+                         >
+                             Blank Project
+                         </button>
+                         <button 
+                            className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2 ${creationMode === 'seed' ? 'bg-blue-900/30 text-blue-200' : 'text-zinc-500 hover:text-zinc-300'}`}
                             onClick={() => setCreationMode('seed')}
-                            className={`pb-2 px-1 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 ${creationMode === 'seed' ? 'border-purple-500 text-white' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                        >
-                            <Dice5 size={14} /> From Story Seed
-                        </button>
-                    </div>
+                         >
+                             <Dice5 size={14} /> From Seed
+                         </button>
+                     </div>
 
-                    <div className="flex-1">
-                        {creationMode === 'blank' ? (
-                            <div className="space-y-4 max-w-lg mx-auto py-12">
-                                <div>
-                                    <label className="block text-sm text-zinc-400 mb-1">Project Title</label>
-                                    <Input autoFocus value={newProjectTitle} onChange={e => setNewProjectTitle(e.target.value)} placeholder="e.g. The Matrix Reborn" />
-                                </div>
-                                <p className="text-xs text-zinc-500">Start with a clean slate and build your world from scratch.</p>
+                     {creationMode === 'blank' ? (
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Project Title</label>
+                                <Input autoFocus value={newProjectTitle} onChange={(e) => setNewProjectTitle(e.target.value)} placeholder="e.g. The Matrix 2" />
                             </div>
-                        ) : (
-                            <div className="space-y-6">
-                                <div className="flex gap-2 items-end">
-                                    <div className="flex-1">
-                                        <label className="block text-xs uppercase font-bold text-zinc-500 mb-1">Story Seed / Theme (Optional)</label>
-                                        <Input 
-                                            value={seedPrompt} 
-                                            onChange={e => setSeedPrompt(e.target.value)} 
-                                            placeholder="e.g. A buddy comedy set in Middle Earth..." 
-                                            onKeyDown={e => e.key === 'Enter' && handleRollDice()}
-                                        />
-                                    </div>
-                                    <Button onClick={handleRollDice} disabled={isGeneratingSeeds} variant="secondary" icon={Dice5}>
-                                        {isGeneratingSeeds ? "Rolling..." : "Roll Dice"}
+                        </div>
+                     ) : (
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Prompt / Genre</label>
+                                <div className="flex gap-2">
+                                    <Input 
+                                        value={seedPrompt} 
+                                        onChange={(e) => setSeedPrompt(e.target.value)} 
+                                        placeholder='e.g. "A cyberpunk detective story in Neo Tokyo"'
+                                    />
+                                    <Button onClick={handleRollDice} disabled={isGeneratingSeeds} icon={Dice5}>
+                                        {isGeneratingSeeds ? '...' : 'Roll'}
                                     </Button>
                                 </div>
-
-                                {generatedSeeds.length > 0 && (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        {generatedSeeds.map((seed, idx) => (
-                                            <button
-                                                key={idx}
-                                                onClick={() => setSelectedSeedIdx(idx)}
-                                                className={`text-left p-4 rounded-lg border transition-all relative overflow-hidden ${selectedSeedIdx === idx ? 'bg-purple-900/20 border-purple-500 ring-1 ring-purple-500/50' : 'bg-zinc-900 border-zinc-700 hover:border-zinc-500'}`}
-                                            >
-                                                <h4 className="font-bold text-zinc-100 mb-1">{seed.title}</h4>
-                                                <div className="flex gap-2 text-[10px] mb-2">
-                                                    <span className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">{seed.genre}</span>
-                                                    <span className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-400">{seed.visualStyle}</span>
-                                                </div>
-                                                <p className="text-xs text-zinc-400 leading-relaxed line-clamp-3">{seed.logline}</p>
-                                                
-                                                {selectedSeedIdx === idx && (
-                                                    <div className="absolute top-2 right-2 text-purple-500">
-                                                        <Check size={16} />
-                                                    </div>
-                                                )}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                                
-                                {generatedSeeds.length === 0 && !isGeneratingSeeds && (
-                                    <div className="h-48 border-2 border-dashed border-zinc-800 rounded-lg flex flex-col items-center justify-center text-zinc-600">
-                                        <Dice5 size={24} className="mb-2 opacity-50"/>
-                                        <p className="text-sm">Enter a theme or leave blank, then roll the dice.</p>
-                                    </div>
-                                )}
-                                
-                                {isGeneratingSeeds && (
-                                    <div className="h-48 flex items-center justify-center text-purple-400 gap-2">
-                                        <Wand2 className="animate-spin" /> Generating ideas...
-                                    </div>
-                                )}
-                                
-                                {generatedSeeds.length > 0 && (
-                                    <div className="flex items-center gap-2 pt-4 border-t border-zinc-800">
-                                        <input 
-                                            type="checkbox" 
-                                            id="autoGen"
-                                            checked={autoGenAssets}
-                                            onChange={e => setAutoGenAssets(e.target.checked)}
-                                            className="rounded border-zinc-700 bg-zinc-900"
-                                        />
-                                        <label htmlFor="autoGen" className="text-sm text-zinc-300 cursor-pointer select-none">
-                                            Automatically generate Beat Sheet and Script sequence
-                                        </label>
-                                    </div>
-                                )}
                             </div>
-                        )}
-                    </div>
-                    
-                    <div className="flex justify-end gap-2 mt-6 pt-4 border-t border-zinc-800">
-                        <Button variant="ghost" onClick={resetProjectModal}>Cancel</Button>
-                        <Button 
-                            onClick={handleCreateProject} 
-                            disabled={creationMode === 'blank' ? !newProjectTitle : selectedSeedIdx === null}
-                        >
-                            Create Project
-                        </Button>
-                    </div>
-                </div>
-            </Modal>
+                            
+                            {/* Seed Results Grid */}
+                            {generatedSeeds.length > 0 && (
+                                <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto p-1">
+                                    {generatedSeeds.map((seed, idx) => (
+                                        <div 
+                                            key={idx}
+                                            onClick={() => setSelectedSeedIdx(idx)}
+                                            className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedSeedIdx === idx ? 'bg-blue-900/20 border-blue-500 ring-1 ring-blue-500' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}
+                                        >
+                                            <div className="font-bold text-sm text-white mb-1">{seed.title}</div>
+                                            <div className="text-[10px] text-zinc-400 mb-2">{seed.genre}</div>
+                                            <div className="text-xs text-zinc-500 line-clamp-2">{seed.logline}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className="flex items-center gap-2">
+                                <input type="checkbox" checked={autoGenAssets} onChange={e => setAutoGenAssets(e.target.checked)} id="autogen" />
+                                <label htmlFor="autogen" className="text-xs text-zinc-400">Auto-generate Script & Beat Sheet</label>
+                            </div>
+                        </div>
+                     )}
+
+                     <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800">
+                         <Button variant="ghost" onClick={resetProjectModal}>Cancel</Button>
+                         <Button onClick={handleCreateProject} disabled={creationMode === 'blank' ? !newProjectTitle : selectedSeedIdx === null}>
+                             Create Project
+                         </Button>
+                     </div>
+                 </div>
+             </Modal>
         )}
       </div>
     );
   }
 
-  // Project View
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-zinc-200">
-      <Sidebar 
-        currentDept={currentDept} 
-        onChangeDept={(d) => { setCurrentDept(d); setCurrentAssetId(null); }} 
-        onBack={() => setView('dashboard')}
-      />
-      
-      {activeProject && (
-          <DepartmentPanel 
+    <div className="w-full h-full flex bg-background font-sans overflow-hidden">
+        {/* Sidebar Navigation */}
+        <Sidebar 
+            currentDept={currentDept} 
+            onChangeDept={(d) => { setCurrentDept(d); setCurrentAssetId(null); setFocusNodeIds([]); }}
+            onBack={() => setView('dashboard')}
+        />
+        
+        {/* Department Panel */}
+        <DepartmentPanel 
             department={currentDept}
-            assets={activeProject.assets}
-            nodes={activeProject.nodes}
+            assets={activeProject?.assets || []}
+            nodes={activeProject?.nodes || []}
             currentAssetId={currentAssetId}
-            onSelectAsset={setCurrentAssetId}
+            onSelectAsset={(id) => { setCurrentAssetId(id); setFocusNodeIds([]); }}
             onCreateAsset={handleOpenCreateAssetModal}
             onAnalyzeScripts={handleAnalyzeScripts}
             onDiscoverShots={handleDiscoverShots}
             assetThumbnails={assetThumbnails}
-          />
-      )}
+        />
 
-      <div className="flex-1 flex flex-col relative min-w-0">
-          <div className="h-14 border-b border-border flex items-center justify-between px-6 bg-surface/50 backdrop-blur z-10 shrink-0">
-             <div className="flex flex-col overflow-hidden">
-                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-zinc-500 font-bold">
-                     <span className="whitespace-nowrap">{activeProject?.title}</span>
-                     <span>/</span>
-                     <span className={!currentAssetId ? "text-zinc-300" : "whitespace-nowrap"}>{currentDept}</span>
-                     {currentAssetId && activeAsset && (
-                        <>
-                            <span>/</span>
-                            <span className="text-blue-400 flex items-center gap-1 whitespace-nowrap truncate">
-                                {activeAsset.title}
-                            </span>
-                        </>
+        {/* Workspace Area */}
+        <div className="flex-1 flex flex-col relative min-w-0">
+             {/* Sub-Header */}
+             <div className="h-14 border-b border-border bg-surface flex items-center justify-between px-6 shrink-0 z-20">
+                 <div className="flex items-center gap-4 min-w-0">
+                     <h2 className="font-bold text-zinc-100 truncate">{activeAsset ? activeAsset.title : "General"}</h2>
+                     {activeAsset && (
+                         <span className="text-xs text-zinc-500 bg-zinc-900 px-2 py-1 rounded border border-zinc-800 max-w-[200px] truncate" title={activeAsset.summary}>
+                             {activeAsset.summary || "No summary"}
+                         </span>
                      )}
                  </div>
-                 <div className="text-sm font-medium text-zinc-100 mt-0.5 truncate">
-                     {currentAssetId && activeAsset 
-                        ? (activeAsset.summary || activeAsset.description) 
-                        : `${activeDeptConfig?.assetLabel} Workspace`}
-                 </div>
-             </div>
-             
-             <div className="flex items-center gap-3 shrink-0">
-                 {isDriveConnected && (
-                     <div className={`text-[10px] flex items-center gap-1 ${isMockDrive ? 'text-yellow-500 bg-yellow-900/10 border-yellow-900/30' : 'text-green-500 bg-green-900/10 border-green-900/30'} px-2 py-1 rounded border`} title={isMockDrive ? "Saving locally (Mock)" : "Auto-saving to Google Drive"}>
-                         {isMockDrive ? <CloudOff size={10} /> : <Cloud size={10} />} 
-                         {isMockDrive ? "Offline Save" : "Auto-Save On"}
-                     </div>
-                 )}
-                 {currentAssetId && (
-                     <Button size="sm" variant="ghost" onClick={() => setCurrentAssetId(null)} className="text-xs px-2 h-8">
-                         <CornerUpLeft size={14} className="mr-1"/> Return to Dept
-                     </Button>
-                 )}
-                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-xs font-bold border border-white/10">AI</div>
-             </div>
-          </div>
+                 
+                 <div className="flex items-center gap-3">
+                     {/* View Toggle */}
+                     <ToggleGroup 
+                        options={[
+                            { value: 'canvas', icon: LayoutGrid, label: 'Canvas' },
+                            { value: 'gallery', icon: List, label: 'Gallery' }
+                        ]}
+                        value={workspaceView}
+                        onChange={(v) => setWorkspaceView(v as any)}
+                     />
 
-          <div className="flex-1 relative bg-black overflow-hidden">
-              {activeProject && (
-                  <Canvas 
-                    nodes={activeProject.nodes} 
-                    connections={activeProject.connections}
-                    setNodes={handleUpdateNodes}
-                    setConnections={handleUpdateConnections}
-                    currentDept={currentDept}
-                    currentAssetId={currentAssetId}
-                    activeAsset={activeAsset}
-                    focusNodes={focusNodeIds}
-                    onSetThumbnail={handleSetThumbnail}
-                    projectAssets={activeProject.assets}
-                  />
-              )}
-          </div>
-      </div>
-      
-      {activeAsset && currentAssetId && activeProject && (
-          <AssetEditorPanel 
-            asset={activeAsset} 
-            projectAssets={activeProject.assets}
-            onUpdate={handleUpdateAsset} 
-            onGenerateConcepts={handleGenerateConcepts} 
-            onGenerateOutline={handleGenerateOutline}
-            approvedImages={getApprovedImages()}
-            onNavigateToAsset={handleNavigateToAsset}
-            onGenerateRefSheet={handleGenerateRefSheet}
-            assetThumbnails={assetThumbnails}
-          />
-      )}
+                     <div className="h-6 w-[1px] bg-zinc-800 mx-2"/>
 
-      <ChatBot />
-
-      {isCreateAssetOpen && (
-        <Modal title={`Add New ${activeDeptConfig?.assetLabel}`} onClose={() => setIsCreateAssetOpen(false)}>
-            <div className="space-y-4">
-                <div>
-                    <label className="block text-xs uppercase font-bold text-zinc-500 mb-1">Name</label>
-                    <Input 
-                        autoFocus 
-                        value={newAssetTitle} 
-                        onChange={e => setNewAssetTitle(e.target.value)} 
-                        placeholder={`e.g. ${currentDept === DepartmentType.CASTING_WARDROBE ? "Neo" : "The Kitchen"}`} 
-                    />
-                </div>
-                <div>
-                    <label className="block text-xs uppercase font-bold text-zinc-500 mb-1">Description</label>
-                    <TextArea 
-                        value={newAssetDesc} 
-                        onChange={e => setNewAssetDesc(e.target.value)} 
-                        placeholder="Key details, visual style, personality..." 
-                        className="min-h-[150px]" 
-                    />
-                </div>
-                
-                <div className="flex items-center justify-between mt-4 pt-2 border-t border-zinc-800/50">
-                    <button 
-                        onClick={handleEnhanceDescription}
-                        disabled={isEnhancing || !newAssetDesc}
-                        className="flex items-center gap-2 text-xs font-medium text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors px-2 py-1 -ml-2 rounded hover:bg-blue-900/20"
-                        title="Enhance text with AI for better generation results"
-                    >
-                        <Sparkles size={14} />
-                        {isEnhancing ? "Thinking..." : "Enhance with AI"}
-                    </button>
-
-                    <div className="flex gap-2">
-                        <Button variant="ghost" onClick={() => setIsCreateAssetOpen(false)}>Cancel</Button>
-                        <Button onClick={handleCreateAsset} disabled={!newAssetTitle}>Create</Button>
-                    </div>
-                </div>
-            </div>
-        </Modal>
-      )}
-
-      {showEnhanceModal && (
-        <Modal title="Select Enhancement" onClose={() => setShowEnhanceModal(false)}>
-             <div className="space-y-3">
-                 <p className="text-xs text-zinc-500 mb-2">Choose the version that best fits your vision:</p>
-                 {enhancementOptions.map((option, idx) => (
-                     <button 
-                        key={idx}
-                        onClick={() => applyEnhancement(option)}
-                        className="w-full text-left p-3 rounded border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 hover:border-blue-500/50 transition-all group"
-                     >
-                         <div className="flex items-start gap-3">
-                             <div className="mt-0.5 w-5 h-5 rounded-full border border-zinc-700 flex items-center justify-center group-hover:border-blue-500 group-hover:text-blue-500 text-transparent">
-                                 <Check size={12} />
-                             </div>
-                             <div className="text-sm text-zinc-300 group-hover:text-white leading-relaxed">
-                                 {option}
-                             </div>
+                     {isDriveConnected && (
+                         <div className="flex items-center gap-1 text-[10px] text-zinc-500">
+                             {isMockDrive ? <CloudOff size={12} className="text-yellow-600"/> : <Cloud size={12} className="text-green-600"/>}
+                             {isMockDrive ? "Offline Save" : "Auto-Save On"}
                          </div>
-                     </button>
-                 ))}
-                 <div className="flex justify-end gap-2 mt-4 border-t border-zinc-800 pt-4">
-                     <Button variant="ghost" onClick={() => setShowEnhanceModal(false)}>Cancel</Button>
+                     )}
                  </div>
              </div>
-        </Modal>
-      )}
 
-      {isAnalyzeModalOpen && (
-          <Modal title={`Auto-Detect ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)}>
-              <div className="space-y-4">
-                  <div className="text-xs text-zinc-400">
-                      Analyzing your script content across the project...
-                  </div>
-                  
-                  {isAnalyzing ? (
-                      <div className="py-12 flex flex-col items-center justify-center gap-3">
-                          <Wand2 className="animate-pulse text-purple-400" size={32} />
-                          <span className="text-sm text-zinc-300">Reading script nodes...</span>
-                      </div>
-                  ) : detectedItems.length === 0 ? (
-                      <div className="py-8 text-center text-zinc-500 text-sm">
-                          {analysisType === 'Error' ? "No scripts found to analyze." : "No items found."}
-                      </div>
-                  ) : (
-                      <div className="max-h-[50vh] overflow-y-auto space-y-2 border border-zinc-800 rounded bg-zinc-900/30 p-2">
-                          {detectedItems.map((item, idx) => (
-                              <label 
-                                key={idx} 
-                                className={`flex items-start gap-3 p-3 rounded border transition-all ${
-                                    item.isDuplicate 
-                                        ? 'bg-zinc-900/50 border-zinc-800 opacity-60 cursor-not-allowed'
-                                        : item.selected 
-                                            ? 'bg-blue-900/20 border-blue-800 cursor-pointer' 
-                                            : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 cursor-pointer'
-                                }`}
-                              >
-                                  <input 
-                                    type="checkbox" 
-                                    checked={item.selected} 
-                                    onChange={() => !item.isDuplicate && toggleItemSelection(idx)}
-                                    disabled={!!item.isDuplicate}
-                                    className="mt-1"
-                                  />
-                                  <div className="flex-1">
-                                      <div className="flex items-center gap-2 mb-1">
-                                          <span className="font-bold text-zinc-200">{item.name}</span>
-                                          <span className="text-[10px] uppercase bg-zinc-800 px-1.5 rounded text-zinc-400 border border-zinc-700">{item.type}</span>
-                                          {item.isDuplicate && (
-                                              <span className="text-[10px] text-yellow-500 bg-yellow-900/20 px-1.5 py-0.5 rounded border border-yellow-900/50 flex items-center gap-1">
-                                                  Existing
-                                              </span>
-                                          )}
-                                      </div>
-                                      <p className="text-xs text-zinc-500 leading-relaxed">{item.description}</p>
-                                  </div>
-                              </label>
-                          ))}
-                      </div>
-                  )}
+             {/* Workspace Content */}
+             <div className="flex-1 relative bg-black overflow-hidden">
+                 {workspaceView === 'canvas' ? (
+                     <Canvas 
+                        nodes={activeProject?.nodes || []}
+                        connections={activeProject?.connections || []}
+                        setNodes={handleNodesChange}
+                        setConnections={handleConnectionsChange}
+                        currentDept={currentDept}
+                        currentAssetId={currentAssetId}
+                        activeAsset={activeAsset}
+                        focusNodes={focusNodeIds}
+                        onSetThumbnail={handleSetThumbnail}
+                        projectAssets={activeProject?.assets}
+                        onRefineConcept={handleRefineConcept}
+                        refinedImagesMap={refinedImagesMap}
+                     />
+                 ) : (
+                     <GalleryView 
+                        nodes={activeProject?.nodes || []}
+                        currentDept={currentDept}
+                        currentAssetId={currentAssetId}
+                        onGenerateBatch={handleGalleryGenerate}
+                        onSetThumbnail={handleSetThumbnail}
+                        onRefineConcept={handleRefineConcept}
+                        onGenerateTurntable={handleGalleryTurntable}
+                        onGenerateExpressions={handleGalleryExpressions}
+                     />
+                 )}
+                 
+                 <ChatBot />
+             </div>
+        </div>
 
-                  <div className="flex justify-end gap-2 mt-4 pt-2 border-t border-zinc-800">
-                       <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
-                       <Button 
-                        onClick={handleApproveAnalysis} 
-                        disabled={isAnalyzing || detectedItems.filter(c => c.selected).length === 0}
-                       >
-                           Approve Selected ({detectedItems.filter(c => c.selected).length})
-                       </Button>
-                  </div>
-              </div>
-          </Modal>
-      )}
+        {/* Right Sidebar: Inspector */}
+        {activeAsset && (
+            <AssetEditorPanel 
+                asset={activeAsset}
+                projectAssets={activeProject?.assets}
+                onUpdate={handleUpdateAsset}
+                onGenerateConcepts={handleGenerateConcepts}
+                onGenerateOutline={handleGenerateOutline}
+                approvedImages={activeProject?.nodes
+                    .filter(n => n.assetId === activeAsset.id && n.data.status === 'approved' && n.data.imageUrl && n.data.tag === 'concept')
+                    .map(n => n.data.imageUrl!) || []
+                }
+                onNavigateToAsset={handleNavigateToAsset}
+                onGenerateRefSheet={handleRefineConcept}
+                assetThumbnails={assetThumbnails}
+                refinedImages={refinedImagesMap[activeAsset.id] || []}
+            />
+        )}
 
+        {/* Asset Creation Modal */}
+        {isCreateAssetOpen && (
+             <Modal title={newAssetParentId ? "Add Child Item" : `New ${activeDeptConfig?.assetLabel || 'Asset'}`} onClose={() => setIsCreateAssetOpen(false)}>
+                 <div className="space-y-4">
+                     <div>
+                         <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Name</label>
+                         <Input autoFocus value={newAssetTitle} onChange={(e) => setNewAssetTitle(e.target.value)} placeholder="e.g. Interior - Space Station" />
+                     </div>
+                     <div>
+                         <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Description</label>
+                         <TextArea 
+                             value={newAssetDesc} 
+                             onChange={(e) => setNewAssetDesc(e.target.value)} 
+                             className="h-32"
+                             placeholder="Detailed visual description..."
+                         />
+                         <div className="flex justify-end mt-1">
+                             <Button size="sm" variant="ghost" onClick={handleEnhanceDescription} disabled={!newAssetDesc || isEnhancing} icon={Sparkles}>
+                                 {isEnhancing ? "Enhancing..." : "Enhance with AI"}
+                             </Button>
+                         </div>
+                     </div>
+                     <div className="flex justify-end pt-4 border-t border-zinc-800">
+                         <Button onClick={handleCreateAsset} disabled={!newAssetTitle}>Create</Button>
+                     </div>
+                 </div>
+             </Modal>
+        )}
+
+        {/* Enhance Modal (Selection) */}
+        {showEnhanceModal && (
+            <Modal title="Select Enhanced Description" onClose={() => setShowEnhanceModal(false)} maxWidth="max-w-3xl">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {enhancementOptions.map((opt, i) => (
+                        <div 
+                            key={i} 
+                            onClick={() => applyEnhancement(opt)}
+                            className="p-4 bg-zinc-950 border border-zinc-800 rounded-lg hover:border-blue-500 cursor-pointer transition-all text-sm leading-relaxed text-zinc-300 hover:text-white"
+                        >
+                            {opt}
+                        </div>
+                    ))}
+                </div>
+            </Modal>
+        )}
+        
+        {/* Analyze/Detect Modal */}
+        {isAnalyzeModalOpen && (
+            <Modal title={`Auto-Detect ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)} maxWidth="max-w-4xl">
+                 <div className="max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                     {isAnalyzing ? (
+                         <div className="py-20 flex flex-col items-center justify-center gap-4 text-zinc-500">
+                             <Loader2 className="animate-spin" size={32} />
+                             <p>Analyzing scripts with Gemini...</p>
+                         </div>
+                     ) : (
+                         <table className="w-full text-left border-collapse">
+                             <thead className="bg-zinc-900 sticky top-0">
+                                 <tr>
+                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800 w-10">
+                                         <input 
+                                            type="checkbox" 
+                                            checked={detectedItems.every(i => i.selected || i.isDuplicate)}
+                                            onChange={(e) => setDetectedItems(prev => prev.map(i => i.isDuplicate ? i : { ...i, selected: e.target.checked }))}
+                                         />
+                                     </th>
+                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800">Name</th>
+                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800">Type</th>
+                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800">Description</th>
+                                 </tr>
+                             </thead>
+                             <tbody>
+                                 {detectedItems.map((item, idx) => (
+                                     <tr key={idx} className={`border-b border-zinc-800/50 ${item.isDuplicate ? 'opacity-50 bg-zinc-900/30' : 'hover:bg-zinc-900/50'}`}>
+                                         <td className="p-3">
+                                             <input 
+                                                type="checkbox" 
+                                                checked={item.selected} 
+                                                disabled={item.isDuplicate}
+                                                onChange={(e) => {
+                                                    const newVal = e.target.checked;
+                                                    setDetectedItems(prev => prev.map((p, i) => i === idx ? { ...p, selected: newVal } : p));
+                                                }}
+                                             />
+                                         </td>
+                                         <td className="p-3 text-sm font-bold text-zinc-200">
+                                             {item.name}
+                                             {item.isDuplicate && <span className="ml-2 text-[9px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded border border-zinc-700">Existing</span>}
+                                         </td>
+                                         <td className="p-3 text-xs text-zinc-400">{item.type}</td>
+                                         <td className="p-3 text-xs text-zinc-500 font-mono line-clamp-2">{item.description}</td>
+                                     </tr>
+                                 ))}
+                                 {detectedItems.length === 0 && (
+                                     <tr><td colSpan={4} className="p-8 text-center text-zinc-500">No items found.</td></tr>
+                                 )}
+                             </tbody>
+                         </table>
+                     )}
+                 </div>
+                 <div className="flex justify-end pt-4 border-t border-zinc-800 gap-2 mt-4">
+                     {!isAnalyzing && detectedItems.length === 0 ? (
+                         <Button onClick={handleRunAnalysis} icon={Sparkles} className="bg-purple-600 hover:bg-purple-500">
+                             Run Analysis
+                         </Button>
+                     ) : (
+                         <Button onClick={handleApproveAnalysis} disabled={isAnalyzing || detectedItems.filter(i => i.selected).length === 0}>
+                             Approve Selected ({detectedItems.filter(i => i.selected).length})
+                         </Button>
+                     )}
+                 </div>
+            </Modal>
+        )}
     </div>
   );
 };

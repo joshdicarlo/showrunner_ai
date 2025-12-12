@@ -1,10 +1,11 @@
+
 import React, { useState, useRef, useEffect, memo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
-import { FlowNode, NodeType, ProjectAsset } from '../types';
-import { Move, Play, X, Sparkles, Edit, Image as ImageIcon, Film, CheckCircle, Eye, Archive, AlertCircle, Folder, FolderOpen, ChevronDown, ChevronRight, RotateCcw, User, Maximize2, Minimize2, Bold, Italic, Heading1, Heading2, List, Quote, Code, EyeOff, Bot, Upload, Download, HardDrive, FileText, Cloud } from 'lucide-react';
+import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem } from '../types';
+import { Move, Play, X, Sparkles, Edit, Image as ImageIcon, Film, CheckCircle, Eye, Archive, AlertCircle, Folder, FolderOpen, ChevronDown, ChevronRight, RotateCcw, User, Maximize2, Minimize2, Bold, Italic, Heading1, Heading2, List, Quote, Code, EyeOff, Bot, Upload, Download, HardDrive, FileText, Cloud, Music, Volume2, VolumeX, ChevronLeft, History } from 'lucide-react';
 import { Button, Input, TextArea, Select } from './UI';
-import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS } from '../constants';
+import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS, VIDEO_MODELS_OPTIONS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import * as GeminiService from '../services/geminiService';
 import * as FileService from '../services/fileService';
 
@@ -21,6 +22,7 @@ interface NodeItemProps {
   isDragOver?: boolean; 
   projectAssets?: ProjectAsset[];
   assetThumbnails?: Record<string, string>;
+  refinedImagesMap?: Record<string, string[]>;
 }
 
 const MarkdownToolbar: React.FC<{ 
@@ -85,13 +87,16 @@ const MarkdownToolbar: React.FC<{
 
 const NodeItemComponent: React.FC<NodeItemProps> = ({ 
     node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, 
-    activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {} 
+    activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {}, refinedImagesMap = {}
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
+  const [progressMsg, setProgressMsg] = useState("");
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsedEditMode, setCollapsedEditMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoStartFrameRef = useRef<HTMLInputElement>(null);
+  const videoEndFrameRef = useRef<HTMLInputElement>(null);
   const textImportInputRef = useRef<HTMLInputElement>(null); 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -111,23 +116,24 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
             // Sort by title length desc
             const sortedAssets = [...projectAssets].sort((a, b) => b.title.length - a.title.length);
             
-            // Regex to find @Word or @Word.Word
-            // We'll iterate manually to handle the logic
-            
             for (const asset of sortedAssets) {
                 // Case 1: Dot Syntax (@Asset.Child)
-                const safeTitle = asset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const dotRegex = new RegExp(`@${safeTitle}\\.([a-zA-Z0-9_]+)\\b`, 'gi');
-                
-                resolved = resolved.replace(dotRegex, (match, childName) => {
-                    const child = projectAssets.find(c => c.parentId === asset.id && c.title.toLowerCase() === childName.toLowerCase());
-                    if (child) {
-                        return `${asset.description}, wearing ${child.description}`; 
+                const children = projectAssets.filter(c => c.parentId === asset.id);
+                children.sort((a, b) => b.title.length - a.title.length);
+
+                for (const child of children) {
+                    const compoundKey = `@${asset.title}.${child.title}`;
+                    const safeKey = compoundKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const compoundRegex = new RegExp(`${safeKey}\\b`, 'gi');
+                    
+                    if (compoundRegex.test(resolved)) {
+                         // Combine Parent Description with Child Description
+                         resolved = resolved.replace(compoundRegex, `${asset.description}, wearing ${child.description}`);
                     }
-                    return match; // Keep original if child not found
-                });
+                }
 
                 // Case 2: Standard Syntax (@Asset)
+                const safeTitle = asset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const standardRegex = new RegExp(`@${safeTitle}\\b`, 'gi');
                 if (standardRegex.test(resolved)) {
                     let replacement = asset.description;
@@ -152,16 +158,23 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
             // Check inheritance for Active Asset
             let activeStyle = activeAsset.visualStyle;
             let parentDesc = "";
+            let parentAsset: ProjectAsset | undefined;
             
             if (projectAssets && activeAsset.parentId) {
-                const parent = projectAssets.find(p => p.id === activeAsset.parentId);
-                if (parent) {
-                    if (!activeStyle) activeStyle = parent.visualStyle;
-                    parentDesc = parent.description;
+                parentAsset = projectAssets.find(p => p.id === activeAsset.parentId);
+                if (parentAsset) {
+                    if (!activeStyle) activeStyle = parentAsset.visualStyle;
+                    parentDesc = parentAsset.description;
                 }
             }
 
             let replacement = activeAsset.description;
+            
+            // If child asset (e.g. Wardrobe Look), prepend Parent description for context
+            if (parentAsset) {
+                replacement = `${parentAsset.description}, wearing ${activeAsset.description}`;
+            }
+
             if (activeStyle) replacement += `, visual style: ${activeStyle}`;
 
             // Replace @character
@@ -178,23 +191,34 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     return resolved;
   };
 
-  // --- Reference Image Finder ---
-  const resolveReferenceImage = (text: string): string | undefined => {
-      if (!projectAssets) return undefined;
-      // Find first mentioned asset that has a thumbnail
+  // --- Reference Images Finder ---
+  const resolveReferenceImages = (text: string): string[] => {
+      const results: string[] = [];
+      if (!projectAssets) return results;
+
+      // Find first mentioned asset
       for (const asset of projectAssets) {
           if (text.toLowerCase().includes(`@${asset.title.toLowerCase()}`)) {
-              // Check if we have a thumbnail
+              // Priority 1: Refined Images
+              if (refinedImagesMap[asset.id] && refinedImagesMap[asset.id].length > 0) {
+                  return refinedImagesMap[asset.id]; 
+              }
+              // Priority 2: Single Thumbnail
               const thumb = assetThumbnails[asset.id] || asset.thumbnailUrl;
-              if (thumb) return thumb;
+              if (thumb) return [thumb];
           }
       }
+      
       // If we are in asset context and referencing @character
       if (activeAsset && text.toLowerCase().includes('@character')) {
+           if (refinedImagesMap[activeAsset.id] && refinedImagesMap[activeAsset.id].length > 0) {
+              return refinedImagesMap[activeAsset.id];
+           }
            const thumb = assetThumbnails[activeAsset.id] || activeAsset.thumbnailUrl;
-           if (thumb) return thumb;
+           if (thumb) return [thumb];
       }
-      return undefined;
+      
+      return results;
   };
 
 
@@ -253,6 +277,45 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           textarea.setSelectionRange(newCursorPos, newCursorPos);
       }, 0);
   };
+  
+  // --- History Management ---
+  const addToHistory = (type: 'image'|'video'|'text', content: string) => {
+      const newEntry: NodeHistoryItem = {
+          type,
+          content,
+          prompt: node.data.prompt,
+          timestamp: Date.now()
+      };
+      const history = node.data.history || [];
+      // Push new entry, keep max 10
+      const newHistory = [newEntry, ...history].slice(0, 10);
+      return newHistory;
+  }
+  
+  const handleHistoryNav = (direction: 'prev' | 'next') => {
+      const history = node.data.history || [];
+      if (history.length === 0) return;
+      
+      // This is a simple implementation: 
+      // In reality, we'd need an index to track where we are in history.
+      // For now, let's just rotate the array to simulate step back/forward.
+      // Or better: Pop/Shift approach if we just want to go "back".
+      
+      // Let's implement "Restore Previous"
+      if (direction === 'prev') {
+          // Current state is arguably history[0] if we saved it before change.
+          // Let's assume user wants to go to history[0] if current is new, or history[1] etc.
+          // Simplified: Just load history[0] and rotate it to end?
+          // Actually, let's just cycle.
+          const [current, ...rest] = history;
+          const rotated = [...rest, current];
+          
+          if (current.type === 'image') onUpdate(node.id, { ...node.data, imageUrl: current.content, history: rotated });
+          if (current.type === 'video') onUpdate(node.id, { ...node.data, videoUrl: current.content, history: rotated });
+          if (current.type === 'text') onUpdate(node.id, { ...node.data, text: current.content, history: rotated });
+      }
+  }
+
 
   // --- File Ops ---
 
@@ -321,84 +384,103 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
 
   const handleTextGen = async () => {
     setIsProcessing(true);
+    setProgressMsg("Writing...");
     setError(null);
     try {
       const prompt = resolvePrompt(node.data.prompt || "");
       const result = await GeminiService.generateCreativeText(prompt);
-      onUpdate(node.id, { ...node.data, text: result, status: 'review' });
+      const newHistory = addToHistory('text', result);
+      onUpdate(node.id, { ...node.data, text: result, status: 'review', history: newHistory });
     } catch (e) {
       setError("Generation failed. Try again.");
     } finally {
       setIsProcessing(false);
+      setProgressMsg("");
     }
   };
 
   const handleImageGen = async () => {
     setIsProcessing(true);
+    setProgressMsg("Dreaming...");
     setError(null);
     try {
       const rawPrompt = node.data.prompt || (activeAsset ? `@${activeAsset.title}` : "A cinematic shot");
       const finalPrompt = resolvePrompt(rawPrompt);
       const model = node.data.model || MODELS.IMAGE_GEN;
 
-      // Check for Reference Image Injection
-      // Only if user hasn't uploaded their own image to edit? 
-      // Actually AI_IMAGE_GEN doesn't support manual upload in this app design (only AI_IMAGE_EDIT).
-      // So we can always try to find a reference.
-      const refImage = resolveReferenceImage(rawPrompt);
+      let refImages: string[] = [];
+      if (node.data.referenceImageUrl) {
+          refImages = [node.data.referenceImageUrl];
+      } else {
+          refImages = resolveReferenceImages(rawPrompt);
+      }
 
       const result = await GeminiService.generateImage(
           finalPrompt,
           node.data.aspectRatio || "16:9",
           model,
-          refImage
+          refImages
       );
-      onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review' });
+      const newHistory = addToHistory('image', result);
+      onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review', history: newHistory });
     } catch (e) {
       setError("Image generation failed.");
     } finally {
       setIsProcessing(false);
+      setProgressMsg("");
     }
   };
 
   const handleImageEdit = async () => {
       if (!node.data.imageUrl) return;
       setIsProcessing(true);
+      setProgressMsg("Editing...");
       setError(null);
       try {
           const prompt = resolvePrompt(node.data.prompt || "Enhance this");
           const result = await GeminiService.editImage(node.data.imageUrl, prompt);
-          onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review' }); 
+          const newHistory = addToHistory('image', result);
+          onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review', history: newHistory }); 
       } catch(e) {
           setError("Edit failed.");
       } finally {
           setIsProcessing(false);
+          setProgressMsg("");
       }
   }
 
   const handleVideoGen = async () => {
       setIsProcessing(true);
+      setProgressMsg("Starting...");
       setError(null);
       try {
           const rawPrompt = node.data.prompt || "A video scene";
           const finalPrompt = resolvePrompt(rawPrompt);
+          const model = node.data.model || MODELS.VIDEO_FAST;
           
-          // Use manual upload OR auto-injected reference
           let refImage = node.data.imageUrl;
           if (!refImage) {
-               refImage = resolveReferenceImage(rawPrompt);
+               const images = resolveReferenceImages(rawPrompt);
+               if (images.length > 0) refImage = images[0];
           }
 
           const result = await GeminiService.generateVideo(
               finalPrompt,
               (node.data.aspectRatio as "16:9" | "9:16") || "16:9",
-              refImage
+              refImage, // Start
+              model,
+              node.data.duration,
+              node.data.withAudio,
+              node.data.lastFrameImageUrl, // End Frame (Loop)
+              (msg) => setProgressMsg(msg)
           );
-          onUpdate(node.id, { ...node.data, videoUrl: result, status: 'review' });
+          const newHistory = addToHistory('video', result);
+          onUpdate(node.id, { ...node.data, videoUrl: result, status: 'review', history: newHistory });
       } catch(e) {
           setError("Video generation failed.");
       } finally {
           setIsProcessing(false);
+          setProgressMsg("");
       }
   }
 
@@ -413,12 +495,12 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     }
   }, [node.data.status]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'imageUrl' | 'lastFrameImageUrl' = 'imageUrl') => {
       const file = e.target.files?.[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onloadend = () => {
-          onUpdate(node.id, { ...node.data, imageUrl: reader.result as string, status: 'draft' });
+          onUpdate(node.id, { ...node.data, [field]: reader.result as string, status: 'draft' });
       };
       reader.readAsDataURL(file);
   }
@@ -449,6 +531,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           );
 
       case NodeType.TEXT_INPUT:
+        // ... (existing TEXT_INPUT rendering)
         if (expanded) {
             return (
                 <div className="flex flex-col h-full max-w-7xl mx-auto w-full bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden shadow-2xl">
@@ -526,6 +609,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         );
 
       case NodeType.AI_TEXT_GEN:
+        // ... (existing AI_TEXT_GEN)
         return (
           <div className={`flex flex-col h-full ${expanded ? 'max-w-4xl mx-auto w-full' : ''}`}>
              <div className="flex-1 p-2 overflow-y-auto min-h-0 markdown-preview bg-zinc-950/30 rounded-t">
@@ -533,7 +617,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                      <ReactMarkdown>{node.data.text}</ReactMarkdown>
                  ) : (
                      <div className="h-full flex items-center justify-center text-zinc-600 text-xs italic">
-                         {isProcessing ? "Thinking..." : "Generated text will appear here..."}
+                         {isProcessing ? progressMsg || "Thinking..." : "Generated text will appear here..."}
                      </div>
                  )}
              </div>
@@ -554,13 +638,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
 
       case NodeType.AI_IMAGE_GEN:
         return (
-            <div className={`p-3 space-y-2 ${expanded ? 'h-full flex flex-col' : ''}`}>
+            <div className={`p-3 space-y-2 ${expanded ? 'h-full flex flex-col' : 'flex flex-col h-full'}`}>
                  {node.data.imageUrl ? (
-                     <div className={`relative group ${expanded ? 'flex-1 flex items-center justify-center bg-zinc-900/50 rounded-lg overflow-hidden' : ''}`}>
+                     <div className={`relative group ${expanded ? 'flex-1 flex items-center justify-center bg-zinc-900/50 rounded-lg overflow-hidden' : 'flex-1 flex items-center justify-center bg-zinc-900/50 rounded overflow-hidden min-h-0'}`}>
                          <img 
                             src={node.data.imageUrl} 
                             alt="Generated" 
-                            className={`rounded border border-zinc-700 ${expanded ? 'max-h-full max-w-full object-contain' : 'w-full'}`} 
+                            className={`rounded border border-zinc-700 ${expanded ? 'max-h-full max-w-full object-contain' : 'max-h-full max-w-full object-contain'}`} 
                          />
                          
                          {!expanded && (
@@ -577,17 +661,29 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                                  <User size={12} fill="currentColor" />
                              </div>
                          )}
+                         
+                         {node.data.tag === 'refinement' && !expanded && (
+                             <div className="absolute top-2 left-2 bg-green-600/80 text-white p-1 rounded text-[9px] font-bold border border-green-400">
+                                 REF
+                             </div>
+                         )}
                      </div>
                  ) : (
-                     <div className={`${expanded ? 'flex-1' : 'h-48'} bg-zinc-900/50 rounded flex items-center justify-center border border-dashed border-zinc-700 text-zinc-600 text-xs`}>
+                     <div className={`${expanded ? 'flex-1' : 'flex-1 min-h-0'} bg-zinc-900/50 rounded flex items-center justify-center border border-dashed border-zinc-700 text-zinc-600 text-xs`}>
                          {isProcessing ? (
-                             <span className="animate-pulse">Generating...</span>
+                             <div className="flex flex-col items-center gap-2">
+                                <Sparkles className="animate-spin text-purple-500" />
+                                <span className="animate-pulse">{progressMsg || "Generating..."}</span>
+                             </div>
                          ) : "No Image"}
                      </div>
                  )}
                  
-                 <div className={expanded ? 'max-w-2xl mx-auto w-full pt-4' : ''}>
-                     <label className="text-xs text-zinc-400 uppercase font-bold">Prompt & Settings</label>
+                 <div className={`${expanded ? 'max-w-2xl mx-auto w-full pt-4' : 'shrink-0'}`}>
+                     <label className="text-xs text-zinc-400 uppercase font-bold flex justify-between">
+                         <span>Prompt & Settings</span>
+                         {node.data.tag === 'refinement' && <span className="text-green-500">Refinement Mode</span>}
+                     </label>
                      <div className="flex flex-col gap-2 mt-1">
                         <Input 
                             value={node.data.prompt || ''}
@@ -622,6 +718,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         );
 
       case NodeType.AI_IMAGE_EDIT:
+         // ... (existing AI_IMAGE_EDIT)
           return (
             <div className={`p-3 space-y-2 ${expanded ? 'h-full flex flex-col' : ''}`}>
                  <div 
@@ -665,44 +762,105 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           );
 
       case NodeType.AI_VIDEO_GEN:
+          const modelCapabilities = VIDEO_MODEL_CAPABILITIES[node.data.model || MODELS.VIDEO_FAST];
+          const supportsLastFrame = modelCapabilities?.supportsLastFrame || false;
+          
           return (
-            <div className={`p-3 space-y-2 ${expanded ? 'h-full flex flex-col' : ''}`}>
+            <div className={`p-3 space-y-2 ${expanded ? 'h-full flex flex-col' : 'flex flex-col h-full'}`}>
                  {node.data.videoUrl ? (
-                     <video controls src={node.data.videoUrl} className={`rounded border border-zinc-700 ${expanded ? 'flex-1 w-full h-full' : 'w-full'}`} />
-                 ) : node.data.imageUrl ? (
-                     <div className={`relative ${expanded ? 'flex-1 flex items-center justify-center' : ''}`}>
-                        <img src={node.data.imageUrl} className={`${expanded ? 'max-h-full max-w-full' : 'w-full h-24'} object-cover opacity-50 rounded`} />
-                        <div className="absolute inset-0 flex items-center justify-center text-xs text-white font-bold shadow-black drop-shadow-md">
-                            Reference Image Loaded
-                        </div>
-                     </div>
+                     <video controls src={node.data.videoUrl} className={`rounded border border-zinc-700 bg-black ${expanded ? 'flex-1 w-full h-full' : 'w-full flex-1 min-h-0 object-contain'}`} />
                  ) : (
-                    <div 
-                        className={`${expanded ? 'flex-1' : 'h-24'} bg-zinc-900/50 rounded flex items-center justify-center border border-dashed border-zinc-700 cursor-pointer`}
-                        onClick={() => fileInputRef.current?.click()}
-                    >
-                         <span className="text-[10px] text-zinc-500">Optional: Upload Ref Image</span>
-                         <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="image/*" />
+                    <div className={`${expanded ? 'flex-1' : 'flex-1 min-h-0'} bg-zinc-900/50 rounded flex items-center justify-center border border-dashed border-zinc-700 text-zinc-600`}>
+                         {isProcessing ? (
+                             <div className="flex flex-col items-center gap-2">
+                                <Film className="animate-spin text-red-500" />
+                                <span className="animate-pulse text-xs">{progressMsg || "Generating..."}</span>
+                             </div>
+                         ) : "No Video"}
                     </div>
                  )}
 
-                 <div className={expanded ? 'max-w-2xl mx-auto w-full pt-4' : ''}>
-                     <label className="text-xs text-zinc-400 uppercase font-bold">Video Prompt</label>
-                     <div className="flex gap-2 mt-1">
-                        <TextArea 
+                 {/* Reference Frames */}
+                 <div className="grid grid-cols-2 gap-2 h-16 shrink-0">
+                     <div 
+                        className="bg-zinc-900/50 rounded border border-zinc-800 flex items-center justify-center relative overflow-hidden cursor-pointer hover:border-zinc-600 transition-colors"
+                        onClick={() => videoStartFrameRef.current?.click()}
+                        title="Start Frame"
+                     >
+                         {node.data.imageUrl ? (
+                             <img src={node.data.imageUrl} className="w-full h-full object-cover opacity-60" />
+                         ) : (
+                             <span className="text-[9px] text-zinc-600 uppercase font-bold">Start Frame</span>
+                         )}
+                         <input type="file" ref={videoStartFrameRef} className="hidden" onChange={(e) => handleFileUpload(e, 'imageUrl')} accept="image/*" />
+                     </div>
+
+                     <div 
+                        className={`bg-zinc-900/50 rounded border border-zinc-800 flex items-center justify-center relative overflow-hidden transition-colors ${supportsLastFrame ? 'cursor-pointer hover:border-zinc-600' : 'opacity-30 cursor-not-allowed'}`}
+                        onClick={() => supportsLastFrame && videoEndFrameRef.current?.click()}
+                        title={supportsLastFrame ? "End Frame (Loop)" : "End Frame Not Supported"}
+                     >
+                         {node.data.lastFrameImageUrl ? (
+                             <img src={node.data.lastFrameImageUrl} className="w-full h-full object-cover opacity-60" />
+                         ) : (
+                             <span className="text-[9px] text-zinc-600 uppercase font-bold">End Frame</span>
+                         )}
+                         <input type="file" ref={videoEndFrameRef} className="hidden" onChange={(e) => handleFileUpload(e, 'lastFrameImageUrl')} accept="image/*" disabled={!supportsLastFrame} />
+                     </div>
+                 </div>
+
+                 <div className={`${expanded ? 'max-w-2xl mx-auto w-full pt-4' : 'shrink-0'}`}>
+                     <label className="text-xs text-zinc-400 uppercase font-bold">Prompt & Config</label>
+                     <TextArea 
                             value={node.data.prompt || ''}
                             onChange={(e) => onUpdate(node.id, { ...node.data, prompt: e.target.value })}
                             placeholder={activeAsset ? `@${activeAsset.title} running...` : "A cat flying in space..."}
-                            className={`${expanded ? 'h-20' : 'h-16'} text-xs flex-1`}
-                        />
-                        <div className="flex flex-col gap-2">
-                            <Select value={node.data.aspectRatio || '16:9'} onChange={(e) => onUpdate(node.id, { ...node.data, aspectRatio: e.target.value })} className="w-24">
-                                <option value="16:9">16:9</option>
-                                <option value="9:16">9:16</option>
-                            </Select>
-                            <Button onClick={handleVideoGen} disabled={isProcessing || (!node.data.prompt && !node.data.imageUrl)} className="flex-1 py-1 text-xs">
+                            className={`${expanded ? 'h-20' : 'h-14'} text-xs mb-2 w-full`}
+                    />
+                    
+                     <div className="flex flex-col gap-2">
+                         <div className="flex gap-1">
+                             <Select 
+                                value={node.data.model || MODELS.VIDEO_FAST}
+                                onChange={(e) => onUpdate(node.id, { ...node.data, model: e.target.value, duration: undefined })}
+                                className="w-full text-xs flex-[2]"
+                             >
+                                 {VIDEO_MODELS_OPTIONS.map(m => (
+                                     <option key={m.value} value={m.value}>{m.label}</option>
+                                 ))}
+                             </Select>
+                             <Select value={node.data.aspectRatio || '16:9'} onChange={(e) => onUpdate(node.id, { ...node.data, aspectRatio: e.target.value })} className="w-full text-xs flex-1">
+                                    <option value="16:9">16:9</option>
+                                    <option value="9:16">9:16</option>
+                             </Select>
+                        </div>
+                        
+                        <div className="flex gap-1">
+                            {modelCapabilities && (
+                                <Select 
+                                    value={node.data.duration || modelCapabilities.durations[0]} 
+                                    onChange={(e) => onUpdate(node.id, { ...node.data, duration: e.target.value })} 
+                                    className="w-full text-xs flex-1"
+                                    title="Duration (Seconds)"
+                                >
+                                    {modelCapabilities.durations.map(d => (
+                                        <option key={d} value={d}>{d}s</option>
+                                    ))}
+                                </Select>
+                            )}
+                            
+                            {modelCapabilities?.supportsAudio && (
+                                <button 
+                                    onClick={() => onUpdate(node.id, { ...node.data, withAudio: !node.data.withAudio })}
+                                    className={`flex items-center justify-center gap-1 text-xs px-2 rounded border transition-colors ${node.data.withAudio ? 'bg-zinc-700 text-white border-zinc-600' : 'bg-zinc-900 text-zinc-500 border-zinc-800'}`}
+                                >
+                                    {node.data.withAudio ? <Volume2 size={12}/> : <VolumeX size={12}/>}
+                                </button>
+                            )}
+                            
+                            <Button onClick={handleVideoGen} disabled={isProcessing || (!node.data.prompt && !node.data.imageUrl)} className="flex-[2] py-1 text-xs">
                                 <Film size={14} className="mr-1"/>
-                                {isProcessing ? "Generating..." : "Generate"}
+                                {isProcessing ? "Generating" : "Generate"}
                             </Button>
                         </div>
                      </div>
@@ -716,6 +874,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   };
 
   const getHeaderColor = () => {
+      // ... (existing)
       if (node.type === NodeType.GROUP) return "bg-zinc-800 border-zinc-700 text-zinc-400";
       if (node.data.status === 'approved') return "bg-green-900/40 border-green-800 text-green-200";
       if (node.data.status === 'review') return "bg-yellow-900/40 border-yellow-800 text-yellow-200";
@@ -732,6 +891,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const getBorderColor = () => {
+      // ... (existing)
       if (isDragOver) return "ring-2 ring-blue-400 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)]";
       if (isSelected) return "ring-2 ring-blue-500 border-transparent";
       if (node.type === NodeType.GROUP) return "border-zinc-700 border-dashed";
@@ -742,6 +902,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const getTitle = () => {
+      // ... (existing)
       if (node.type === NodeType.GROUP) return node.data.label || "Group";
       switch(node.type) {
           case NodeType.TEXT_INPUT: return "Script / Note";
@@ -754,6 +915,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const isGroup = node.type === NodeType.GROUP;
+  const hasHistory = node.data.history && node.data.history.length > 0;
 
   if (isExpanded) {
       return createPortal(
@@ -819,6 +981,12 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         </div>
         
         <div className="flex items-center gap-1">
+            {hasHistory && (
+                <button onClick={(e) => { e.stopPropagation(); handleHistoryNav('prev'); }} className="text-white/50 hover:text-white mx-1" title="Previous Generation">
+                    <History size={12} />
+                </button>
+            )}
+            
             {node.type === NodeType.TEXT_INPUT && (
                 <button onClick={handleToggleCoPilot} className={`p-1 rounded mr-1 transition-colors ${isCoPilotEnabled ? 'text-blue-400 hover:text-blue-300' : 'text-zinc-600 hover:text-zinc-400'}`}>
                     <Bot size={14} />
@@ -835,13 +1003,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         </div>
       </div>
 
-      <div className={`relative flex-1 ${isGroup && node.data.collapsed ? 'hidden' : ''}`}>
+      <div className={`relative flex-1 overflow-hidden ${isGroup && node.data.collapsed ? 'hidden' : ''}`}>
         {renderContent(false)}
         {error && <div className="px-3 pb-2 text-[10px] text-red-400">{error}</div>}
       </div>
 
       {!isGroup && (
-      <div className="flex items-center border-t border-zinc-800 p-1 gap-1 bg-zinc-950/50 rounded-b-lg">
+      <div className="flex items-center border-t border-zinc-800 p-1 gap-1 bg-zinc-950/50 rounded-b-lg shrink-0">
           {node.data.status === 'archived' ? (
             <button onClick={(e) => { e.stopPropagation(); setStatus('draft'); }} className="flex-1 py-1 text-[10px] font-medium rounded flex items-center justify-center gap-1 transition-colors text-zinc-400 hover:bg-zinc-800 hover:text-green-400">
                 <RotateCcw size={10} /> Restore

@@ -17,6 +17,7 @@ export const MODELS = {
   IMAGE_GEN: "gemini-3-pro-image-preview", // Default high quality
   IMAGE_EDIT: "gemini-2.5-flash-image", // Nano Banana
   VIDEO_FAST: "veo-3.1-fast-generate-preview",
+  VIDEO_HQ: "veo-3.1-generate-preview",
 };
 
 export const IMAGE_MODELS_OPTIONS = [
@@ -24,6 +25,24 @@ export const IMAGE_MODELS_OPTIONS = [
     { value: "gemini-2.5-flash-image", label: "Gemini 2.5 Flash (Fast)" },
     { value: "imagen-4.0-generate-001", label: "Imagen 4" },
 ];
+
+export const VIDEO_MODELS_OPTIONS = [
+    { value: "veo-3.1-fast-generate-preview", label: "Veo Fast (Preview)" },
+    { value: "veo-3.1-generate-preview", label: "Veo High Quality" },
+];
+
+export const VIDEO_MODEL_CAPABILITIES: Record<string, { durations: string[], supportsAudio: boolean, supportsLastFrame: boolean }> = {
+    "veo-3.1-fast-generate-preview": {
+        durations: ["4", "6", "8"],
+        supportsAudio: false, // Typically fast preview might not prioritize audio
+        supportsLastFrame: true
+    },
+    "veo-3.1-generate-preview": {
+        durations: ["4", "6", "8"],
+        supportsAudio: true, // High quality typically supports audio
+        supportsLastFrame: true
+    }
+};
 
 export const ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"];
 

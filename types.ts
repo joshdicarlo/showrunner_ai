@@ -24,6 +24,13 @@ export interface Position {
   y: number;
 }
 
+export interface NodeHistoryItem {
+    type: 'image' | 'video' | 'text';
+    content: string; // The text or URL
+    prompt?: string;
+    timestamp: number;
+}
+
 export interface NodeData {
   text?: string;
   imageUrl?: string;
@@ -35,6 +42,12 @@ export interface NodeData {
   label?: string; // For groups
   collapsed?: boolean; // For groups
   driveId?: string; // Link to Google Drive file
+  tag?: 'concept' | 'refinement'; // Distinguish asset types
+  referenceImageUrl?: string; // Explicit reference for generation
+  lastFrameImageUrl?: string; // For video generation (End frame)
+  duration?: string; // Video duration in seconds
+  withAudio?: boolean; // Video audio toggle
+  history?: NodeHistoryItem[]; // Store previous generations
 }
 
 export interface FlowNode {

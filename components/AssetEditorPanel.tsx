@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ProjectAsset, DepartmentType } from '../types';
 import { Input, TextArea, Button, Select } from './UI';
-import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers } from 'lucide-react';
+import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace } from 'lucide-react';
 import { generateSummary } from '../services/geminiService';
 
 interface AssetEditorPanelProps {
@@ -12,8 +12,9 @@ interface AssetEditorPanelProps {
     onGenerateOutline: () => void;
     approvedImages: string[];
     onNavigateToAsset?: (assetId: string) => void;
-    onGenerateRefSheet?: (assetId: string) => void;
+    onGenerateRefSheet?: (assetId: string, sourceImageUrl?: string) => void;
     assetThumbnails?: Record<string, string>;
+    refinedImages?: string[];
 }
 
 const VISUAL_STYLES = [
@@ -30,7 +31,8 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     approvedImages, 
     onNavigateToAsset,
     onGenerateRefSheet,
-    assetThumbnails = {}
+    assetThumbnails = {},
+    refinedImages = []
 }) => {
     const [title, setTitle] = useState(asset.title);
     const [description, setDescription] = useState(asset.description);
@@ -260,6 +262,29 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                          </div>
                      )}
                 </div>
+
+                {/* Refined Concepts Section */}
+                <div className="space-y-2">
+                     <label className="text-xs uppercase font-bold text-zinc-500 flex items-center justify-between">
+                         <span>Refined Concepts</span>
+                         <span className="text-[10px] bg-green-900/20 text-green-400 px-1.5 rounded">{refinedImages.length}</span>
+                     </label>
+                     
+                     {refinedImages && refinedImages.length > 0 ? (
+                         <div className="grid grid-cols-3 gap-2">
+                             {refinedImages.map((img, idx) => (
+                                 <div key={idx} className="relative aspect-[3/4] rounded-lg overflow-hidden border border-zinc-800 bg-white group cursor-pointer" title="Refined Generation">
+                                     <img src={img} alt={`Refinement ${idx}`} className="w-full h-full object-contain" />
+                                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+                                 </div>
+                             ))}
+                         </div>
+                     ) : (
+                         <div className="h-16 border border-zinc-800 rounded-lg flex items-center justify-center text-zinc-600 text-[10px] bg-zinc-900/20 italic">
+                            No refinements yet
+                         </div>
+                     )}
+                </div>
             </div>
 
             {/* Concept Generator */}
@@ -317,10 +342,16 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
 
                     {asset.department === DepartmentType.CASTING_WARDROBE && onGenerateRefSheet && (
                         <button 
-                            onClick={() => { onGenerateRefSheet(asset.id); setBtnContextMenu(null); }}
-                            className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-200 flex items-center gap-2"
+                            onClick={() => { 
+                                // Default to first approved image if no specific one provided
+                                const defaultRef = approvedImages.length > 0 ? approvedImages[0] : undefined;
+                                onGenerateRefSheet(asset.id, defaultRef); 
+                                setBtnContextMenu(null); 
+                            }}
+                            disabled={approvedImages.length === 0}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                         >
-                            <Layers size={12} /> Generate Ref Sheet
+                            <ScanFace size={12} /> Refine Character (Dataset)
                         </button>
                     )}
                 </div>

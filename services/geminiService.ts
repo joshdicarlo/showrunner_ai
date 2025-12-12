@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { MODELS, CHAT_SYSTEM_INSTRUCTION } from "../constants";
 import { StorySeed } from "../types";
@@ -440,7 +441,7 @@ export const generateImage = async (
   prompt: string,
   aspectRatio: string = "16:9",
   model: string = MODELS.IMAGE_GEN,
-  referenceImage?: string // Optional Base64 or URL
+  referenceImages?: string[] // Optional Array of Base64 or URL
 ): Promise<string> => {
   
   const win = window as unknown as AIStudioWindow;
@@ -458,7 +459,7 @@ export const generateImage = async (
       
       // IMAGEN 4 Routing
       if (model.includes('imagen')) {
-           // Imagen doesn't support 'referenceImage' in the same way as Gemini multimodal
+           // Imagen doesn't support 'referenceImages' in the same way as Gemini multimodal
            // So we ignore it here or could implement a different endpoint if available.
            const response = await ai.models.generateImages({
                 model: model,
@@ -483,31 +484,39 @@ export const generateImage = async (
               aspectRatio: aspectRatio,
           };
           
+          const config: any = {
+              imageConfig: imageConfig
+          };
+
           // Only add imageSize for the Pro model (Nano Banana does not support it)
           if (model === 'gemini-3-pro-image-preview') {
               imageConfig.imageSize = "1K";
+          }
+          
+          // Force IMAGE modality for Flash Image to prevent chatty responses
+          if (model === 'gemini-2.5-flash-image') {
+              config.responseModalities = [Modality.IMAGE];
           }
 
           // Build Parts
           const parts: any[] = [];
           
-          // Add Reference Image if provided (and valid)
-          if (referenceImage) {
-              const cleanBase64 = referenceImage.includes(',') ? referenceImage.split(',')[1] : referenceImage;
-              // Detect MIME or default to png
-              let mimeType = "image/png";
-              if (referenceImage.startsWith("data:image/jpeg")) mimeType = "image/jpeg";
-              if (referenceImage.startsWith("data:image/webp")) mimeType = "image/webp";
+          // Add Reference Images if provided (and valid)
+          if (referenceImages && referenceImages.length > 0) {
+              referenceImages.forEach(img => {
+                  const cleanBase64 = img.includes(',') ? img.split(',')[1] : img;
+                  // Detect MIME or default to png
+                  let mimeType = "image/png";
+                  if (img.startsWith("data:image/jpeg")) mimeType = "image/jpeg";
+                  if (img.startsWith("data:image/webp")) mimeType = "image/webp";
 
-              parts.push({
-                  inlineData: {
-                      mimeType: mimeType,
-                      data: cleanBase64
-                  }
+                  parts.push({
+                      inlineData: {
+                          mimeType: mimeType,
+                          data: cleanBase64
+                      }
+                  });
               });
-              
-              // If we have a reference image, we might want to guide the prompt
-              // prompt = `Using the first image as reference, ${prompt}`;
           }
 
           parts.push({ text: prompt });
@@ -517,9 +526,7 @@ export const generateImage = async (
             contents: {
               parts: parts
             },
-            config: {
-              imageConfig: imageConfig
-            }
+            config: config
           });
 
           const responseParts = response.candidates?.[0]?.content?.parts;
@@ -533,7 +540,12 @@ export const generateImage = async (
               // Fallback: Look for refusal text to provide better error info
               const textPart = responseParts.find(p => p.text);
               if (textPart?.text) {
-                  throw new Error(`Model Refusal: ${textPart.text}`);
+                  // Clean up error message for UI
+                  let msg = textPart.text;
+                  if (msg.length < 200 && (msg.toLowerCase().includes("here is") || msg.toLowerCase().includes("updated image"))) {
+                       msg = `Model generated text instead of image: "${msg}". Retrying...`;
+                  }
+                  throw new Error(`Generation Error: ${msg}`);
               }
           }
           throw new Error("No image generated from Gemini (Empty response)");
@@ -603,7 +615,12 @@ export const editImage = async (
 export const generateVideo = async (
   prompt: string,
   aspectRatio: "16:9" | "9:16" = "16:9",
-  imageInput?: string
+  imageInput?: string, // Start Frame
+  model: string = MODELS.VIDEO_FAST,
+  duration?: string | number,
+  withAudio?: boolean,
+  lastFrameInput?: string, // End Frame (optional)
+  onProgress?: (msg: string) => void
 ): Promise<string> => {
     
   const win = window as unknown as AIStudioWindow;
@@ -617,16 +634,40 @@ export const generateVideo = async (
   const makeRequest = async () => {
       const ai = createAI(); 
       let operation;
-      const commonConfig = {
+
+      // Determine Resolution based on Duration rules
+      // Veo typically requires 8s for 1080p, otherwise 720p is safer for shorter clips
+      let resolution = '1080p';
+      const durationVal = duration ? (typeof duration === 'string' ? parseInt(duration) : duration) : undefined;
+      
+      if (durationVal && durationVal < 8) {
+          resolution = '720p';
+      }
+      
+      const commonConfig: any = {
           numberOfVideos: 1,
-          resolution: '1080p',
+          resolution: resolution,
           aspectRatio: aspectRatio
       };
+
+      // Map prompt/config based on user input for duration/audio
+      if (duration) {
+          commonConfig.durationSeconds = durationVal;
+      }
+      
+      // Handle Last Frame (Seamless loop capability)
+      if (lastFrameInput) {
+          const cleanLast = lastFrameInput.split(",")[1] || lastFrameInput;
+          commonConfig.lastFrame = {
+              imageBytes: cleanLast,
+              mimeType: 'image/png'
+          };
+      }
 
       if (imageInput) {
           const cleanBase64 = imageInput.split(",")[1] || imageInput;
           operation = await ai.models.generateVideos({
-              model: MODELS.VIDEO_FAST,
+              model: model,
               prompt: prompt || "Animate this image",
               image: {
                   imageBytes: cleanBase64,
@@ -636,17 +677,30 @@ export const generateVideo = async (
           });
       } else {
           operation = await ai.models.generateVideos({
-              model: MODELS.VIDEO_FAST,
+              model: model,
               prompt: prompt,
               config: commonConfig
           });
       }
+      
+      if (onProgress) onProgress("Generation started...");
 
       // Polling
+      let attempts = 0;
       while (!operation.done) {
           await new Promise((resolve) => setTimeout(resolve, 5000));
           operation = await ai.operations.getVideosOperation({ operation });
+          
+          attempts++;
+          if (onProgress) {
+             // Check metadata if available, otherwise just count dots
+             const dots = ".".repeat((attempts % 4) + 1);
+             const status = operation.metadata?.state || "PROCESSING";
+             onProgress(`${status}${dots}`);
+          }
       }
+      
+      if (onProgress) onProgress("Finalizing...");
 
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
       if (!downloadLink) throw new Error("No video URI returned");

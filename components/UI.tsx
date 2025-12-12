@@ -72,3 +72,23 @@ export const Modal: React.FC<{ title: string; children: React.ReactNode; onClose
     </div>
   </div>
 );
+
+export const ToggleGroup: React.FC<{ options: { value: string, icon?: LucideIcon, label?: string }[], value: string, onChange: (val: string) => void }> = ({ options, value, onChange }) => (
+    <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+        {options.map(opt => (
+            <button
+                key={opt.value}
+                onClick={() => onChange(opt.value)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    value === opt.value 
+                        ? 'bg-zinc-700 text-white shadow-sm' 
+                        : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                }`}
+                title={opt.label}
+            >
+                {opt.icon && <opt.icon size={14} />}
+                {opt.label && <span>{opt.label}</span>}
+            </button>
+        ))}
+    </div>
+);
