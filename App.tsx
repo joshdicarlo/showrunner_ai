@@ -544,6 +544,12 @@ const App: React.FC = () => {
         }
     }
 
+    // Determine Default Ratio
+    let defaultRatio = "16:9";
+    if (currentDept === DepartmentType.CASTING_WARDROBE) {
+        defaultRatio = "1:1";
+    }
+
     for (let i = 0; i < count; i++) {
         const childX = startX + padding + (i * (nodeWidth + gap));
         const childY = startY + 60;
@@ -559,7 +565,7 @@ const App: React.FC = () => {
             height: nodeHeight,
             data: {
                 prompt: defaultPrompt,
-                aspectRatio: '1:1',
+                aspectRatio: defaultRatio,
                 status: 'generating',
                 tag: 'concept' // Tag as concept
             }

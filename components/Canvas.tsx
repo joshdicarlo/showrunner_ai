@@ -316,6 +316,15 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       const pos = findSmartPosition(worldX, worldY, 300, 400);
 
+      // Determine default aspect ratio based on Department
+      let defaultRatio = undefined;
+      if (type === NodeType.AI_IMAGE_GEN || type === NodeType.AI_VIDEO_GEN) {
+          defaultRatio = "16:9";
+          if (currentDept === DepartmentType.CASTING_WARDROBE) {
+              defaultRatio = "1:1";
+          }
+      }
+
       const newNode: FlowNode = {
           id: `node-${Date.now()}`,
           type,
@@ -325,6 +334,7 @@ export const Canvas: React.FC<CanvasProps> = ({
           data: { 
               status: 'draft',
               prompt: activeAsset && type === NodeType.AI_IMAGE_GEN ? `@${activeAsset.title}` : undefined,
+              aspectRatio: defaultRatio,
               ...initialData
           }
       };
