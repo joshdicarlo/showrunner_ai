@@ -1,13 +1,14 @@
 
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useRef, useEffect, memo, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
-import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem } from '../types';
+import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem, DepartmentType } from '../types';
 import { Move, Play, X, Sparkles, Edit, Image as ImageIcon, Film, CheckCircle, Eye, Archive, AlertCircle, Folder, FolderOpen, ChevronDown, ChevronRight, RotateCcw, User, Maximize2, Minimize2, Bold, Italic, Heading1, Heading2, List, Quote, Code, EyeOff, Bot, Upload, Download, HardDrive, FileText, Cloud, Music, Volume2, VolumeX, ChevronLeft, History } from 'lucide-react';
 import { Button, Input, TextArea, Select } from './UI';
 import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS, VIDEO_MODELS_OPTIONS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import * as GeminiService from '../services/geminiService';
 import * as FileService from '../services/fileService';
+import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 
 interface NodeItemProps {
   node: FlowNode;
@@ -24,6 +25,224 @@ interface NodeItemProps {
   assetThumbnails?: Record<string, string>;
   refinedImagesMap?: Record<string, string[]>;
 }
+
+// --- Highlighted Input Component ---
+const HighlightedInput: React.FC<{
+    value: string;
+    onChange: (val: string) => void;
+    placeholder?: string;
+    className?: string;
+    projectAssets?: ProjectAsset[];
+    activeAsset?: ProjectAsset;
+}> = ({ value, onChange, placeholder, className, projectAssets, activeAsset }) => {
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [filteredAssets, setFilteredAssets] = useState<ProjectAsset[]>([]);
+    const [selectedIndex, setSelectedIndex] = useState(0);
+    const [cursorPos, setCursorPos] = useState(0);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Create sorted regex patterns for highlighting
+    const highlightConfig = useMemo(() => {
+        if (!projectAssets) return { pattern: null, map: {} };
+        
+        const map: Record<string, string> = {};
+        const keys: string[] = [];
+
+        // Add standard assets
+        projectAssets.forEach(a => {
+            const key = `@${a.title}`;
+            keys.push(key);
+            map[key.toLowerCase()] = a.department;
+            
+            // Add Dot Syntax Children
+            const children = projectAssets.filter(c => c.parentId === a.id);
+            children.forEach(c => {
+                const childKey = `@${a.title}.${c.title}`;
+                keys.push(childKey);
+                map[childKey.toLowerCase()] = c.department;
+            });
+        });
+
+        // Add context keywords
+        if (activeAsset) {
+            keys.push('@character');
+            map['@character'] = activeAsset.department;
+            keys.push('@parent');
+            map['@parent'] = 'Context';
+        }
+
+        // Sort by length desc to match longest first
+        keys.sort((a, b) => b.length - a.length);
+        
+        if (keys.length === 0) return { pattern: null, map };
+
+        // Escape for regex
+        const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
+        
+        return { pattern, map };
+    }, [projectAssets, activeAsset]);
+
+    const getDeptColor = (dept: string) => {
+        switch (dept) {
+            case DepartmentType.WRITERS_ROOM: return "bg-blue-500/20 text-blue-200";
+            case DepartmentType.CASTING_WARDROBE: return "bg-purple-500/30 text-purple-200";
+            case DepartmentType.STORY: return "bg-yellow-500/20 text-yellow-200";
+            case DepartmentType.SET_DESIGN: return "bg-green-500/20 text-green-200";
+            case DepartmentType.PRODUCTION: return "bg-red-500/20 text-red-200";
+            case 'Context': return "bg-zinc-600/30 text-zinc-300";
+            default: return "bg-orange-500/20 text-orange-200";
+        }
+    };
+
+    const renderHighlights = () => {
+        if (!value) return null;
+        if (!highlightConfig.pattern) return value;
+
+        const parts = value.split(highlightConfig.pattern);
+        return parts.map((part, i) => {
+            const lower = part.toLowerCase();
+            const dept = highlightConfig.map[lower];
+            if (dept) {
+                return (
+                    <span key={i} className={`${getDeptColor(dept)} rounded-[2px] px-0.5 mx-[-2px]`}>
+                        {part}
+                    </span>
+                );
+            }
+            return <span key={i}>{part}</span>;
+        });
+    };
+
+    // --- Auto Complete Logic ---
+    const getActiveToken = (text: string, cursor: number) => {
+        const textBeforeCursor = text.slice(0, cursor);
+        const match = textBeforeCursor.match(/@([\w\.]*)$/);
+        return match ? match[1] : null;
+    };
+
+    const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const newValue = e.target.value;
+        const newCursor = e.target.selectionStart;
+        onChange(newValue);
+        setCursorPos(newCursor);
+
+        const token = getActiveToken(newValue, newCursor);
+        if (token !== null && projectAssets) {
+            const search = token.toLowerCase();
+            const matches = projectAssets
+                .filter(a => a.title.toLowerCase().startsWith(search))
+                .slice(0, 5); // Limit to 5 suggestions
+            
+            if (matches.length > 0) {
+                setFilteredAssets(matches);
+                setShowSuggestions(true);
+                setSelectedIndex(0);
+                return;
+            }
+        }
+        setShowSuggestions(false);
+    };
+
+    const insertSuggestion = (asset: ProjectAsset) => {
+        const token = getActiveToken(value, cursorPos);
+        if (token !== null) {
+            const before = value.slice(0, cursorPos - token.length - 1); // -1 for @
+            const after = value.slice(cursorPos);
+            const inserted = `@${asset.title} `;
+            onChange(before + inserted + after);
+            setShowSuggestions(false);
+            
+            // Restore focus next tick
+            setTimeout(() => {
+                if (textareaRef.current) {
+                    const newPos = before.length + inserted.length;
+                    textareaRef.current.focus();
+                    textareaRef.current.setSelectionRange(newPos, newPos);
+                }
+            }, 0);
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (showSuggestions) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSelectedIndex(prev => (prev + 1) % filteredAssets.length);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSelectedIndex(prev => (prev - 1 + filteredAssets.length) % filteredAssets.length);
+            } else if (e.key === 'Tab' || e.key === 'Enter') {
+                e.preventDefault();
+                insertSuggestion(filteredAssets[selectedIndex]);
+            } else if (e.key === 'Escape') {
+                setShowSuggestions(false);
+            }
+        }
+    };
+
+    // Shared style for perfect alignment
+    const sharedStyle = {
+        fontFamily: '"Fira Code", monospace',
+        fontSize: '12px',
+        lineHeight: '1.5',
+        letterSpacing: 'normal',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        padding: '12px',
+    } as const;
+
+    return (
+        <div className={`relative group ${className} overflow-visible bg-zinc-900 border border-zinc-700 rounded`}>
+             {/* Backdrop Layer for Highlights */}
+             <div 
+                className="absolute inset-0 pointer-events-none text-transparent z-0 overflow-hidden"
+                style={sharedStyle}
+                aria-hidden="true"
+             >
+                {renderHighlights()}
+             </div>
+
+             {/* Foreground Input Layer */}
+             <textarea
+                ref={textareaRef}
+                value={value}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                onClick={(e) => {
+                    setCursorPos(e.currentTarget.selectionStart);
+                    setShowSuggestions(false);
+                }}
+                placeholder={placeholder}
+                className="relative z-10 w-full h-full bg-transparent text-zinc-200 caret-white focus:outline-none resize-none"
+                style={sharedStyle}
+                spellCheck={false}
+             />
+
+             {/* Suggestions Menu */}
+             {showSuggestions && filteredAssets.length > 0 && (
+                 <div className="absolute left-0 top-full mt-1 w-56 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-75">
+                     <div className="px-2 py-1 bg-zinc-950 text-[9px] text-zinc-500 font-bold border-b border-zinc-800">
+                         SUGGESTIONS
+                     </div>
+                     {filteredAssets.map((asset, idx) => (
+                         <button
+                            key={asset.id}
+                            onMouseDown={(e) => { e.preventDefault(); insertSuggestion(asset); }}
+                            className={`px-3 py-2 text-left text-xs flex items-center gap-2 ${idx === selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`}
+                         >
+                            <span className={`w-2 h-2 rounded-full ${asset.department === DepartmentType.CASTING_WARDROBE ? 'bg-purple-500' : 'bg-zinc-500'}`} />
+                            <div className="flex flex-col">
+                                <span className="font-bold">{asset.title}</span>
+                                <span className="text-[9px] opacity-70">{asset.department}</span>
+                            </div>
+                         </button>
+                     ))}
+                 </div>
+             )}
+        </div>
+    );
+};
 
 const MarkdownToolbar: React.FC<{ 
     onInsert: (syntax: string, wrap?: boolean) => void,
@@ -105,123 +324,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   const [suggestion, setSuggestion] = useState('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // --- Helper: Prompt Resolver ---
-  const resolvePrompt = (text: string) => {
-    if (!text) return text;
-    let resolved = text;
-    
-    try {
-        // 1. Resolve Global Project Asset References (@Zax, @Neo, etc.) AND Dot Syntax (@Zax.Look)
-        if (projectAssets) {
-            // Sort by title length desc
-            const sortedAssets = [...projectAssets].sort((a, b) => b.title.length - a.title.length);
-            
-            for (const asset of sortedAssets) {
-                // Case 1: Dot Syntax (@Asset.Child)
-                const children = projectAssets.filter(c => c.parentId === asset.id);
-                children.sort((a, b) => b.title.length - a.title.length);
-
-                for (const child of children) {
-                    const compoundKey = `@${asset.title}.${child.title}`;
-                    const safeKey = compoundKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const compoundRegex = new RegExp(`${safeKey}\\b`, 'gi');
-                    
-                    if (compoundRegex.test(resolved)) {
-                         // Combine Parent Description with Child Description
-                         resolved = resolved.replace(compoundRegex, `${asset.description}, wearing ${child.description}`);
-                    }
-                }
-
-                // Case 2: Standard Syntax (@Asset)
-                const safeTitle = asset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const standardRegex = new RegExp(`@${safeTitle}\\b`, 'gi');
-                if (standardRegex.test(resolved)) {
-                    let replacement = asset.description;
-                    
-                    // Inheritance Logic
-                    let effectiveStyle = asset.visualStyle;
-                    if (!effectiveStyle && asset.parentId) {
-                         const parent = projectAssets.find(p => p.id === asset.parentId);
-                         if (parent) effectiveStyle = parent.visualStyle;
-                    }
-
-                    if (effectiveStyle) {
-                        replacement += `, visual style: ${effectiveStyle}`;
-                    }
-                    resolved = resolved.replace(standardRegex, replacement);
-                }
-            }
-        }
-
-        // 2. Resolve Contextual Keywords (@character, @parent)
-        if (activeAsset) {
-            // Check inheritance for Active Asset
-            let activeStyle = activeAsset.visualStyle;
-            let parentDesc = "";
-            let parentAsset: ProjectAsset | undefined;
-            
-            if (projectAssets && activeAsset.parentId) {
-                parentAsset = projectAssets.find(p => p.id === activeAsset.parentId);
-                if (parentAsset) {
-                    if (!activeStyle) activeStyle = parentAsset.visualStyle;
-                    parentDesc = parentAsset.description;
-                }
-            }
-
-            let replacement = activeAsset.description;
-            
-            // If child asset (e.g. Wardrobe Look), prepend Parent description for context
-            if (parentAsset) {
-                replacement = `${parentAsset.description}, wearing ${activeAsset.description}`;
-            }
-
-            if (activeStyle) replacement += `, visual style: ${activeStyle}`;
-
-            // Replace @character
-            resolved = resolved.replace(/@character/gi, replacement);
-            
-            // Replace @parent (useful for shots inheriting scene context)
-            if (parentDesc) {
-                 resolved = resolved.replace(/@parent/gi, parentDesc);
-            }
-        }
-    } catch (e) {
-        console.warn("Prompt resolution failed", e);
-    }
-    return resolved;
-  };
-
-  // --- Reference Images Finder ---
-  const resolveReferenceImages = (text: string): string[] => {
-      const results: string[] = [];
-      if (!projectAssets) return results;
-
-      // Find first mentioned asset
-      for (const asset of projectAssets) {
-          if (text.toLowerCase().includes(`@${asset.title.toLowerCase()}`)) {
-              // Priority 1: Refined Images
-              if (refinedImagesMap[asset.id] && refinedImagesMap[asset.id].length > 0) {
-                  return refinedImagesMap[asset.id]; 
-              }
-              // Priority 2: Single Thumbnail
-              const thumb = assetThumbnails[asset.id] || asset.thumbnailUrl;
-              if (thumb) return [thumb];
-          }
-      }
-      
-      // If we are in asset context and referencing @character
-      if (activeAsset && text.toLowerCase().includes('@character')) {
-           if (refinedImagesMap[activeAsset.id] && refinedImagesMap[activeAsset.id].length > 0) {
-              return refinedImagesMap[activeAsset.id];
-           }
-           const thumb = assetThumbnails[activeAsset.id] || activeAsset.thumbnailUrl;
-           if (thumb) return [thumb];
-      }
-      
-      return results;
-  };
-
-
   // --- Handlers ---
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -296,17 +398,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       const history = node.data.history || [];
       if (history.length === 0) return;
       
-      // This is a simple implementation: 
-      // In reality, we'd need an index to track where we are in history.
-      // For now, let's just rotate the array to simulate step back/forward.
-      // Or better: Pop/Shift approach if we just want to go "back".
-      
       // Let's implement "Restore Previous"
       if (direction === 'prev') {
-          // Current state is arguably history[0] if we saved it before change.
-          // Let's assume user wants to go to history[0] if current is new, or history[1] etc.
-          // Simplified: Just load history[0] and rotate it to end?
-          // Actually, let's just cycle.
           const [current, ...rest] = history;
           const rotated = [...rest, current];
           
@@ -387,8 +480,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     setProgressMsg("Writing...");
     setError(null);
     try {
-      const prompt = resolvePrompt(node.data.prompt || "");
-      const result = await GeminiService.generateCreativeText(prompt);
+      const { resolved } = resolvePrompt(node.data.prompt || "", projectAssets, activeAsset);
+      const result = await GeminiService.generateCreativeText(resolved);
       const newHistory = addToHistory('text', result);
       onUpdate(node.id, { ...node.data, text: result, status: 'review', history: newHistory });
     } catch (e) {
@@ -405,18 +498,19 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     setError(null);
     try {
       const rawPrompt = node.data.prompt || (activeAsset ? `@${activeAsset.title}` : "A cinematic shot");
-      const finalPrompt = resolvePrompt(rawPrompt);
+      const { resolved, matchedAssets } = resolvePrompt(rawPrompt, projectAssets, activeAsset);
       const model = node.data.model || MODELS.IMAGE_GEN;
 
       let refImages: string[] = [];
       if (node.data.referenceImageUrl) {
           refImages = [node.data.referenceImageUrl];
       } else {
-          refImages = resolveReferenceImages(rawPrompt);
+          // Use shared util with matchedAssets
+          refImages = resolveReferenceImages(rawPrompt, projectAssets, activeAsset, refinedImagesMap, assetThumbnails, matchedAssets);
       }
 
       const result = await GeminiService.generateImage(
-          finalPrompt,
+          resolved,
           node.data.aspectRatio || "16:9",
           model,
           refImages
@@ -437,8 +531,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       setProgressMsg("Editing...");
       setError(null);
       try {
-          const prompt = resolvePrompt(node.data.prompt || "Enhance this");
-          const result = await GeminiService.editImage(node.data.imageUrl, prompt);
+          const { resolved } = resolvePrompt(node.data.prompt || "Enhance this", projectAssets, activeAsset);
+          const result = await GeminiService.editImage(node.data.imageUrl, resolved);
           const newHistory = addToHistory('image', result);
           onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review', history: newHistory }); 
       } catch(e) {
@@ -455,17 +549,18 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       setError(null);
       try {
           const rawPrompt = node.data.prompt || "A video scene";
-          const finalPrompt = resolvePrompt(rawPrompt);
+          const { resolved, matchedAssets } = resolvePrompt(rawPrompt, projectAssets, activeAsset);
           const model = node.data.model || MODELS.VIDEO_FAST;
           
           let refImage = node.data.imageUrl;
           if (!refImage) {
-               const images = resolveReferenceImages(rawPrompt);
+               // Use shared util with matchedAssets
+               const images = resolveReferenceImages(rawPrompt, projectAssets, activeAsset, refinedImagesMap, assetThumbnails, matchedAssets);
                if (images.length > 0) refImage = images[0];
           }
 
           const result = await GeminiService.generateVideo(
-              finalPrompt,
+              resolved,
               (node.data.aspectRatio as "16:9" | "9:16") || "16:9",
               refImage, // Start
               model,
@@ -495,6 +590,9 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     }
   }, [node.data.status]);
 
+  // ... (rest of render logic remains unchanged)
+  // Re-pasting the render logic for context:
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'imageUrl' | 'lastFrameImageUrl' = 'imageUrl') => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -513,8 +611,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       onUpdate(node.id, { ...node.data, collapsed: !node.data.collapsed });
   }
 
-  // --- Renderers per Type ---
-
   const renderContent = (expanded = false) => {
     switch (node.type) {
       case NodeType.GROUP:
@@ -531,7 +627,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           );
 
       case NodeType.TEXT_INPUT:
-        // ... (existing TEXT_INPUT rendering)
         if (expanded) {
             return (
                 <div className="flex flex-col h-full max-w-7xl mx-auto w-full bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden shadow-2xl">
@@ -609,7 +704,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         );
 
       case NodeType.AI_TEXT_GEN:
-        // ... (existing AI_TEXT_GEN)
         return (
           <div className={`flex flex-col h-full ${expanded ? 'max-w-4xl mx-auto w-full' : ''}`}>
              <div className="flex-1 p-2 overflow-y-auto min-h-0 markdown-preview bg-zinc-950/30 rounded-t">
@@ -685,11 +779,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                          {node.data.tag === 'refinement' && <span className="text-green-500">Refinement Mode</span>}
                      </label>
                      <div className="flex flex-col gap-2 mt-1">
-                        <Input 
+                        <HighlightedInput
                             value={node.data.prompt || ''}
-                            onChange={(e) => onUpdate(node.id, { ...node.data, prompt: e.target.value })}
+                            onChange={(val) => onUpdate(node.id, { ...node.data, prompt: val })}
                             placeholder={activeAsset ? `@${activeAsset.title} in a scene...` : "A futuristic city..."}
-                            className="flex-1"
+                            className={`${expanded ? 'h-20' : 'h-14'} mb-2 w-full bg-zinc-900 rounded border border-zinc-700`}
+                            projectAssets={projectAssets}
+                            activeAsset={activeAsset}
                         />
                         <div className="flex gap-2">
                              <Select 
@@ -718,7 +814,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         );
 
       case NodeType.AI_IMAGE_EDIT:
-         // ... (existing AI_IMAGE_EDIT)
           return (
             <div className={`p-3 space-y-2 ${expanded ? 'h-full flex flex-col' : ''}`}>
                  <div 
@@ -811,11 +906,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
 
                  <div className={`${expanded ? 'max-w-2xl mx-auto w-full pt-4' : 'shrink-0'}`}>
                      <label className="text-xs text-zinc-400 uppercase font-bold">Prompt & Config</label>
-                     <TextArea 
+                     <HighlightedInput
                             value={node.data.prompt || ''}
-                            onChange={(e) => onUpdate(node.id, { ...node.data, prompt: e.target.value })}
+                            onChange={(val) => onUpdate(node.id, { ...node.data, prompt: val })}
                             placeholder={activeAsset ? `@${activeAsset.title} running...` : "A cat flying in space..."}
-                            className={`${expanded ? 'h-20' : 'h-14'} text-xs mb-2 w-full`}
+                            className={`${expanded ? 'h-20' : 'h-14'} mb-2 w-full bg-zinc-900 rounded border border-zinc-700`}
+                            projectAssets={projectAssets}
+                            activeAsset={activeAsset}
                     />
                     
                      <div className="flex flex-col gap-2">

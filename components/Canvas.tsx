@@ -2,9 +2,10 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData } from '../types';
 import { NodeItem } from './NodeItem';
-import { Button, Input } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile } from 'lucide-react';
+import { Button, Input, Modal } from './UI';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
+import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 
 interface CanvasProps {
   nodes: FlowNode[];
@@ -59,6 +60,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string | null } | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number, y: number, visible: boolean, search: string, selectedIndex: number } | null>(null);
 
+  // Debug State
+  const [showDebugModal, setShowDebugModal] = useState(false);
+  const [debugTrace, setDebugTrace] = useState<{resolved: string, trace: string[], referenceImages: string[]} | null>(null);
+
   // State Tracking
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const isDraggingRef = useRef(false);
@@ -91,11 +96,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       };
 
       // Spiraling / Grid search pattern
-      // Simple strategy: check preferred, then move right, then move down
       while (isColliding(x, y) && attempts < maxAttempts) {
           x += width + padding;
-          // If we go too far right (arbitrary), wrap down
-          // For simplicity in this logic, we just shift right then shift down if multiple failures
           if (attempts % 5 === 0 && attempts > 0) {
               x = preferredX;
               y += height + padding;
@@ -270,7 +272,6 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const frameSelection = (targetIds?: string[]) => {
-      // Use set timeout to allow React to render new nodes first
       setTimeout(() => {
           const idsToFrame = targetIds || (selectedNodeIds.length > 0 ? selectedNodeIds : visibleNodes.map(n => n.id));
           if (idsToFrame.length === 0) {
@@ -279,7 +280,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               return;
           }
 
-          const targets = nodes.filter(n => idsToFrame.includes(n.id)); // Use latest 'nodes' ref if possible, but here we depend on 'visibleNodes' which updates
+          const targets = nodes.filter(n => idsToFrame.includes(n.id));
           if (targets.length === 0) return;
 
           const minX = Math.min(...targets.map(n => n.position.x));
@@ -313,7 +314,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       const worldX = (clientX - rect.left - offset.x) / scale;
       const worldY = (clientY - rect.top - offset.y) / scale;
 
-      // Smart Placement if likely to overlap
       const pos = findSmartPosition(worldX, worldY, 300, 400);
 
       const newNode: FlowNode = {
@@ -331,9 +331,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       setNodes(prev => [...prev, newNode]);
       setSelectedNodeIds([newNode.id]);
   };
-
-  // --- Callbacks for NodeItem ---
-  // ... (handleNodeSelect, onNodeDragStart ... unchanged)
 
   const handleNodeSelect = useCallback((e: React.MouseEvent, id: string) => {
       if (isDraggingRef.current) return;
@@ -394,11 +391,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (contextMenu && contextMenu.nodeId) {
           const node = nodes.find(n => n.id === contextMenu.nodeId);
           if (node && node.data.imageUrl) {
-               // Use "Below" position
                const width = 300;
                const height = 400;
                const pos = findBelowPosition(width, height);
-               
                const model = MODELS.VIDEO_HQ;
                const capabilities = VIDEO_MODEL_CAPABILITIES[model];
                const supportsLastFrame = capabilities?.supportsLastFrame || false;
@@ -414,13 +409,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                    height: height,
                    data: {
                        prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
-                       imageUrl: node.data.imageUrl, // Seed image
-                       // Loop it if supported
+                       imageUrl: node.data.imageUrl, 
                        lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
                        model: model,
                        aspectRatio: '16:9',
                        status: 'draft',
-                       duration: '8', // Prefer long for turntable
+                       duration: '8', 
                        withAudio: false
                    }
                };
@@ -446,21 +440,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                    { name: 'Contempt', prompt: 'face closeup, expression of scorn, smirk, one raised eyebrow' }
                ];
 
-               // Group Configuration
                const columns = 4;
-               const rows = 2; // Math.ceil(7 / 4)
+               const rows = 2; 
                const nodeW = 300;
                const nodeH = 400;
                const gap = 20;
                const padding = 20;
                
                const groupWidth = (nodeW * columns) + (gap * (columns - 1)) + (padding * 2);
-               const groupHeight = (nodeH * rows) + (gap * (rows - 1)) + (padding * 2) + 40; // 40 for header
+               const groupHeight = (nodeH * rows) + (gap * (rows - 1)) + (padding * 2) + 40; 
 
-               // Find position for the GROUP
                const groupPos = findBelowPosition(groupWidth, groupHeight);
 
-               // Create Group Node
                const groupId = `group-expr-${Date.now()}`;
                const groupNode: FlowNode = {
                     id: groupId,
@@ -470,32 +461,26 @@ export const Canvas: React.FC<CanvasProps> = ({
                     position: groupPos,
                     width: groupWidth,
                     height: groupHeight,
-                    data: {
-                        label: `Expressions Batch`,
-                        collapsed: false
-                    }
+                    data: { label: `Expressions Batch`, collapsed: false }
                };
                
-               // Model choice: Use fast video
                const targetModel = MODELS.VIDEO_FAST;
                const capabilities = VIDEO_MODEL_CAPABILITIES[targetModel];
                const minDuration = capabilities ? capabilities.durations[0] : "4";
 
                const newNodes: FlowNode[] = [];
-               
                emotions.forEach((emo, idx) => {
                    const col = idx % columns;
                    const row = Math.floor(idx / columns);
-                   
                    const childX = groupPos.x + padding + (col * (nodeW + gap));
-                   const childY = groupPos.y + 60 + (row * (nodeH + gap)); // 60 offset for header
+                   const childY = groupPos.y + 60 + (row * (nodeH + gap)); 
 
                    newNodes.push({
                        id: `vid-expr-${Date.now()}-${idx}`,
                        type: NodeType.AI_VIDEO_GEN,
                        department: currentDept,
                        assetId: node.assetId,
-                       parentId: groupId, // Link to group
+                       parentId: groupId, 
                        position: { x: childX, y: childY },
                        width: nodeW,
                        height: nodeH,
@@ -505,8 +490,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                            model: targetModel,
                            aspectRatio: '16:9',
                            status: 'draft',
-                           duration: minDuration, // Force shortest
-                           withAudio: false // Force silent
+                           duration: minDuration, 
+                           withAudio: false
                        }
                    });
                });
@@ -520,7 +505,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const deleteNode = useCallback((id: string) => {
-      saveHistory(); // Snapshot before delete
+      saveHistory(); 
       setNodes(prev => {
           const toDelete = new Set([id]);
           prev.forEach(n => { if (n.parentId === id) toDelete.add(n.id) });
@@ -533,9 +518,42 @@ export const Canvas: React.FC<CanvasProps> = ({
       setNodes(prev => prev.map(n => n.id === id ? { ...n, data } : n));
   }, [setNodes]);
 
+  // --- Debug Logic ---
+  const handleDebug = () => {
+      if (selectedNodeIds.length === 0) {
+          alert("Select a node to debug its prompt resolution.");
+          return;
+      }
+      const node = nodes.find(n => n.id === selectedNodeIds[0]);
+      if (!node) return;
+
+      const rawPrompt = node.data.prompt || node.data.text || "";
+      const { resolved, matchedAssets, trace } = resolvePrompt(rawPrompt, projectAssets, activeAsset, true);
+      
+      // Also resolve images
+      let referenceImages: string[] = [];
+      if (node.data.referenceImageUrl) {
+          referenceImages = [node.data.referenceImageUrl];
+      } else {
+          // Pass matchedAssets
+          referenceImages = resolveReferenceImages(
+              rawPrompt, 
+              projectAssets, 
+              activeAsset, 
+              refinedImagesMap, 
+              // We don't have assetThumbnails directly here in a clean way unless passed, 
+              // but we can try to infer if we had access to App state.
+              // For debug, let's assume we pass empty thumbnails map or rely on ProjectAsset.thumbnailUrl
+              {}, 
+              matchedAssets
+          );
+      }
+
+      setDebugTrace({ resolved, trace, referenceImages });
+      setShowDebugModal(true);
+  }
+
   // --- Mouse Handlers ---
-  // ... (handleMouseDown, handleMouseMove, handleMouseUp, handleWheel ... unchanged)
-  
   const handleMouseDown = (e: React.MouseEvent) => {
     if (contextMenu) setContextMenu(null);
     if (tabMenu) setTabMenu(null);
@@ -798,7 +816,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                         isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl}
                         isDragOver={dragTargetGroupId === node.id}
                         projectAssets={projectAssets}
-                        assetThumbnails={onSetThumbnail ? {} : undefined} // Not needed for Canvas rendering directly, but can be passed if needed
+                        assetThumbnails={onSetThumbnail ? {} : undefined} 
                         refinedImagesMap={refinedImagesMap}
                     />
                 ))}
@@ -941,7 +959,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             </div>
         )}
 
-        {/* Tab Menu ... (unchanged) */}
+        {/* Tab Menu */}
         {tabMenu && (
             <div 
                 className="fixed z-50 flex flex-col bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-64 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
@@ -984,7 +1002,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             </div>
         )}
 
-        {/* Floating Toolbar ... (unchanged) */}
+        {/* Floating Toolbar with Debug Button */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40">
             <div className="flex items-center gap-1 px-2 border-r border-zinc-700">
                 <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.TEXT_INPUT, window.innerWidth/2, window.innerHeight/2)} title="Add Note">
@@ -1016,6 +1034,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                 >
                     <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/>
                 </Button>
+                <Button 
+                    variant="ghost" 
+                    onClick={handleDebug}
+                    title="Debug Prompt Resolution"
+                    className="hover:text-yellow-400"
+                >
+                    <Bug size={16} />
+                </Button>
             </div>
         </div>
         
@@ -1025,6 +1051,39 @@ export const Canvas: React.FC<CanvasProps> = ({
              <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">F to Frame</div>
              <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">Ctrl+Z Undo</div>
         </div>
+
+        {/* Debug Modal */}
+        {showDebugModal && debugTrace && (
+            <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl">
+                <div className="flex flex-col gap-4 max-h-[70vh] overflow-hidden">
+                    <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                        <div className="text-xs font-bold text-zinc-500 mb-1">FINAL RESOLVED PROMPT</div>
+                        <div className="font-mono text-sm text-green-400 whitespace-pre-wrap">{debugTrace.resolved}</div>
+                    </div>
+                    
+                    {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && (
+                        <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                            <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div>
+                            <div className="flex gap-2 overflow-x-auto pb-2">
+                                {debugTrace.referenceImages.map((img, i) => (
+                                    <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group">
+                                        <img src={img} className="w-full h-full object-cover" />
+                                        <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white p-1 text-center truncate">Ref #{i+1}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2">
+                        <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div>
+                        {debugTrace.trace.map((line, i) => (
+                            <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div>
+                        ))}
+                    </div>
+                </div>
+            </Modal>
+        )}
     </div>
   );
 };
