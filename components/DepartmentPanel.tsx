@@ -1,8 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { DepartmentType, ProjectAsset, FlowNode } from '../types';
 import { DEPARTMENTS } from '../constants';
-import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard, Shirt, Trash2, Archive, RotateCcw } from 'lucide-react';
+import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard, Shirt, Trash2, Archive, RotateCcw, Scissors } from 'lucide-react';
 
 interface DepartmentPanelProps {
   department: DepartmentType;
@@ -71,22 +71,43 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   const assetLabel = deptConfig?.assetLabel || "Item";
 
   // Filter assets for this department and archive status
-  const deptAssets = assets.filter(a => a.department === department && (showArchived ? true : (a.status !== 'archived')));
+  // Shared Context: Story, Production, and Editorial share assets
+  const deptAssets = useMemo(() => {
+      const sharedContexts = [DepartmentType.STORY, DepartmentType.PRODUCTION, DepartmentType.EDITORIAL];
+      const isSharedContext = sharedContexts.includes(department);
+
+      return assets.filter(a => {
+          // Archive Filter
+          const isArchived = a.status === 'archived';
+          if (!showArchived && isArchived) return false;
+          
+          if (isSharedContext) {
+              // If we are in a shared context, show assets from any shared context
+              return sharedContexts.includes(a.department);
+          }
+
+          // Exact Match for other departments
+          return a.department === department;
+      });
+  }, [assets, department, showArchived]);
 
   // Helper to count items in an asset (for UI info)
   const getAssetNodeCount = (assetId: string) => nodes.filter(n => n.assetId === assetId).length;
 
   const getIconForAsset = (asset: ProjectAsset) => {
-      // Logic for child icons
-      if (department === DepartmentType.CASTING_WARDROBE && asset.parentId) {
+      // Logic for child icons specific to Casting
+      if (asset.department === DepartmentType.CASTING_WARDROBE && asset.parentId) {
           return <Shirt size={16} />;
       }
-      switch(department) {
+      
+      // Use asset's own department for icon, not the current view
+      switch(asset.department) {
           case DepartmentType.CASTING_WARDROBE: return <User size={16} />;
           case DepartmentType.SET_DESIGN: return <MapPin size={16} />;
           case DepartmentType.WRITERS_ROOM: return <FileText size={16} />;
           case DepartmentType.STORY: return <Layout size={16} />;
           case DepartmentType.PRODUCTION: return <Clapperboard size={16} />;
+          case DepartmentType.EDITORIAL: return <Scissors size={16} />;
           default: return <Box size={16} />;
       }
   }
@@ -125,9 +146,11 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   };
 
   // --- Recursive/Hierarchical Rendering ---
+  // Allow hierarchy for Shared Contexts + Casting
   const isHierarchical = 
     department === DepartmentType.STORY || 
     department === DepartmentType.PRODUCTION || 
+    department === DepartmentType.EDITORIAL ||
     department === DepartmentType.CASTING_WARDROBE;
 
   const renderAssetRow = (asset: ProjectAsset, depth = 0) => {
@@ -251,6 +274,8 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   };
 
   // Get Root Assets (no parent)
+  // For shared views, we only show Root Assets (Sequences/Scenes) at the top level
+  // Children (Shots) are shown via recursion
   const rootAssets = isHierarchical ? deptAssets.filter(a => !a.parentId) : deptAssets;
 
   return (
