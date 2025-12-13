@@ -73,7 +73,7 @@ export interface TimelineClip {
     id: string;
     sourceNodeId: string; // Trace back to generation node
     mediaUrl: string;
-    mediaType: 'image' | 'video';
+    mediaType: 'image' | 'video' | 'audio';
     start: number; // Start time in timeline (seconds)
     duration: number; // Duration in timeline (seconds)
     offset: number; // Start time in source media (trimming)

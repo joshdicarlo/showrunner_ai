@@ -35,6 +35,7 @@ export interface StoryElement {
     title: string;
     description: string;
     type: string; // Plot Point, Theme, Key Event
+    shots?: StoryElement[]; // Nested shots
 }
 
 /**
@@ -346,19 +347,41 @@ export const extractLocationsFromScript = async (scriptText: string): Promise<Lo
 /**
  * Extract Story Elements (Scenes/Beats) from Script
  */
-export const extractStoryElementsFromScript = async (scriptText: string, knownCharacters?: string[]): Promise<StoryElement[]> => {
+export const extractStoryElementsFromScript = async (scriptText: string, knownCharacters?: string[], includeShots: boolean = false): Promise<StoryElement[]> => {
     const ai = createAI();
     try {
         let prompt = `Analyze the following script/story text and extract key story beats or scenes.
         
         Detailed Requirements:
         1. Flush out the scene description significantly. Include action, location, mood, and key interactions.
-        2. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them using the format @CharacterName (e.g. "@Zax walks in").
+        2. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them using the format @CharacterName (e.g. "@Zax walks in") in the description.
         3. Identify the type: "Scene", "Sequence", or "Plot Point".
+        4. The Title MUST NOT contain '@' symbols (e.g. use "Zax enters", NOT "@Zax enters").
+        ${includeShots ? '5. For each Scene, also identify a list of "Shots". Shot Titles MUST start with "Shot #:" (e.g. "Shot 1: Wide Establish").' : ''}
 
         Input Text:
         "${scriptText.slice(0, 200000)}" 
         `; 
+
+        const schemaProperties: any = {
+            title: { type: Type.STRING, description: "Scene Heading or Beat Title (No @ symbols)" },
+            description: { type: Type.STRING, description: "Detailed description with @Character references" },
+            type: { type: Type.STRING, description: "Scene, Plot Point, or Theme" }
+        };
+
+        if (includeShots) {
+            schemaProperties.shots = {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        title: { type: Type.STRING, description: "Must start with Shot #:" },
+                        description: { type: Type.STRING },
+                        type: { type: Type.STRING }
+                    }
+                }
+            };
+        }
 
         const response = await retryWithBackoff(async () => {
             return await ai.models.generateContent({
@@ -370,11 +393,7 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
                         type: Type.ARRAY,
                         items: {
                             type: Type.OBJECT,
-                            properties: {
-                                title: { type: Type.STRING, description: "Scene Heading or Beat Title" },
-                                description: { type: Type.STRING, description: "Detailed description with @Character references" },
-                                type: { type: Type.STRING, description: "Scene, Plot Point, or Theme" }
-                            }
+                            properties: schemaProperties
                         }
                     }
                 }
@@ -398,7 +417,7 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
         
         Detailed Requirements:
         1. For each shot, provide a Title MUST start with the shot number (e.g., "Shot 1: Wide Establish").
-        2. Do NOT use the '@' symbol in the Title (e.g. use "Shot 1: Zax's Revenge", NOT "Shot 1: @Zax's Revenge").
+        2. The Title MUST NOT contain '@' symbols (e.g. use "Zax's Revenge", NOT "@Zax's Revenge").
         3. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them in the description using the format @CharacterName (e.g. "@Zax looks up").
         4. Type should be "Shot".
 

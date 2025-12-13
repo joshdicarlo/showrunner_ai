@@ -1,7 +1,8 @@
 
+
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ProjectAsset, FlowNode, TimelineClip, NodeType } from '../types';
-import { Play, Pause, Scissors, Trash2, SkipBack, Plus, Layers, Image as ImageIcon, Video, Volume2, MousePointer2, Filter, Music, Mic, CheckCircle, AlertCircle, Archive, MoreHorizontal, Undo } from 'lucide-react';
+import { Play, Pause, Scissors, Trash2, SkipBack, Plus, Layers, Image as ImageIcon, Video, Volume2, MousePointer2, Filter, Music, Mic, CheckCircle, AlertCircle, Archive, MoreHorizontal, Undo, GripHorizontal, Edit2 } from 'lucide-react';
 
 interface EditorTimelineProps {
     sequenceAsset: ProjectAsset;
@@ -12,46 +13,84 @@ interface EditorTimelineProps {
     onUpdateNode: (nodeId: string, data: any) => void;
 }
 
-const TRACK_CONFIG = [
-    { id: 0, label: 'V1', type: 'video' },
-    { id: 1, label: 'V2', type: 'video' },
-    { id: 2, label: 'A1', type: 'audio' },
-    { id: 3, label: 'A2', type: 'audio' },
+interface TrackConfig {
+    id: number;
+    label: string;
+    type: 'video' | 'audio';
+    height: number;
+}
+
+const DEFAULT_TRACKS: TrackConfig[] = [
+    { id: 0, label: 'V1', type: 'video', height: 80 },
+    { id: 1, label: 'V2', type: 'video', height: 80 },
+    { id: 2, label: 'A1', type: 'audio', height: 64 },
+    { id: 3, label: 'A2', type: 'audio', height: 64 },
 ];
 
 export const EditorTimeline: React.FC<EditorTimelineProps> = ({ 
     sequenceAsset, filterAssetId, projectAssets, projectNodes, onUpdateAsset, onUpdateNode
 }) => {
-    // Timeline State
+    // --- State ---
     const [clips, setClips] = useState<TimelineClip[]>(sequenceAsset.timelineData?.clips || []);
     const [history, setHistory] = useState<TimelineClip[][]>([]);
+    const [tracks, setTracks] = useState<TrackConfig[]>(DEFAULT_TRACKS);
     
+    // Viewport & Layout
     const [currentTime, setCurrentTime] = useState(0);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
     const [scale, setScale] = useState(20); // Pixels per second
+    const [timelineHeight, setTimelineHeight] = useState(320);
+    const [scrollLeft, setScrollLeft] = useState(0);
+    const [scrollTop, setScrollTop] = useState(0);
+
+    // Playback
+    const [isPlaying, setIsPlaying] = useState(false);
+    
+    // Selection & Editing
+    const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
     const [binFilter, setBinFilter] = useState<'approved' | 'review' | 'all'>('approved');
     const [tool, setTool] = useState<'select' | 'split'>('select');
     
     // Interaction State
     const [isScrubbing, setIsScrubbing] = useState(false);
-    const [draggingClip, setDraggingClip] = useState<{ id: string, startX: number, originalStart: number, originalTrack: number } | null>(null);
+    const [draggingClips, setDraggingClips] = useState<{ id: string, originalStart: number, originalTrack: number }[] | null>(null);
+    const [dragStartX, setDragStartX] = useState(0);
+    const [dragStartY, setDragStartY] = useState(0);
+    
+    // Marquee
+    const [marqueeBox, setMarqueeBox] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
+    
+    // Resizing
+    const [isResizingTimeline, setIsResizingTimeline] = useState(false);
+    const [resizingTrackId, setResizingTrackId] = useState<number | null>(null);
+    const [editingTrackId, setEditingTrackId] = useState<number | null>(null);
+
+    // Context Menu
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
 
-    // Playback Refs
+    // Refs
     const requestRef = useRef<number | undefined>(undefined);
     const startTimeRef = useRef<number>(0);
     const lastTimeRef = useRef<number>(0);
     const videoRefs = useRef<Record<string, HTMLVideoElement>>({});
-    const timelineContainerRef = useRef<HTMLDivElement>(null);
-    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    
+    // Layout Refs for Sync Scroll
+    const headerRef = useRef<HTMLDivElement>(null);
+    const rulerRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const timelineRef = useRef<HTMLDivElement>(null);
+
+    // --- Sync Scrolling ---
+    const handleContentScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const target = e.currentTarget;
+        setScrollLeft(target.scrollLeft);
+        setScrollTop(target.scrollTop);
+        
+        if (headerRef.current) headerRef.current.scrollTop = target.scrollTop;
+        if (rulerRef.current) rulerRef.current.scrollLeft = target.scrollLeft;
+    };
 
     // --- Media Bin Logic ---
     const binItems = useMemo(() => {
-        // Find relevant assets:
-        // If filterAssetId is present, we only show media for THAT asset.
-        // Otherwise, we show media for all children of the Sequence.
-        
         let targetAssets = [];
         if (filterAssetId) {
             targetAssets = projectAssets.filter(a => a.id === filterAssetId);
@@ -68,8 +107,8 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                 
                 const s = n.data.status || 'draft';
                 if (binFilter === 'approved') return s === 'approved';
-                if (binFilter === 'review') return s === 'review'; // Exclusive
-                return true; // 'all'
+                if (binFilter === 'review') return s === 'review'; 
+                return true; 
             });
             
             validNodes.forEach(node => {
@@ -83,7 +122,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         return items;
     }, [sequenceAsset, filterAssetId, projectAssets, projectNodes, binFilter]);
 
-    // --- Undo Logic ---
+    // --- History Logic ---
     const saveToHistory = useCallback((newClips: TimelineClip[]) => {
         setHistory(prev => {
             const newHistory = [...prev, clips];
@@ -132,9 +171,8 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         };
     }, [isPlaying]);
 
-    // Save on change
+    // Auto-Save
     useEffect(() => {
-        // Debounce save slightly? Or just save.
         onUpdateAsset({
             ...sequenceAsset,
             timelineData: {
@@ -144,40 +182,146 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         });
     }, [clips]);
 
-    // Global Interaction Handlers (Scrub & Drag)
+    // --- Mouse Interaction Handlers ---
+    
+    // Global Mouse Move/Up for Dragging/Scrubbing/Resizing
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
-            // Scrubbing
-            if (isScrubbing && timelineContainerRef.current) {
-                const rect = timelineContainerRef.current.getBoundingClientRect();
-                // We need to account for scrollLeft of the container
-                const scrollLeft = scrollContainerRef.current?.scrollLeft || 0;
-                const x = e.clientX - rect.left + scrollLeft;
-                setCurrentTime(Math.max(0, x / scale));
+            // 1. Scrubbing
+            if (isScrubbing && timelineRef.current) {
+                const rect = timelineRef.current.getBoundingClientRect();
+                const headerWidth = 96; // Fixed header width
+                const relativeX = e.clientX - rect.left - headerWidth + scrollLeft;
+                setCurrentTime(Math.max(0, relativeX / scale));
             }
 
-            // Dragging Clip
-            if (draggingClip && timelineContainerRef.current) {
-                const deltaX = e.clientX - draggingClip.startX;
-                const deltaTime = deltaX / scale;
+            // 2. Timeline Resizing (Height)
+            if (isResizingTimeline) {
+                const newHeight = window.innerHeight - e.clientY;
+                setTimelineHeight(Math.max(150, Math.min(newHeight, window.innerHeight - 100)));
+            }
+
+            // 3. Track Resizing
+            if (resizingTrackId !== null) {
+                setTracks(prev => prev.map(t => {
+                    if (t.id === resizingTrackId) {
+                        // We need approximate height logic here, simplified for dragging
+                        // Using movementY is cleaner if we had start pos, but this works
+                        return { ...t, height: Math.max(32, t.height + e.movementY) };
+                    }
+                    return t;
+                }));
+            }
+
+            // 4. Clip Dragging
+            if (draggingClips && timelineRef.current) {
+                const deltaX = (e.clientX - dragStartX) / scale;
+                const deltaYPixel = e.clientY - dragStartY;
                 
+                // Track Switch Logic
+                // We need to find which track we are hovering over.
+                // Since tracks have variable heights, we iterate.
+                let targetTrackId = draggingClips[0].originalTrack;
+                
+                // Calculate offset from the original track center to finding new track
+                // This is complex because each track has a different height.
+                // Simple heuristic: If we moved vertically enough to cross a threshold?
+                // Let's use simple index steps if all tracks were same height, but they aren't.
+                // Better: Check valid drop targets based on mouse Y relative to timeline container.
+                
+                if (contentRef.current) {
+                    const rect = contentRef.current.getBoundingClientRect();
+                    const relativeY = e.clientY - rect.top + scrollTop;
+                    
+                    let currentY = 0;
+                    for (const track of tracks) {
+                        if (relativeY >= currentY && relativeY < currentY + track.height) {
+                            targetTrackId = track.id;
+                            break;
+                        }
+                        currentY += track.height;
+                    }
+                }
+
                 setClips(prev => prev.map(c => {
-                    if (c.id === draggingClip.id) {
+                    const dragging = draggingClips.find(dc => dc.id === c.id);
+                    if (dragging) {
+                        // Constraint Check: Media Type
+                        const targetTrack = tracks.find(t => t.id === targetTrackId);
+                        const isCompatible = targetTrack && 
+                            ((c.mediaType === 'video' && targetTrack.type === 'video') || 
+                             (c.mediaType === 'audio' && targetTrack.type === 'audio') ||
+                             (c.mediaType === 'image' && targetTrack.type === 'video')); // Images go on video tracks
+
                         return {
                             ...c,
-                            start: Math.max(0, draggingClip.originalStart + deltaTime)
+                            start: Math.max(0, dragging.originalStart + deltaX),
+                            track: isCompatible ? targetTrackId : dragging.originalTrack
                         };
                     }
                     return c;
                 }));
             }
+
+            // 5. Marquee Selection
+            if (marqueeBox && contentRef.current) {
+                const rect = contentRef.current.getBoundingClientRect();
+                const currentX = e.clientX - rect.left + scrollLeft;
+                const currentY = e.clientY - rect.top + scrollTop;
+                
+                const w = currentX - marqueeBox.x;
+                const h = currentY - marqueeBox.y;
+                
+                setMarqueeBox(prev => prev ? { ...prev, w, h } : null);
+            }
         };
 
-        const handleMouseUp = () => {
+        const handleMouseUp = (e: MouseEvent) => {
             if (isScrubbing) setIsScrubbing(false);
-            if (draggingClip) {
-                saveToHistory(clips); // Commit drag
-                setDraggingClip(null);
+            if (isResizingTimeline) setIsResizingTimeline(false);
+            setResizingTrackId(null);
+            
+            if (draggingClips) {
+                saveToHistory(clips);
+                setDraggingClips(null);
+            }
+
+            // Finalize Marquee
+            if (marqueeBox) {
+                // Calculate selection
+                const boxX = marqueeBox.w < 0 ? marqueeBox.x + marqueeBox.w : marqueeBox.x;
+                const boxY = marqueeBox.h < 0 ? marqueeBox.y + marqueeBox.h : marqueeBox.y;
+                const boxW = Math.abs(marqueeBox.w);
+                const boxH = Math.abs(marqueeBox.h);
+
+                const newSelection = new Set<string>();
+                if (e.shiftKey || e.ctrlKey) {
+                    selectedClipIds.forEach(id => newSelection.add(id));
+                }
+
+                let currentTrackY = 0;
+                tracks.forEach(track => {
+                    const trackTop = currentTrackY;
+                    const trackBottom = currentTrackY + track.height;
+                    
+                    // Check track vertical intersection
+                    if (boxY < trackBottom && boxY + boxH > trackTop) {
+                        // Check clips in this track
+                        clips.filter(c => c.track === track.id).forEach(clip => {
+                            const clipStartPx = clip.start * scale;
+                            const clipEndPx = (clip.start + clip.duration) * scale;
+                            
+                            // Horizontal intersection
+                            if (boxX < clipEndPx && boxX + boxW > clipStartPx) {
+                                newSelection.add(clip.id);
+                            }
+                        });
+                    }
+                    currentTrackY += track.height;
+                });
+                
+                setSelectedClipIds(newSelection);
+                setMarqueeBox(null);
             }
         };
         
@@ -186,9 +330,12 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                 e.preventDefault();
                 handleUndo();
             }
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (selectedClipIds.size > 0) handleDelete();
+            }
         }
 
-        if (isScrubbing || draggingClip) {
+        if (isScrubbing || isResizingTimeline || resizingTrackId !== null || draggingClips || marqueeBox) {
             window.addEventListener('mousemove', handleMouseMove);
             window.addEventListener('mouseup', handleMouseUp);
         }
@@ -200,7 +347,8 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             window.removeEventListener('mouseup', handleMouseUp);
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [isScrubbing, draggingClip, scale, clips, handleUndo, saveToHistory]);
+    }, [isScrubbing, draggingClips, dragStartX, dragStartY, clips, handleUndo, saveToHistory, scale, tracks, isResizingTimeline, resizingTrackId, marqueeBox, selectedClipIds, scrollLeft, scrollTop]);
+
 
     // --- Actions ---
 
@@ -210,18 +358,15 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         let cursor = 0;
         const newClips: TimelineClip[] = [];
 
-        // Sort children by title (Shot 1, Shot 2...) or simple creation order
         const childAssets = projectAssets
             .filter(a => a.parentId === sequenceAsset.id)
             .sort((a, b) => a.title.localeCompare(b.title, undefined, {numeric: true}));
 
         childAssets.forEach(asset => {
-            // Find LATEST approved media
             const candidates = projectNodes.filter(n => n.assetId === asset.id && n.data.status === 'approved');
-            // Sort by creation time (using ID timestamp) descending
-            candidates.sort((a, b) => b.id.localeCompare(a.id));
+            candidates.sort((a, b) => b.id.localeCompare(a.id)); // Newest first
             
-            const selected = candidates[0]; // Take most recent approved
+            const selected = candidates[0]; 
             
             if (selected) {
                 const isVideo = selected.type === NodeType.AI_VIDEO_GEN;
@@ -236,7 +381,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                     start: cursor,
                     duration: duration,
                     offset: 0,
-                    track: 0, // Assemble to V1
+                    track: 0, 
                     label: asset.title,
                     thumbnail: selected.data.imageUrl
                 });
@@ -249,46 +394,91 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
     };
 
     const handleSplit = () => {
-        const target = clips.find(c => currentTime > c.start && currentTime < c.start + c.duration && (selectedClipId ? c.id === selectedClipId : true));
-        if (!target) return;
+        // Split all selected clips at playhead
+        const toSplit = clips.filter(c => selectedClipIds.has(c.id));
+        const target = toSplit.length > 0 ? toSplit : clips.filter(c => c.track === 0); // Default to V1 if no selection
 
-        const splitPoint = currentTime - target.start;
-        if (splitPoint <= 0.1 || splitPoint >= target.duration - 0.1) return;
-        
-        const left: TimelineClip = {
-            ...target,
-            duration: splitPoint
-        };
-        
-        const right: TimelineClip = {
-            ...target,
-            id: `clip-${Date.now()}-split`,
-            start: currentTime,
-            duration: target.duration - splitPoint,
-            offset: target.offset + splitPoint
-        };
-        
-        const newClips = clips.map(c => c.id === target.id ? left : c).concat(right);
-        saveToHistory(newClips);
+        let newClips = [...clips];
+        let hasSplit = false;
+
+        target.forEach(clip => {
+            if (currentTime > clip.start && currentTime < clip.start + clip.duration) {
+                const splitPoint = currentTime - clip.start;
+                if (splitPoint <= 0.1 || splitPoint >= clip.duration - 0.1) return;
+
+                const left: TimelineClip = { ...clip, duration: splitPoint };
+                const right: TimelineClip = {
+                    ...clip,
+                    id: `clip-${Date.now()}-${Math.random()}`,
+                    start: currentTime,
+                    duration: clip.duration - splitPoint,
+                    offset: clip.offset + splitPoint
+                };
+                
+                newClips = newClips.filter(c => c.id !== clip.id).concat([left, right]);
+                hasSplit = true;
+            }
+        });
+
+        if (hasSplit) saveToHistory(newClips);
     };
 
     const handleDelete = () => {
-        if (!selectedClipId) return;
-        const newClips = clips.filter(c => c.id !== selectedClipId);
+        if (selectedClipIds.size === 0) return;
+        const newClips = clips.filter(c => !selectedClipIds.has(c.id));
         saveToHistory(newClips);
-        setSelectedClipId(null);
+        setSelectedClipIds(new Set());
     };
 
-    // --- Drag & Drop from Bin ---
-    
+    // --- Event Handlers ---
+
+    const handleClipMouseDown = (e: React.MouseEvent, clipId: string) => {
+        e.stopPropagation();
+        
+        // Multi-select logic
+        const newSelection = new Set(selectedClipIds);
+        if (e.shiftKey || e.ctrlKey) {
+            if (newSelection.has(clipId)) newSelection.delete(clipId);
+            else newSelection.add(clipId);
+        } else {
+            if (!newSelection.has(clipId)) {
+                newSelection.clear();
+                newSelection.add(clipId);
+            }
+        }
+        setSelectedClipIds(newSelection);
+
+        if (tool === 'select') {
+            setDragStartX(e.clientX);
+            setDragStartY(e.clientY);
+            
+            // Prepare dragging for ALL selected clips
+            const dragging = clips
+                .filter(c => newSelection.has(c.id))
+                .map(c => ({ id: c.id, originalStart: c.start, originalTrack: c.track }));
+            
+            setDraggingClips(dragging);
+        }
+    };
+
+    const handleTimelineMouseDown = (e: React.MouseEvent) => {
+        if (e.button !== 0) return;
+        // Start Marquee
+        if (contentRef.current) {
+            const rect = contentRef.current.getBoundingClientRect();
+            const x = e.clientX - rect.left + scrollLeft;
+            const y = e.clientY - rect.top + scrollTop;
+            setMarqueeBox({ x, y, w: 0, h: 0 });
+            
+            if (!e.shiftKey && !e.ctrlKey) {
+                setSelectedClipIds(new Set());
+            }
+        }
+    };
+
     const handleDragStart = (e: React.DragEvent, item: typeof binItems[0]) => {
         e.dataTransfer.setData('application/json', JSON.stringify(item));
         e.dataTransfer.effectAllowed = 'copy';
-    };
-
-    const handleDragOver = (e: React.DragEvent) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
     };
 
     const handleDrop = (e: React.DragEvent, trackId: number) => {
@@ -297,91 +487,62 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         if (!data) return;
 
         const item = JSON.parse(data) as typeof binItems[0];
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // Adjust for scrollLeft
-        const scrollLeft = scrollContainerRef.current?.scrollLeft || 0;
-        const x = e.clientX - rect.left + scrollLeft; 
-        const dropTime = Math.max(0, x / scale);
+        // Calculate Drop Time
+        if (contentRef.current) {
+            const rect = contentRef.current.getBoundingClientRect();
+            const x = e.clientX - rect.left + scrollLeft;
+            const dropTime = Math.max(0, x / scale);
 
-        const isVideo = item.type === 'video';
-        const url = isVideo ? item.node.data.videoUrl! : item.node.data.imageUrl!;
-        const duration = isVideo && item.node.data.duration ? parseFloat(item.node.data.duration) : 5;
+            const isVideo = item.type === 'video';
+            const url = isVideo ? item.node.data.videoUrl! : item.node.data.imageUrl!;
+            const duration = isVideo && item.node.data.duration ? parseFloat(item.node.data.duration) : 5;
 
-        const newClip: TimelineClip = {
-            id: `clip-${Date.now()}-${Math.random()}`,
-            sourceNodeId: item.node.id,
-            mediaUrl: url,
-            mediaType: isVideo ? 'video' : 'image',
-            start: dropTime,
-            duration: duration,
-            offset: 0,
-            track: trackId,
-            label: item.asset.title,
-            thumbnail: item.node.data.imageUrl
-        };
+            const newClip: TimelineClip = {
+                id: `clip-${Date.now()}-${Math.random()}`,
+                sourceNodeId: item.node.id,
+                mediaUrl: url,
+                mediaType: isVideo ? 'video' : 'image',
+                start: dropTime,
+                duration: duration,
+                offset: 0,
+                track: trackId,
+                label: item.asset.title,
+                thumbnail: item.node.data.imageUrl
+            };
 
-        saveToHistory([...clips, newClip]);
-    };
-
-    const handleClipMouseDown = (e: React.MouseEvent, clip: TimelineClip) => {
-        e.stopPropagation();
-        setSelectedClipId(clip.id);
-        if (tool === 'select') {
-             setDraggingClip({
-                 id: clip.id,
-                 startX: e.clientX,
-                 originalStart: clip.start,
-                 originalTrack: clip.track
-             });
+            saveToHistory([...clips, newClip]);
         }
     };
     
-    const handleBinContextMenu = (e: React.MouseEvent, nodeId: string) => {
+    // Add missing handlers
+    const handleDragOver = (e: React.DragEvent) => {
         e.preventDefault();
-        setContextMenu({ x: e.clientX, y: e.clientY, nodeId });
+        e.dataTransfer.dropEffect = 'copy';
     };
 
     const handleSetNodeStatus = (status: 'approved' | 'review' | 'archived') => {
-        if (contextMenu) {
+        if (contextMenu && contextMenu.nodeId) {
             onUpdateNode(contextMenu.nodeId, { status });
             setContextMenu(null);
         }
     };
 
-    // --- Rendering Helpers ---
+    // Calculate total duration for ruler
+    const totalDuration = Math.max(60, ...clips.map(c => c.start + c.duration + 10));
+
+    // Current active clip for player
     const activeClip = useMemo(() => {
+        // Prioritize V2 over V1
         const visible = clips.filter(c => currentTime >= c.start && currentTime < c.start + c.duration && (c.track === 0 || c.track === 1));
         return visible.sort((a, b) => b.track - a.track)[0];
     }, [clips, currentTime]);
 
-    useEffect(() => {
-        if (activeClip && activeClip.mediaType === 'video') {
-            const vid = videoRefs.current[activeClip.id];
-            if (vid) {
-                const targetTime = activeClip.offset + (currentTime - activeClip.start);
-                if (Math.abs(vid.currentTime - targetTime) > 0.3) {
-                    vid.currentTime = targetTime;
-                }
-                if (isPlaying) vid.play().catch(() => {});
-                else vid.pause();
-            }
-        }
-        Object.keys(videoRefs.current).forEach(key => {
-            if (key !== activeClip?.id) {
-                videoRefs.current[key]?.pause();
-            }
-        });
-    }, [activeClip, currentTime, isPlaying]);
-
-    // Calculate total timeline width
-    const totalDuration = Math.max(300, ...clips.map(c => c.start + c.duration + 10));
-
     return (
-        <div className="w-full h-full flex flex-col bg-zinc-950 text-white font-sans overflow-hidden" onClick={() => setContextMenu(null)}>
+        <div className="w-full h-full flex flex-col bg-zinc-950 text-white font-sans overflow-hidden" onClick={() => { setContextMenu(null); setEditingTrackId(null); }}>
+            
             {/* Top Section: Bin & Player */}
             <div className="flex-1 flex min-h-0 border-b border-zinc-800">
-                
-                {/* BIN */}
+                {/* BIN (Same as before) */}
                 <div className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
                     <div className="p-3 border-b border-zinc-800 flex flex-col gap-2">
                         <div className="flex justify-between items-center">
@@ -390,61 +551,29 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                             </h3>
                             <span className="text-[10px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-500">{binItems.length} items</span>
                         </div>
-                        {/* Bin Filter */}
                         <div className="flex bg-zinc-900 rounded p-0.5">
-                            {[
-                                { id: 'approved', label: 'Approved' },
-                                { id: 'review', label: 'Review' },
-                                { id: 'all', label: 'All' }
-                            ].map(f => (
-                                <button 
-                                    key={f.id}
-                                    onClick={() => setBinFilter(f.id as any)}
-                                    className={`flex-1 text-[9px] py-1 rounded font-medium transition-colors ${binFilter === f.id ? 'bg-zinc-700 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
-                                >
-                                    {f.label}
-                                </button>
+                            {['approved', 'review', 'all'].map(f => (
+                                <button key={f} onClick={() => setBinFilter(f as any)} className={`flex-1 text-[9px] py-1 rounded capitalize ${binFilter === f ? 'bg-zinc-700 text-white' : 'text-zinc-500'}`}>{f}</button>
                             ))}
                         </div>
                     </div>
-                    
                     <div className="flex-1 overflow-y-auto p-3 grid grid-cols-2 gap-3 content-start">
                         {binItems.map((item, idx) => (
                             <div 
                                 key={idx} 
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, item)}
-                                onContextMenu={(e) => handleBinContextMenu(e, item.node.id)}
+                                onContextMenu={(e) => { e.preventDefault(); setContextMenu({x: e.clientX, y: e.clientY, nodeId: item.node.id}); }}
                                 className="group relative aspect-square bg-black rounded border border-zinc-800 cursor-grab active:cursor-grabbing hover:border-blue-500 overflow-hidden"
                             >
-                                {item.type === 'video' ? (
-                                    <video src={item.node.data.videoUrl} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
-                                ) : (
-                                    <img src={item.node.data.imageUrl} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
-                                )}
-                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-[10px] text-zinc-300">
-                                    {item.asset.title}
-                                </div>
-                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/50 p-1 rounded">
-                                    <Layers size={12} className="text-white"/>
-                                </div>
-                                {/* Status Icon */}
-                                {item.node.data.status === 'approved' && <div className="absolute top-1 left-1 text-green-500 bg-black/50 rounded-full"><CheckCircle size={12}/></div>}
-                                {item.node.data.status === 'review' && <div className="absolute top-1 left-1 text-yellow-500 bg-black/50 rounded-full"><AlertCircle size={12}/></div>}
+                                <img src={item.node.data.imageUrl} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-[10px] text-zinc-300">{item.asset.title}</div>
+                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/50 p-1 rounded"><Layers size={12}/></div>
                             </div>
                         ))}
-                        {binItems.length === 0 && (
-                            <div className="col-span-2 text-center p-4 text-zinc-600 text-xs italic">
-                                No media matches filter.
-                            </div>
-                        )}
                     </div>
                     <div className="p-3 border-t border-zinc-800">
-                        <button 
-                            onClick={handleAssemble}
-                            disabled={binItems.length === 0}
-                            className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded flex items-center justify-center gap-2"
-                        >
+                        <button onClick={handleAssemble} className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded flex items-center justify-center gap-2">
                             <Layers size={14} /> Auto-Assemble
                         </button>
                     </div>
@@ -452,42 +581,24 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
 
                 {/* PLAYER */}
                 <div className="flex-1 bg-black flex flex-col relative">
-                    <div className="flex-1 flex items-center justify-center relative overflow-hidden">
+                    <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-zinc-950">
                         {activeClip ? (
                             activeClip.mediaType === 'video' ? (
-                                <video 
-                                    ref={el => { if(el) videoRefs.current[activeClip.id] = el; }}
-                                    src={activeClip.mediaUrl}
-                                    className="max-w-full max-h-full shadow-2xl"
-                                    playsInline
-                                    muted={false} // Enable audio monitoring
-                                />
+                                <video src={activeClip.mediaUrl} className="max-w-full max-h-full shadow-2xl" />
                             ) : (
                                 <img src={activeClip.mediaUrl} className="max-w-full max-h-full shadow-2xl" />
                             )
                         ) : (
-                            <div className="text-zinc-700 text-sm font-mono flex flex-col items-center gap-2">
-                                <div className="w-16 h-10 border-2 border-zinc-800 rounded flex items-center justify-center">
-                                    <Play size={16} fill="currentColor"/>
-                                </div>
-                                <span>NO SIGNAL</span>
-                            </div>
+                            <div className="text-zinc-800 text-6xl font-black opacity-20 select-none">OFFLINE</div>
                         )}
-                        
-                        {/* Timecode Overlay */}
                         <div className="absolute bottom-4 right-4 font-mono text-xl font-bold text-white drop-shadow-md tabular-nums bg-black/50 px-2 py-1 rounded">
                             {new Date(currentTime * 1000).toISOString().substr(14, 8)}
                             <span className="text-sm text-zinc-400 ml-1">.{(currentTime % 1).toFixed(2).substr(2)}</span>
                         </div>
                     </div>
-
-                    {/* Transport Controls */}
                     <div className="h-12 border-t border-zinc-800 bg-zinc-900 flex items-center justify-center gap-4">
                         <button onClick={() => setCurrentTime(0)} className="text-zinc-400 hover:text-white"><SkipBack size={18}/></button>
-                        <button 
-                            onClick={() => setIsPlaying(!isPlaying)}
-                            className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition-transform"
-                        >
+                        <button onClick={() => setIsPlaying(!isPlaying)} className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition-transform">
                             {isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor" className="ml-0.5"/>}
                         </button>
                     </div>
@@ -495,129 +606,174 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             </div>
 
             {/* Bottom Section: Timeline */}
-            <div className="h-72 shrink-0 border-t border-zinc-800 bg-zinc-900/80 flex flex-row relative select-none">
-                
-                {/* Editing Toolbar */}
-                <div className="w-10 flex flex-col items-center py-2 gap-2 border-r border-zinc-800 bg-zinc-900 z-30 relative shadow-xl">
-                    <button 
-                        onClick={() => setTool('select')}
-                        className={`p-2 rounded hover:bg-zinc-700 transition-colors ${tool === 'select' ? 'text-blue-400 bg-zinc-800' : 'text-zinc-400'}`}
-                        title="Select Tool (V)"
-                    >
-                        <MousePointer2 size={16} />
-                    </button>
-                    <button 
-                        onClick={() => { setTool('split'); handleSplit(); }}
-                        className={`p-2 rounded hover:bg-zinc-700 transition-colors ${tool === 'split' ? 'text-blue-400 bg-zinc-800' : 'text-zinc-400'}`}
-                        title="Split Clip (C)"
-                    >
-                        <Scissors size={16} />
-                    </button>
-                    <button 
-                        onClick={handleDelete}
-                        className="p-2 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-red-400 mt-2"
-                        title="Delete Selected (Del)"
-                    >
-                        <Trash2 size={16} />
-                    </button>
-                    
-                     <button 
-                        onClick={handleUndo}
-                        disabled={history.length === 0}
-                        className="p-2 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-white mt-auto mb-2 disabled:opacity-30"
-                        title="Undo (Ctrl+Z)"
-                    >
-                        <Undo size={16} />
-                    </button>
+            <div 
+                ref={timelineRef}
+                className="shrink-0 border-t border-zinc-800 bg-zinc-900/80 flex flex-col relative select-none"
+                style={{ height: timelineHeight }}
+            >
+                {/* Timeline Resize Handle */}
+                <div 
+                    className="h-1 bg-zinc-800 hover:bg-blue-500 cursor-row-resize w-full z-50 transition-colors"
+                    onMouseDown={() => setIsResizingTimeline(true)}
+                />
+
+                {/* Toolbar */}
+                <div className="h-8 border-b border-zinc-800 flex items-center px-2 gap-2 bg-zinc-900">
+                    <div className="flex bg-zinc-800 rounded p-0.5">
+                        <button onClick={() => setTool('select')} className={`p-1 rounded ${tool === 'select' ? 'bg-zinc-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}><MousePointer2 size={14}/></button>
+                        <button onClick={() => setTool('split')} className={`p-1 rounded ${tool === 'split' ? 'bg-zinc-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}><Scissors size={14}/></button>
+                    </div>
+                    <div className="w-[1px] h-4 bg-zinc-700 mx-1"/>
+                    <button onClick={handleDelete} className="text-zinc-400 hover:text-red-400 p-1"><Trash2 size={14}/></button>
+                    <button onClick={handleUndo} className="text-zinc-400 hover:text-white p-1 ml-auto"><Undo size={14}/></button>
                 </div>
 
-                <div className="flex-1 flex flex-col min-w-0">
+                {/* Timeline Body (Synced Scroll) */}
+                <div className="flex-1 flex min-h-0">
                     
-                    {/* Fixed Headers Column + Scrollable Content */}
-                    <div className="flex-1 flex overflow-hidden">
-                         
-                         {/* Track Headers Column */}
-                         <div className="w-24 shrink-0 bg-zinc-900 border-r border-zinc-800 flex flex-col z-20 shadow-lg">
-                             <div className="h-8 border-b border-zinc-800 bg-zinc-800/50 flex items-center justify-center text-[10px] font-bold text-zinc-500">
-                                 TIMECODE
-                             </div>
-                             {TRACK_CONFIG.map(track => (
-                                 <div key={track.id} className="h-24 border-b border-zinc-800 flex flex-col items-center justify-center text-xs text-zinc-500">
-                                     <div className="font-bold flex items-center gap-1">
-                                        {track.type === 'audio' ? <Music size={10} /> : <Video size={10} />}
-                                        {track.label}
-                                    </div>
-                                 </div>
-                             ))}
-                         </div>
-
-                         {/* Scrollable Tracks & Ruler */}
-                         <div className="flex-1 overflow-auto bg-zinc-900/10 relative" ref={scrollContainerRef}>
-                              <div className="relative min-w-full" style={{ width: totalDuration * scale, minWidth: '100%' }}>
-                                   {/* Ruler */}
-                                   <div 
-                                        className="h-8 border-b border-zinc-800 bg-zinc-900/80 sticky top-0 z-10 flex cursor-ew-resize"
-                                        onMouseDown={() => setIsScrubbing(true)}
-                                   >
-                                        {Array.from({ length: Math.ceil(totalDuration) }).map((_, i) => (
-                                            <div key={i} className="absolute top-0 bottom-0 border-l border-zinc-800 text-[9px] text-zinc-600 pl-1 pt-1 pointer-events-none" style={{ left: i * scale * 5 }}>
-                                                {i * 5}s
-                                            </div>
-                                        ))}
-                                   </div>
-
-                                   {/* Track Rows */}
-                                   <div className="relative" ref={timelineContainerRef}>
-                                       {/* Playhead Line (Under clips? No, Overlay) */}
-                                       <div 
-                                            className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-30 pointer-events-none"
-                                            style={{ left: currentTime * scale, height: '100%' }}
-                                       >
-                                            <div className="absolute -top-3 -left-1.5 w-3 h-3 bg-red-500 transform rotate-45" />
-                                       </div>
-
-                                       {TRACK_CONFIG.map(track => (
-                                           <div 
-                                                key={track.id} 
-                                                className={`h-24 border-b border-zinc-800 relative ${track.type === 'audio' ? 'bg-zinc-900/40' : 'bg-zinc-900/20'}`}
-                                                onDragOver={handleDragOver}
-                                                onDrop={(e) => handleDrop(e, track.id)}
+                    {/* Left Headers (Sticky Y) */}
+                    <div className="w-24 shrink-0 bg-zinc-900 border-r border-zinc-800 flex flex-col z-20 shadow-lg">
+                        <div className="h-8 border-b border-zinc-800 bg-zinc-800/50 flex items-center justify-center text-[10px] font-bold text-zinc-500 shrink-0">
+                            TRACKS
+                        </div>
+                        
+                        {/* Headers Scroll Container (Synced with Content) */}
+                        <div ref={headerRef} className="flex-1 overflow-hidden">
+                            {tracks.map(track => (
+                                <div 
+                                    key={track.id} 
+                                    className="border-b border-zinc-800 flex flex-col relative group"
+                                    style={{ height: track.height }}
+                                >
+                                    <div className="flex-1 flex items-center justify-between px-2">
+                                        {editingTrackId === track.id ? (
+                                            <input 
+                                                autoFocus
+                                                defaultValue={track.label}
+                                                onBlur={() => setEditingTrackId(null)}
+                                                onKeyDown={(e) => { if(e.key === 'Enter') { setTracks(tracks.map(t => t.id === track.id ? {...t, label: e.currentTarget.value} : t)); setEditingTrackId(null); }}}
+                                                className="bg-black text-xs w-full px-1 rounded text-white"
+                                            />
+                                        ) : (
+                                            <div 
+                                                className="font-bold flex items-center gap-1 text-xs text-zinc-500 cursor-pointer hover:text-white"
+                                                onDoubleClick={() => setEditingTrackId(track.id)}
                                             >
-                                                {clips.filter(c => c.track === track.id).map(clip => (
-                                                    <div
-                                                        key={clip.id}
-                                                        className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-pointer border ring-offset-1 ring-offset-zinc-900 transition-shadow select-none
-                                                            ${selectedClipId === clip.id ? 'border-white ring-2 ring-blue-500 z-20' : 'border-zinc-700 hover:border-zinc-500 opacity-90'}
-                                                            ${draggingClip?.id === clip.id ? 'opacity-50 cursor-grabbing' : ''}
-                                                        `}
-                                                        style={{
-                                                            left: clip.start * scale,
-                                                            width: clip.duration * scale,
-                                                            backgroundColor: clip.mediaType === 'video' ? '#1e3a8a' : (track.type === 'audio' ? '#0f766e' : '#581c87')
-                                                        }}
-                                                        onMouseDown={(e) => handleClipMouseDown(e, clip)}
-                                                    >
-                                                        <div className="w-full h-full flex items-center relative overflow-hidden">
-                                                            {clip.thumbnail && track.type !== 'audio' && (
-                                                                <img src={clip.thumbnail} className="h-full w-auto object-cover opacity-50 grayscale mix-blend-overlay pointer-events-none" />
-                                                            )}
-                                                            <div className="absolute inset-0 p-1.5 flex flex-col justify-between pointer-events-none">
-                                                                <span className="text-[10px] font-bold text-white truncate drop-shadow-md">{clip.label}</span>
-                                                                {track.type !== 'audio' && <span className="text-[9px] text-white/70 font-mono drop-shadow-md">{clip.duration.toFixed(1)}s</span>}
-                                                            </div>
+                                                {track.type === 'audio' ? <Music size={10} /> : <Video size={10} />}
+                                                {track.label}
+                                            </div>
+                                        )}
+                                    </div>
+                                    {/* Track Resize Handle */}
+                                    <div 
+                                        className="h-1 cursor-row-resize hover:bg-blue-500 absolute bottom-0 left-0 right-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+                                        onMouseDown={(e) => { e.stopPropagation(); setResizingTrackId(track.id); }}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Right Content (Scroll X & Y) */}
+                    <div className="flex-1 flex flex-col min-w-0 bg-zinc-900/10">
+                        {/* Ruler (Scroll X Synced) */}
+                        <div ref={rulerRef} className="h-8 border-b border-zinc-800 bg-zinc-900/80 overflow-hidden relative shrink-0">
+                            <div className="relative h-full" style={{ width: totalDuration * scale }}>
+                                {Array.from({ length: Math.ceil(totalDuration) }).map((_, i) => (
+                                    <div key={i} className="absolute top-0 bottom-0 border-l border-zinc-800 text-[9px] text-zinc-600 pl-1 pt-1 select-none pointer-events-none" style={{ left: i * scale * 5 }}>
+                                        {i * 5}s
+                                    </div>
+                                ))}
+                                {/* Playhead Top */}
+                                <div 
+                                    className="absolute top-4 bottom-0 w-[1px] bg-red-500 z-30 pointer-events-none transform -translate-x-1/2"
+                                    style={{ left: currentTime * scale }}
+                                >
+                                    <div className="absolute -top-3 -left-1.5 w-3 h-3 bg-red-500 transform rotate-45" />
+                                </div>
+                                <div className="absolute inset-0 cursor-ew-resize z-20" onMouseDown={() => setIsScrubbing(true)} />
+                            </div>
+                        </div>
+
+                        {/* Tracks (Scroll X & Y) */}
+                        <div 
+                            ref={contentRef} 
+                            className="flex-1 overflow-auto relative" 
+                            onScroll={handleContentScroll}
+                            onMouseDown={handleTimelineMouseDown}
+                        >
+                            <div className="relative min-w-full" style={{ width: totalDuration * scale }}>
+                                
+                                {/* Playhead Line Full Height */}
+                                <div 
+                                    className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-30 pointer-events-none transform -translate-x-1/2"
+                                    style={{ left: currentTime * scale }}
+                                />
+
+                                {tracks.map(track => (
+                                    <div 
+                                        key={track.id} 
+                                        className={`border-b border-zinc-800 relative group ${track.type === 'audio' ? 'bg-zinc-900/30' : 'bg-zinc-900/10'}`}
+                                        style={{ height: track.height }}
+                                        onDragOver={handleDragOver}
+                                        onDrop={(e) => handleDrop(e, track.id)}
+                                    >
+                                        {clips.filter(c => c.track === track.id).map(clip => {
+                                            const isSelected = selectedClipIds.has(clip.id);
+                                            return (
+                                                <div
+                                                    key={clip.id}
+                                                    className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-pointer select-none transition-shadow
+                                                        ${isSelected ? 'ring-2 ring-purple-500 z-10 shadow-lg' : 'border border-zinc-700 opacity-90 hover:opacity-100'}
+                                                    `}
+                                                    style={{
+                                                        left: clip.start * scale,
+                                                        width: clip.duration * scale,
+                                                        backgroundColor: '#000' // Base
+                                                    }}
+                                                    onMouseDown={(e) => handleClipMouseDown(e, clip.id)}
+                                                >
+                                                    {/* Full Color Content */}
+                                                    <div className="w-full h-full relative">
+                                                        {clip.thumbnail && (
+                                                            <img src={clip.thumbnail} className="w-full h-full object-cover opacity-80 pointer-events-none" />
+                                                        )}
+                                                        {/* Audio Waveform Shim */}
+                                                        {track.type === 'audio' && (
+                                                            <div className="absolute inset-0 bg-teal-500/20 mix-blend-overlay" />
+                                                        )}
+                                                        
+                                                        {/* Label Overlay */}
+                                                        <div className="absolute inset-0 p-1 flex flex-col justify-between bg-gradient-to-r from-black/80 to-transparent pointer-events-none">
+                                                            <span className="text-[10px] font-bold text-white truncate drop-shadow-md w-full">{clip.label}</span>
+                                                            <span className="text-[9px] text-zinc-300 font-mono drop-shadow-md">{clip.duration.toFixed(1)}s</span>
                                                         </div>
                                                     </div>
-                                                ))}
-                                           </div>
-                                       ))}
-                                   </div>
-                              </div>
-                         </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
+                                
+                                {/* Marquee Box */}
+                                {marqueeBox && (
+                                    <div 
+                                        className="absolute bg-blue-500/20 border border-blue-500 pointer-events-none z-50"
+                                        style={{
+                                            left: marqueeBox.w > 0 ? marqueeBox.x : marqueeBox.x + marqueeBox.w,
+                                            top: marqueeBox.h > 0 ? marqueeBox.y : marqueeBox.y + marqueeBox.h,
+                                            width: Math.abs(marqueeBox.w),
+                                            height: Math.abs(marqueeBox.h)
+                                        }}
+                                    />
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* Context Menu for Bin Items */}
+            {/* Bin Item Context Menu */}
             {contextMenu && (
                 <div 
                     className="fixed z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 min-w-[140px]"
@@ -625,15 +781,9 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                     onClick={(e) => e.stopPropagation()}
                 >
                     <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Set Status</div>
-                    <button onClick={() => handleSetNodeStatus('approved')} className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-400 flex items-center gap-2">
-                        <CheckCircle size={12} /> Approved
-                    </button>
-                    <button onClick={() => handleSetNodeStatus('review')} className="w-full text-left px-3 py-2 text-xs hover:bg-yellow-900/30 text-yellow-400 flex items-center gap-2">
-                        <AlertCircle size={12} /> Review
-                    </button>
-                    <button onClick={() => handleSetNodeStatus('archived')} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-400 flex items-center gap-2">
-                        <Archive size={12} /> Archive
-                    </button>
+                    <button onClick={() => handleSetNodeStatus('approved')} className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-400 flex items-center gap-2"><CheckCircle size={12}/> Approved</button>
+                    <button onClick={() => handleSetNodeStatus('review')} className="w-full text-left px-3 py-2 text-xs hover:bg-yellow-900/30 text-yellow-400 flex items-center gap-2"><AlertCircle size={12}/> Review</button>
+                    <button onClick={() => handleSetNodeStatus('archived')} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-400 flex items-center gap-2"><Archive size={12}/> Archive</button>
                 </div>
             )}
         </div>

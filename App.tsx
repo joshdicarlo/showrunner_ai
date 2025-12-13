@@ -23,6 +23,7 @@ interface DetectedItem {
     type: string;
     selected: boolean;
     isDuplicate?: boolean;
+    children?: DetectedItem[]; // For nested shots
 }
 
 const App: React.FC = () => {
@@ -67,6 +68,7 @@ const App: React.FC = () => {
   const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
   const [analysisType, setAnalysisType] = useState<string>(''); // 'Characters', 'Locations', 'Story'
   const [analysisParentId, setAnalysisParentId] = useState<string | null>(null); // For creating child assets during analysis
+  const [autoFindShots, setAutoFindShots] = useState(true);
 
   // Drive State
   const [isDriveConnected, setIsDriveConnected] = useState(false);
@@ -1094,6 +1096,13 @@ const App: React.FC = () => {
   const handleAnalyzeScripts = () => {
       setDetectedItems([]);
       setAnalysisParentId(null); 
+      
+      // Determine type immediately for UI state
+      if (currentDept === DepartmentType.CASTING_WARDROBE) setAnalysisType('Characters');
+      else if (currentDept === DepartmentType.SET_DESIGN) setAnalysisType('Locations');
+      else if (currentDept === DepartmentType.STORY) setAnalysisType('Story');
+      else setAnalysisType('Analysis'); 
+
       setIsAnalyzeModalOpen(true);
   };
   
@@ -1101,23 +1110,48 @@ const App: React.FC = () => {
       if (!currentProjectId) return;
       const approvedItems = detectedItems.filter(i => i.selected && !i.isDuplicate);
       
-      const newAssets: ProjectAsset[] = approvedItems.map(item => {
+      const newAssets: ProjectAsset[] = [];
+
+      approvedItems.forEach(item => {
           let visualStyle = "";
           if (item.type === 'Characters') visualStyle = "Cinematic Portrait";
           else if (item.type === 'Locations') visualStyle = "Wide Shot, Detailed Environment";
           
           const cleanTitle = item.name.replace(/@/g, '').trim();
+          const parentId = analysisParentId || `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-          return {
-              id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          const parentAsset: ProjectAsset = {
+              id: parentId,
               department: currentDept,
               title: cleanTitle,
               description: item.description,
               visualStyle: visualStyle,
               summary: "Auto-detected",
-              parentId: analysisParentId || undefined, 
+              parentId: analysisParentId ? analysisParentId : undefined, 
               status: 'active'
           };
+          
+          if (!analysisParentId) {
+              newAssets.push(parentAsset);
+              
+              // Handle Children (Shots found inside Scenes)
+              if (item.children) {
+                  item.children.filter(c => c.selected).forEach(child => {
+                      newAssets.push({
+                          id: `shot-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                          department: currentDept, // Scenes and Shots share Story dept usually
+                          title: child.name,
+                          description: child.description,
+                          summary: "Auto-detected shot",
+                          parentId: parentId,
+                          status: 'active'
+                      });
+                  });
+              }
+          } else {
+              // We are already inside a parent, so these are children
+              newAssets.push(parentAsset); 
+          }
       });
 
       setProjects(prev => prev.map(p => {
@@ -1133,6 +1167,7 @@ const App: React.FC = () => {
 
   const handleRunAnalysis = async () => {
       if (!activeProject) return;
+      setDetectedItems([]); // Clear previous items
       setIsAnalyzing(true);
       
       try {
@@ -1162,7 +1197,8 @@ const App: React.FC = () => {
               const knownChars = activeProject.assets
                 .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
                 .map(a => a.title);
-              rawItems = await extractStoryElementsFromScript(fullText, knownChars);
+              // Pass autoFindShots param
+              rawItems = await extractStoryElementsFromScript(fullText, knownChars, autoFindShots);
           } 
 
           const existingNames = new Set(
@@ -1172,15 +1208,31 @@ const App: React.FC = () => {
           );
 
           const items: DetectedItem[] = rawItems.map((r: any) => {
-             const name = r.name || r.title || "Unknown";
+             // Clean @ symbols from the raw response
+             const rawName = r.name || r.title || "Unknown";
+             const name = rawName.replace(/@/g, '').trim();
+             
              const isDup = existingNames.has(name.toLowerCase());
-             return {
+             
+             const item: DetectedItem = {
                  name: name,
                  description: r.description || r.role || "",
                  type: r.type || r.role || analysisType,
                  selected: !isDup, 
                  isDuplicate: isDup
              };
+
+             // Map nested shots if present
+             if (r.shots) {
+                 item.children = r.shots.map((s: any) => ({
+                     name: (s.title || "Shot").replace(/@/g, '').trim(),
+                     description: s.description,
+                     type: 'Shot',
+                     selected: !isDup, // Default select children if parent is new
+                     isDuplicate: false
+                 }));
+             }
+             return item;
           });
 
           setDetectedItems(items);
@@ -1196,6 +1248,7 @@ const App: React.FC = () => {
       const asset = activeProject.assets.find(a => a.id === assetId);
       if (!asset) return;
 
+      setDetectedItems([]); // Clear previous items
       setIsAnalyzing(true);
       setAnalysisParentId(assetId); 
       setAnalysisType('Shots');
@@ -1209,7 +1262,7 @@ const App: React.FC = () => {
            const rawItems = await extractShotsFromScene(asset.description, knownChars);
            
            const items: DetectedItem[] = rawItems.map((r: any) => ({
-               name: r.title,
+               name: (r.title || "Shot").replace(/@/g, '').trim(),
                description: r.description,
                type: 'Shot',
                selected: true
@@ -1536,6 +1589,21 @@ const App: React.FC = () => {
                                      We will analyze all generated scripts and notes to automatically identify {analysisType.toLowerCase()}.
                                  </p>
                              </div>
+                             
+                             {/* Auto-Find Shots Checkbox (Only for Story) */}
+                             {analysisType === 'Story' && (
+                                 <div className="flex items-center gap-2 bg-zinc-900/50 p-3 rounded border border-zinc-800">
+                                     <input 
+                                        type="checkbox" 
+                                        checked={autoFindShots} 
+                                        onChange={(e) => setAutoFindShots(e.target.checked)} 
+                                        id="autofind"
+                                        className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-blue-500 focus:ring-blue-500"
+                                     />
+                                     <label htmlFor="autofind" className="text-sm text-zinc-300 font-medium">Auto-discover Shots for each Scene</label>
+                                 </div>
+                             )}
+
                              <Button onClick={handleRunAnalysis} size="lg">Start Analysis</Button>
                          </div>
                      )}
@@ -1551,30 +1619,55 @@ const App: React.FC = () => {
                          <>
                              <div className="flex-1 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-900/50 p-2 space-y-2 mb-4">
                                  {detectedItems.map((item, idx) => (
-                                     <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${item.selected ? 'bg-blue-900/20 border-blue-500/50' : 'bg-zinc-900 border-zinc-800 opacity-50'}`}>
-                                         <input 
-                                            type="checkbox" 
-                                            checked={item.selected} 
-                                            onChange={(e) => {
-                                                const newItems = [...detectedItems];
-                                                newItems[idx].selected = e.target.checked;
-                                                setDetectedItems(newItems);
-                                            }}
-                                            className="mt-1"
-                                         />
-                                         <div className="flex-1 min-w-0">
-                                             <div className="flex items-center justify-between">
-                                                 <span className="font-bold text-sm text-white">{item.name}</span>
-                                                 {item.isDuplicate && <span className="text-[10px] text-orange-400 font-mono">Existing</span>}
+                                     <div key={idx}>
+                                         <div className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${item.selected ? 'bg-blue-900/20 border-blue-500/50' : 'bg-zinc-900 border-zinc-800 opacity-50'}`}>
+                                             <input 
+                                                type="checkbox" 
+                                                checked={item.selected} 
+                                                onChange={(e) => {
+                                                    const newItems = [...detectedItems];
+                                                    newItems[idx].selected = e.target.checked;
+                                                    setDetectedItems(newItems);
+                                                }}
+                                                className="mt-1"
+                                             />
+                                             <div className="flex-1 min-w-0">
+                                                 <div className="flex items-center justify-between">
+                                                     <span className="font-bold text-sm text-white">{item.name}</span>
+                                                     {item.isDuplicate && <span className="text-[10px] text-orange-400 font-mono">Existing</span>}
+                                                 </div>
+                                                 <p className="text-xs text-zinc-400 mt-1 line-clamp-2">{item.description}</p>
                                              </div>
-                                             <p className="text-xs text-zinc-400 mt-1 line-clamp-2">{item.description}</p>
                                          </div>
+                                         
+                                         {/* Nested Children (Shots) */}
+                                         {item.children && item.children.length > 0 && (
+                                             <div className="ml-8 mt-1 space-y-1 border-l-2 border-zinc-800 pl-2">
+                                                 {item.children.map((child, cIdx) => (
+                                                     <div key={cIdx} className={`flex items-center gap-2 p-2 rounded text-xs ${child.selected ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 opacity-50'}`}>
+                                                         <input 
+                                                            type="checkbox"
+                                                            checked={child.selected}
+                                                            onChange={(e) => {
+                                                                const newItems = [...detectedItems];
+                                                                if(newItems[idx].children) {
+                                                                    newItems[idx].children![cIdx].selected = e.target.checked;
+                                                                    setDetectedItems(newItems);
+                                                                }
+                                                            }}
+                                                         />
+                                                         <span className="font-mono text-blue-400">{child.name}</span>
+                                                         <span className="truncate opacity-50">{child.description}</span>
+                                                     </div>
+                                                 ))}
+                                             </div>
+                                         )}
                                      </div>
                                  ))}
                              </div>
                              <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800">
                                  <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
-                                 <Button onClick={handleApproveAnalysis}>Import Selected ({detectedItems.filter(i => i.selected).length})</Button>
+                                 <Button onClick={handleApproveAnalysis}>Import Selected</Button>
                              </div>
                          </>
                      )}
