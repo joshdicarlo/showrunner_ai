@@ -148,6 +148,21 @@ const App: React.FC = () => {
   const activeAsset = activeProject?.assets.find(a => a.id === currentAssetId);
   const activeDeptConfig = DEPARTMENTS.find(d => d.id === currentDept);
 
+  // --- Editorial Sequence Resolution ---
+  const editorialState = useMemo(() => {
+      if (!activeAsset || currentDept !== DepartmentType.EDITORIAL) return { sequence: null, filterId: null };
+      
+      // If the selected asset has a parent, assume parent is the Sequence/Scene and asset is a Shot/Element
+      if (activeAsset.parentId) {
+          const parent = activeProject?.assets.find(a => a.id === activeAsset.parentId);
+          return { sequence: parent || null, filterId: activeAsset.id };
+      }
+      
+      // Otherwise, the selected asset is the Sequence
+      return { sequence: activeAsset, filterId: null };
+  }, [activeAsset, currentDept, activeProject?.assets]);
+
+
   // --- Derived State: Script Context for Chat ---
   // Aggregates all text from Writers Room nodes to give context to the ChatBot
   const scriptContext = useMemo(() => {
@@ -249,6 +264,8 @@ const App: React.FC = () => {
 
 
   // --- Project Handlers ---
+  // ... (Project creation/modal handlers omitted for brevity, effectively unchanged)
+  // Re-inserting required handlers to ensure file is complete and valid
 
   const resetProjectModal = () => {
       setNewProjectTitle('');
@@ -272,7 +289,7 @@ const App: React.FC = () => {
   }
 
   const handleCreateProject = async () => {
-      // ... (unchanged)
+      // ... (Same as before)
       let title = newProjectTitle;
       let summary = '';
       let initialAssets: ProjectAsset[] = [];
@@ -475,7 +492,6 @@ const App: React.FC = () => {
   const handleDeleteAsset = (assetId: string) => {
       if (!currentProjectId) return;
       
-      // We calculate descendants based on CURRENT state inside the setter to ensure atomicity
       setProjects(prev => {
           const project = prev.find(p => p.id === currentProjectId);
           if (!project) return prev;
@@ -488,9 +504,7 @@ const App: React.FC = () => {
           
           collectIds(assetId, project.assets);
 
-          // If the currently selected asset is being deleted, clear selection
           if (currentAssetId && idsToDelete.has(currentAssetId)) {
-              // This side effect is safe here as it queues a state update
               setTimeout(() => {
                   setCurrentAssetId(null);
                   setFocusNodeIds([]);
@@ -580,7 +594,7 @@ const App: React.FC = () => {
           if (asset && asset.driveId) {
              try {
                  const driveLink = await GoogleDriveService.uploadFileToDrive(asset.driveId, `Thumbnail_${asset.title}.png`, imageUrl, 'image/png');
-                 finalUrl = driveLink; // Store the Drive Link!
+                 finalUrl = driveLink; 
              } catch(e) { console.error("Thumbnail upload failed", e); }
           }
       }
@@ -606,10 +620,9 @@ const App: React.FC = () => {
 
 
   // --- Generation Workflows ---
-  // ... (handleGenerateConcepts, handleGenerateOutline, handleRefineConcept, handleUpdateNodes, handleUpdateConnections ... unchanged)
-
+  // ... (Includes all generation handlers from previous file, omitted here for brevity but assumed present in final output)
   const handleGenerateConcepts = (count: number) => {
-    // ... (unchanged)
+    // ... (Implementation same as previous)
     if (!activeAsset || !currentProjectId || !activeProject) return;
     
     // 1. Determine Bounding Box... (Existing implementation)
@@ -649,9 +662,6 @@ const App: React.FC = () => {
 
     const newNodes: FlowNode[] = [];
     
-    // Auto-detect if we should use dot syntax for child assets
-    // CHANGE: Only use dot syntax for Casting/Wardrobe to inherit parent description
-    // For Story (Scenes) and Production (Shots), default to simple title so it does NOT inherit.
     let defaultPrompt = `@${activeAsset.title}`;
     if (activeAsset.parentId && currentDept === DepartmentType.CASTING_WARDROBE) {
         const parent = activeProject.assets.find(a => a.id === activeAsset.parentId);
@@ -660,7 +670,6 @@ const App: React.FC = () => {
         }
     }
 
-    // Determine Default Ratio
     let defaultRatio = "16:9";
     if (currentDept === DepartmentType.CASTING_WARDROBE) {
         defaultRatio = "1:1";
@@ -683,7 +692,7 @@ const App: React.FC = () => {
                 prompt: defaultPrompt,
                 aspectRatio: defaultRatio,
                 status: 'generating',
-                tag: 'concept' // Tag as concept
+                tag: 'concept' 
             }
         });
     }
@@ -700,7 +709,6 @@ const App: React.FC = () => {
     setFocusNodeIds(allNewIds);
   };
   
-  // Generic Batch Generator for Gallery View
   const handleGalleryGenerate = (prompt: string, count: number, model: string, aspectRatio: string) => {
       if (!currentProjectId || !activeProject) return;
       
@@ -775,7 +783,7 @@ const App: React.FC = () => {
   }
 
   const handleGenerateOutline = () => {
-      // ... (unchanged)
+      // ... (Same as previous)
       if (!activeAsset || !currentProjectId || !activeProject) return;
 
       const contextNodes = activeProject.nodes.filter(n => 
@@ -837,7 +845,7 @@ const App: React.FC = () => {
   };
 
   const handleRefineConcept = (assetId: string, sourceImageUrl?: string) => {
-      // ... (unchanged)
+       // ... (Same as previous)
       if (!currentProjectId || !activeProject) return;
       const asset = activeProject.assets.find(a => a.id === assetId);
       if (!asset) return;
@@ -921,8 +929,8 @@ const App: React.FC = () => {
       setFocusNodeIds([groupId]);
   }
   
-  // Reusable Handlers for Gallery Context Actions
   const handleGalleryTurntable = (node: FlowNode) => {
+      // ... (Same as previous)
       if (!currentProjectId || !activeProject) return;
       
       const contextNodes = activeProject.nodes.filter(n => 
@@ -969,9 +977,8 @@ const App: React.FC = () => {
   }
 
   const handleGalleryExpressions = (node: FlowNode) => {
+       // ... (Same as previous)
        if (!currentProjectId || !activeProject) return;
-       // ... reuse logic from Canvas or refactor. 
-       // For brevity in this big file update, I'll essentially replicate the placement logic for "below" content.
        const contextNodes = activeProject.nodes.filter(n => 
           n.department === currentDept && 
           n.assetId === (currentAssetId || undefined)
@@ -1047,9 +1054,6 @@ const App: React.FC = () => {
           return p;
        }));
   }
-
-  // ... (handleDeleteNode, handleUpdateNode - wrapper functions to pass to Canvas are inside Canvas prop mapping if needed, 
-  // but usually App manages project state, Canvas manages interaction state)
   
   const handleNodesChange = useCallback((newNodes: React.SetStateAction<FlowNode[]>) => {
       if (!currentProjectId) return;
@@ -1073,10 +1077,23 @@ const App: React.FC = () => {
       }));
   }, [currentProjectId]);
   
-  // Analysis Handlers
+  // Update a single node (Used for status changes etc)
+  const handleUpdateNode = useCallback((nodeId: string, data: any) => {
+      if (!currentProjectId) return;
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return {
+                  ...p,
+                  nodes: p.nodes.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...data } } : n)
+              };
+          }
+          return p;
+      }));
+  }, [currentProjectId]);
+  
   const handleAnalyzeScripts = () => {
       setDetectedItems([]);
-      setAnalysisParentId(null); // Reset
+      setAnalysisParentId(null); 
       setIsAnalyzeModalOpen(true);
   };
   
@@ -1089,7 +1106,6 @@ const App: React.FC = () => {
           if (item.type === 'Characters') visualStyle = "Cinematic Portrait";
           else if (item.type === 'Locations') visualStyle = "Wide Shot, Detailed Environment";
           
-          // Sanitize Title (Remove @)
           const cleanTitle = item.name.replace(/@/g, '').trim();
 
           return {
@@ -1099,7 +1115,7 @@ const App: React.FC = () => {
               description: item.description,
               visualStyle: visualStyle,
               summary: "Auto-detected",
-              parentId: analysisParentId || undefined, // Use if adding shots to scene
+              parentId: analysisParentId || undefined, 
               status: 'active'
           };
       });
@@ -1120,7 +1136,6 @@ const App: React.FC = () => {
       setIsAnalyzing(true);
       
       try {
-          // Gather text from Script Nodes
           const scriptNodes = activeProject.nodes.filter(n => 
               n.department === DepartmentType.WRITERS_ROOM && 
               n.type === NodeType.AI_TEXT_GEN && 
@@ -1144,16 +1159,12 @@ const App: React.FC = () => {
               rawItems = await extractLocationsFromScript(fullText);
           } else if (currentDept === DepartmentType.STORY) {
               setAnalysisType('Story');
-              // Collect known characters for @Tagging
               const knownChars = activeProject.assets
                 .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
                 .map(a => a.title);
               rawItems = await extractStoryElementsFromScript(fullText, knownChars);
-          } else if (currentDept === DepartmentType.PRODUCTION && analysisType === 'Shots') {
-             // Handled separately via handleDiscoverShots usually
-          }
+          } 
 
-          // Duplicate Detection Logic
           const existingNames = new Set(
               activeProject.assets
                 .filter(a => a.department === currentDept)
@@ -1167,7 +1178,7 @@ const App: React.FC = () => {
                  name: name,
                  description: r.description || r.role || "",
                  type: r.type || r.role || analysisType,
-                 selected: !isDup, // Default select if new
+                 selected: !isDup, 
                  isDuplicate: isDup
              };
           });
@@ -1186,7 +1197,7 @@ const App: React.FC = () => {
       if (!asset) return;
 
       setIsAnalyzing(true);
-      setAnalysisParentId(assetId); // Mark parent for new assets
+      setAnalysisParentId(assetId); 
       setAnalysisType('Shots');
       setIsAnalyzeModalOpen(true);
 
@@ -1197,8 +1208,6 @@ const App: React.FC = () => {
            
            const rawItems = await extractShotsFromScene(asset.description, knownChars);
            
-           // No duplicate check strictly needed for shots as titles are usually generic "Shot 1"
-           // but we can just list them
            const items: DetectedItem[] = rawItems.map((r: any) => ({
                name: r.title,
                description: r.description,
@@ -1418,12 +1427,14 @@ const App: React.FC = () => {
              <div className="flex-1 relative bg-black overflow-hidden">
                  {currentDept === DepartmentType.EDITORIAL ? (
                      // Editorial View
-                     activeAsset ? (
+                     editorialState.sequence ? (
                          <EditorTimeline 
-                             sequenceAsset={activeAsset}
+                             sequenceAsset={editorialState.sequence}
+                             filterAssetId={editorialState.filterId}
                              projectAssets={activeProject?.assets || []}
                              projectNodes={activeProject?.nodes || []}
                              onUpdateAsset={handleUpdateAsset}
+                             onUpdateNode={handleUpdateNode}
                          />
                      ) : (
                          <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-4">
@@ -1467,7 +1478,7 @@ const App: React.FC = () => {
              </div>
         </div>
 
-        {/* Floating Modals for Asset Creation, Enhancement, Analysis */}
+        {/* Floating Modals */}
         {isCreateAssetOpen && (
             <Modal title={`Create New ${activeDeptConfig?.assetLabel || 'Asset'}`} onClose={() => setIsCreateAssetOpen(false)}>
                 <div className="space-y-4">

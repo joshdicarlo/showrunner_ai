@@ -1,45 +1,78 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ProjectAsset, FlowNode, TimelineClip, NodeType, DepartmentType } from '../types';
-import { Play, Pause, Scissors, Trash2, SkipBack, Plus, Layers, Image as ImageIcon, Video, Volume2 } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { ProjectAsset, FlowNode, TimelineClip, NodeType } from '../types';
+import { Play, Pause, Scissors, Trash2, SkipBack, Plus, Layers, Image as ImageIcon, Video, Volume2, MousePointer2, Filter, Music, Mic, CheckCircle, AlertCircle, Archive, MoreHorizontal, Undo } from 'lucide-react';
 
 interface EditorTimelineProps {
     sequenceAsset: ProjectAsset;
+    filterAssetId: string | null;
     projectAssets: ProjectAsset[];
     projectNodes: FlowNode[];
     onUpdateAsset: (asset: ProjectAsset) => void;
+    onUpdateNode: (nodeId: string, data: any) => void;
 }
 
+const TRACK_CONFIG = [
+    { id: 0, label: 'V1', type: 'video' },
+    { id: 1, label: 'V2', type: 'video' },
+    { id: 2, label: 'A1', type: 'audio' },
+    { id: 3, label: 'A2', type: 'audio' },
+];
+
 export const EditorTimeline: React.FC<EditorTimelineProps> = ({ 
-    sequenceAsset, projectAssets, projectNodes, onUpdateAsset 
+    sequenceAsset, filterAssetId, projectAssets, projectNodes, onUpdateAsset, onUpdateNode
 }) => {
     // Timeline State
     const [clips, setClips] = useState<TimelineClip[]>(sequenceAsset.timelineData?.clips || []);
+    const [history, setHistory] = useState<TimelineClip[][]>([]);
+    
     const [currentTime, setCurrentTime] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
     const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
     const [scale, setScale] = useState(20); // Pixels per second
+    const [binFilter, setBinFilter] = useState<'approved' | 'review' | 'all'>('approved');
+    const [tool, setTool] = useState<'select' | 'split'>('select');
     
+    // Interaction State
+    const [isScrubbing, setIsScrubbing] = useState(false);
+    const [draggingClip, setDraggingClip] = useState<{ id: string, startX: number, originalStart: number, originalTrack: number } | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string } | null>(null);
+
     // Playback Refs
     const requestRef = useRef<number | undefined>(undefined);
     const startTimeRef = useRef<number>(0);
     const lastTimeRef = useRef<number>(0);
     const videoRefs = useRef<Record<string, HTMLVideoElement>>({});
+    const timelineContainerRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
 
     // --- Media Bin Logic ---
-    // Fetch all approved media from children (Shots) of this Sequence
     const binItems = useMemo(() => {
-        const childAssets = projectAssets.filter(a => a.parentId === sequenceAsset.id);
+        // Find relevant assets:
+        // If filterAssetId is present, we only show media for THAT asset.
+        // Otherwise, we show media for all children of the Sequence.
+        
+        let targetAssets = [];
+        if (filterAssetId) {
+            targetAssets = projectAssets.filter(a => a.id === filterAssetId);
+        } else {
+            targetAssets = projectAssets.filter(a => a.parentId === sequenceAsset.id);
+        }
+
         const items: { node: FlowNode, asset: ProjectAsset, type: 'video' | 'image' }[] = [];
 
-        childAssets.forEach(asset => {
-            const approvedNodes = projectNodes.filter(n => 
-                n.assetId === asset.id && 
-                n.data.status === 'approved' &&
-                (n.data.imageUrl || n.data.videoUrl)
-            );
+        targetAssets.forEach(asset => {
+            const validNodes = projectNodes.filter(n => {
+                if (n.assetId !== asset.id) return false;
+                if (!n.data.imageUrl && !n.data.videoUrl) return false;
+                
+                const s = n.data.status || 'draft';
+                if (binFilter === 'approved') return s === 'approved';
+                if (binFilter === 'review') return s === 'review'; // Exclusive
+                return true; // 'all'
+            });
             
-            approvedNodes.forEach(node => {
+            validNodes.forEach(node => {
                 items.push({
                     node,
                     asset,
@@ -48,8 +81,24 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             });
         });
         return items;
-    }, [sequenceAsset, projectAssets, projectNodes]);
+    }, [sequenceAsset, filterAssetId, projectAssets, projectNodes, binFilter]);
 
+    // --- Undo Logic ---
+    const saveToHistory = useCallback((newClips: TimelineClip[]) => {
+        setHistory(prev => {
+            const newHistory = [...prev, clips];
+            if (newHistory.length > 20) newHistory.shift();
+            return newHistory;
+        });
+        setClips(newClips);
+    }, [clips]);
+
+    const handleUndo = useCallback(() => {
+        if (history.length === 0) return;
+        const previous = history[history.length - 1];
+        setClips(previous);
+        setHistory(prev => prev.slice(0, -1));
+    }, [history]);
 
     // --- Playback Loop ---
     const animate = (time: number) => {
@@ -60,11 +109,10 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         if (isPlaying) {
             setCurrentTime(prev => {
                 const next = prev + deltaTime;
-                // Auto-stop at end
                 const maxDuration = Math.max(...clips.map(c => c.start + c.duration), 0) + 1;
                 if (next > maxDuration) {
                     setIsPlaying(false);
-                    return 0; // Loop or stop? Let's stop.
+                    return 0;
                 }
                 return next;
             });
@@ -86,6 +134,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
 
     // Save on change
     useEffect(() => {
+        // Debounce save slightly? Or just save.
         onUpdateAsset({
             ...sequenceAsset,
             timelineData: {
@@ -94,6 +143,64 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             }
         });
     }, [clips]);
+
+    // Global Interaction Handlers (Scrub & Drag)
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            // Scrubbing
+            if (isScrubbing && timelineContainerRef.current) {
+                const rect = timelineContainerRef.current.getBoundingClientRect();
+                // We need to account for scrollLeft of the container
+                const scrollLeft = scrollContainerRef.current?.scrollLeft || 0;
+                const x = e.clientX - rect.left + scrollLeft;
+                setCurrentTime(Math.max(0, x / scale));
+            }
+
+            // Dragging Clip
+            if (draggingClip && timelineContainerRef.current) {
+                const deltaX = e.clientX - draggingClip.startX;
+                const deltaTime = deltaX / scale;
+                
+                setClips(prev => prev.map(c => {
+                    if (c.id === draggingClip.id) {
+                        return {
+                            ...c,
+                            start: Math.max(0, draggingClip.originalStart + deltaTime)
+                        };
+                    }
+                    return c;
+                }));
+            }
+        };
+
+        const handleMouseUp = () => {
+            if (isScrubbing) setIsScrubbing(false);
+            if (draggingClip) {
+                saveToHistory(clips); // Commit drag
+                setDraggingClip(null);
+            }
+        };
+        
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                handleUndo();
+            }
+        }
+
+        if (isScrubbing || draggingClip) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+        }
+        
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [isScrubbing, draggingClip, scale, clips, handleUndo, saveToHistory]);
 
     // --- Actions ---
 
@@ -109,17 +216,16 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             .sort((a, b) => a.title.localeCompare(b.title, undefined, {numeric: true}));
 
         childAssets.forEach(asset => {
-            // Find best media: Video > Image
+            // Find LATEST approved media
             const candidates = projectNodes.filter(n => n.assetId === asset.id && n.data.status === 'approved');
-            const video = candidates.find(n => n.type === NodeType.AI_VIDEO_GEN && n.data.videoUrl);
-            const image = candidates.find(n => n.type === NodeType.AI_IMAGE_GEN && n.data.imageUrl);
-
-            const selected = video || image;
+            // Sort by creation time (using ID timestamp) descending
+            candidates.sort((a, b) => b.id.localeCompare(a.id));
+            
+            const selected = candidates[0]; // Take most recent approved
             
             if (selected) {
                 const isVideo = selected.type === NodeType.AI_VIDEO_GEN;
                 const url = isVideo ? selected.data.videoUrl! : selected.data.imageUrl!;
-                // Parse duration if video, default 5s if image
                 const duration = isVideo && selected.data.duration ? parseFloat(selected.data.duration) : 5;
 
                 newClips.push({
@@ -130,47 +236,24 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                     start: cursor,
                     duration: duration,
                     offset: 0,
-                    track: 0,
+                    track: 0, // Assemble to V1
                     label: asset.title,
-                    thumbnail: selected.data.imageUrl // Even videos usually have a thumb/poster
+                    thumbnail: selected.data.imageUrl
                 });
                 cursor += duration;
             }
         });
-
-        setClips(newClips);
+        
+        saveToHistory(newClips);
         setCurrentTime(0);
     };
 
-    const handleAddClip = (item: typeof binItems[0]) => {
-        const isVideo = item.type === 'video';
-        const url = isVideo ? item.node.data.videoUrl! : item.node.data.imageUrl!;
-        const duration = isVideo && item.node.data.duration ? parseFloat(item.node.data.duration) : 5;
-
-        // Find end of timeline
-        const end = Math.max(...clips.map(c => c.start + c.duration), 0);
-
-        const newClip: TimelineClip = {
-            id: `clip-${Date.now()}`,
-            sourceNodeId: item.node.id,
-            mediaUrl: url,
-            mediaType: isVideo ? 'video' : 'image',
-            start: end,
-            duration: duration,
-            offset: 0,
-            track: 0,
-            label: item.asset.title,
-            thumbnail: item.node.data.imageUrl
-        };
-
-        setClips([...clips, newClip]);
-    };
-
     const handleSplit = () => {
-        const target = clips.find(c => currentTime > c.start && currentTime < c.start + c.duration);
+        const target = clips.find(c => currentTime > c.start && currentTime < c.start + c.duration && (selectedClipId ? c.id === selectedClipId : true));
         if (!target) return;
 
-        const splitPoint = currentTime - target.start; // Relative time
+        const splitPoint = currentTime - target.start;
+        if (splitPoint <= 0.1 || splitPoint >= target.duration - 0.1) return;
         
         const left: TimelineClip = {
             ...target,
@@ -184,40 +267,98 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             duration: target.duration - splitPoint,
             offset: target.offset + splitPoint
         };
-
-        setClips(clips.map(c => c.id === target.id ? left : c).concat(right));
+        
+        const newClips = clips.map(c => c.id === target.id ? left : c).concat(right);
+        saveToHistory(newClips);
     };
 
     const handleDelete = () => {
         if (!selectedClipId) return;
-        setClips(clips.filter(c => c.id !== selectedClipId));
+        const newClips = clips.filter(c => c.id !== selectedClipId);
+        saveToHistory(newClips);
         setSelectedClipId(null);
     };
 
-    const handleClearTimeline = () => {
-        if(window.confirm("Clear entire timeline?")) {
-            setClips([]);
-            setCurrentTime(0);
+    // --- Drag & Drop from Bin ---
+    
+    const handleDragStart = (e: React.DragEvent, item: typeof binItems[0]) => {
+        e.dataTransfer.setData('application/json', JSON.stringify(item));
+        e.dataTransfer.effectAllowed = 'copy';
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    };
+
+    const handleDrop = (e: React.DragEvent, trackId: number) => {
+        e.preventDefault();
+        const data = e.dataTransfer.getData('application/json');
+        if (!data) return;
+
+        const item = JSON.parse(data) as typeof binItems[0];
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        // Adjust for scrollLeft
+        const scrollLeft = scrollContainerRef.current?.scrollLeft || 0;
+        const x = e.clientX - rect.left + scrollLeft; 
+        const dropTime = Math.max(0, x / scale);
+
+        const isVideo = item.type === 'video';
+        const url = isVideo ? item.node.data.videoUrl! : item.node.data.imageUrl!;
+        const duration = isVideo && item.node.data.duration ? parseFloat(item.node.data.duration) : 5;
+
+        const newClip: TimelineClip = {
+            id: `clip-${Date.now()}-${Math.random()}`,
+            sourceNodeId: item.node.id,
+            mediaUrl: url,
+            mediaType: isVideo ? 'video' : 'image',
+            start: dropTime,
+            duration: duration,
+            offset: 0,
+            track: trackId,
+            label: item.asset.title,
+            thumbnail: item.node.data.imageUrl
+        };
+
+        saveToHistory([...clips, newClip]);
+    };
+
+    const handleClipMouseDown = (e: React.MouseEvent, clip: TimelineClip) => {
+        e.stopPropagation();
+        setSelectedClipId(clip.id);
+        if (tool === 'select') {
+             setDraggingClip({
+                 id: clip.id,
+                 startX: e.clientX,
+                 originalStart: clip.start,
+                 originalTrack: clip.track
+             });
         }
-    }
+    };
+    
+    const handleBinContextMenu = (e: React.MouseEvent, nodeId: string) => {
+        e.preventDefault();
+        setContextMenu({ x: e.clientX, y: e.clientY, nodeId });
+    };
+
+    const handleSetNodeStatus = (status: 'approved' | 'review' | 'archived') => {
+        if (contextMenu) {
+            onUpdateNode(contextMenu.nodeId, { status });
+            setContextMenu(null);
+        }
+    };
 
     // --- Rendering Helpers ---
-    
-    // Get clip at current time for rendering
     const activeClip = useMemo(() => {
-        // Find highest track clip at current time
-        // Sort by track index descending
-        const visible = clips.filter(c => currentTime >= c.start && currentTime < c.start + c.duration);
+        const visible = clips.filter(c => currentTime >= c.start && currentTime < c.start + c.duration && (c.track === 0 || c.track === 1));
         return visible.sort((a, b) => b.track - a.track)[0];
     }, [clips, currentTime]);
 
-    // Handle Video Sync
     useEffect(() => {
         if (activeClip && activeClip.mediaType === 'video') {
             const vid = videoRefs.current[activeClip.id];
             if (vid) {
                 const targetTime = activeClip.offset + (currentTime - activeClip.start);
-                // Only seek if significantly off (to allow smooth playback)
                 if (Math.abs(vid.currentTime - targetTime) > 0.3) {
                     vid.currentTime = targetTime;
                 }
@@ -225,7 +366,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                 else vid.pause();
             }
         }
-        // Pause others
         Object.keys(videoRefs.current).forEach(key => {
             if (key !== activeClip?.id) {
                 videoRefs.current[key]?.pause();
@@ -233,24 +373,49 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         });
     }, [activeClip, currentTime, isPlaying]);
 
+    // Calculate total timeline width
+    const totalDuration = Math.max(300, ...clips.map(c => c.start + c.duration + 10));
 
     return (
-        <div className="w-full h-full flex flex-col bg-zinc-950 text-white font-sans overflow-hidden">
+        <div className="w-full h-full flex flex-col bg-zinc-950 text-white font-sans overflow-hidden" onClick={() => setContextMenu(null)}>
             {/* Top Section: Bin & Player */}
             <div className="flex-1 flex min-h-0 border-b border-zinc-800">
                 
                 {/* BIN */}
                 <div className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
-                    <div className="p-3 border-b border-zinc-800 flex justify-between items-center">
-                        <h3 className="font-bold text-xs uppercase text-zinc-400">Media Bin</h3>
-                        <span className="text-[10px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-500">{binItems.length} items</span>
+                    <div className="p-3 border-b border-zinc-800 flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                            <h3 className="font-bold text-xs uppercase text-zinc-400">
+                                {filterAssetId ? "Shot Media" : "Sequence Bin"}
+                            </h3>
+                            <span className="text-[10px] bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-500">{binItems.length} items</span>
+                        </div>
+                        {/* Bin Filter */}
+                        <div className="flex bg-zinc-900 rounded p-0.5">
+                            {[
+                                { id: 'approved', label: 'Approved' },
+                                { id: 'review', label: 'Review' },
+                                { id: 'all', label: 'All' }
+                            ].map(f => (
+                                <button 
+                                    key={f.id}
+                                    onClick={() => setBinFilter(f.id as any)}
+                                    className={`flex-1 text-[9px] py-1 rounded font-medium transition-colors ${binFilter === f.id ? 'bg-zinc-700 text-white shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                >
+                                    {f.label}
+                                </button>
+                            ))}
+                        </div>
                     </div>
+                    
                     <div className="flex-1 overflow-y-auto p-3 grid grid-cols-2 gap-3 content-start">
                         {binItems.map((item, idx) => (
                             <div 
                                 key={idx} 
-                                className="group relative aspect-square bg-black rounded border border-zinc-800 cursor-pointer hover:border-blue-500 overflow-hidden"
-                                onClick={() => handleAddClip(item)}
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, item)}
+                                onContextMenu={(e) => handleBinContextMenu(e, item.node.id)}
+                                className="group relative aspect-square bg-black rounded border border-zinc-800 cursor-grab active:cursor-grabbing hover:border-blue-500 overflow-hidden"
                             >
                                 {item.type === 'video' ? (
                                     <video src={item.node.data.videoUrl} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
@@ -260,14 +425,17 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                 <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-[10px] text-zinc-300">
                                     {item.asset.title}
                                 </div>
-                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Plus className="bg-blue-600 text-white p-0.5 rounded-full" size={16}/>
+                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/50 p-1 rounded">
+                                    <Layers size={12} className="text-white"/>
                                 </div>
+                                {/* Status Icon */}
+                                {item.node.data.status === 'approved' && <div className="absolute top-1 left-1 text-green-500 bg-black/50 rounded-full"><CheckCircle size={12}/></div>}
+                                {item.node.data.status === 'review' && <div className="absolute top-1 left-1 text-yellow-500 bg-black/50 rounded-full"><AlertCircle size={12}/></div>}
                             </div>
                         ))}
                         {binItems.length === 0 && (
                             <div className="col-span-2 text-center p-4 text-zinc-600 text-xs italic">
-                                No approved media in sequence shots.
+                                No media matches filter.
                             </div>
                         )}
                     </div>
@@ -307,8 +475,9 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                         )}
                         
                         {/* Timecode Overlay */}
-                        <div className="absolute bottom-4 right-4 font-mono text-xl font-bold text-white drop-shadow-md tabular-nums">
+                        <div className="absolute bottom-4 right-4 font-mono text-xl font-bold text-white drop-shadow-md tabular-nums bg-black/50 px-2 py-1 rounded">
                             {new Date(currentTime * 1000).toISOString().substr(14, 8)}
+                            <span className="text-sm text-zinc-400 ml-1">.{(currentTime % 1).toFixed(2).substr(2)}</span>
                         </div>
                     </div>
 
@@ -321,91 +490,152 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                         >
                             {isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor" className="ml-0.5"/>}
                         </button>
-                        <div className="w-[1px] h-6 bg-zinc-700 mx-2" />
-                        <button onClick={handleSplit} className="text-zinc-400 hover:text-white" title="Cut/Split (C)"><Scissors size={18}/></button>
-                        <button onClick={handleDelete} className="text-zinc-400 hover:text-red-400" title="Delete"><Trash2 size={18}/></button>
                     </div>
                 </div>
             </div>
 
             {/* Bottom Section: Timeline */}
-            <div className="h-72 shrink-0 border-t border-zinc-800 bg-zinc-900/80 flex flex-col relative select-none">
+            <div className="h-72 shrink-0 border-t border-zinc-800 bg-zinc-900/80 flex flex-row relative select-none">
                 
-                {/* Toolbar / Time Ruler */}
-                <div className="h-8 border-b border-zinc-800 flex relative bg-zinc-900">
-                    <div className="w-24 border-r border-zinc-800 shrink-0 bg-zinc-800/50 flex items-center px-2 text-[10px] font-bold text-zinc-500">
-                        TRACKS
-                    </div>
-                    {/* Simple Ruler */}
-                    <div 
-                        className="flex-1 relative overflow-hidden cursor-pointer"
-                        onMouseDown={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const x = e.clientX - rect.left;
-                            setCurrentTime(x / scale);
-                        }}
+                {/* Editing Toolbar */}
+                <div className="w-10 flex flex-col items-center py-2 gap-2 border-r border-zinc-800 bg-zinc-900 z-30 relative shadow-xl">
+                    <button 
+                        onClick={() => setTool('select')}
+                        className={`p-2 rounded hover:bg-zinc-700 transition-colors ${tool === 'select' ? 'text-blue-400 bg-zinc-800' : 'text-zinc-400'}`}
+                        title="Select Tool (V)"
                     >
-                         {Array.from({ length: Math.ceil(100) }).map((_, i) => (
-                             <div key={i} className="absolute top-0 bottom-0 border-l border-zinc-800 text-[9px] text-zinc-600 pl-1 pt-1" style={{ left: i * scale * 5 }}>
-                                 {i * 5}s
+                        <MousePointer2 size={16} />
+                    </button>
+                    <button 
+                        onClick={() => { setTool('split'); handleSplit(); }}
+                        className={`p-2 rounded hover:bg-zinc-700 transition-colors ${tool === 'split' ? 'text-blue-400 bg-zinc-800' : 'text-zinc-400'}`}
+                        title="Split Clip (C)"
+                    >
+                        <Scissors size={16} />
+                    </button>
+                    <button 
+                        onClick={handleDelete}
+                        className="p-2 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-red-400 mt-2"
+                        title="Delete Selected (Del)"
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                    
+                     <button 
+                        onClick={handleUndo}
+                        disabled={history.length === 0}
+                        className="p-2 rounded hover:bg-zinc-700 transition-colors text-zinc-400 hover:text-white mt-auto mb-2 disabled:opacity-30"
+                        title="Undo (Ctrl+Z)"
+                    >
+                        <Undo size={16} />
+                    </button>
+                </div>
+
+                <div className="flex-1 flex flex-col min-w-0">
+                    
+                    {/* Fixed Headers Column + Scrollable Content */}
+                    <div className="flex-1 flex overflow-hidden">
+                         
+                         {/* Track Headers Column */}
+                         <div className="w-24 shrink-0 bg-zinc-900 border-r border-zinc-800 flex flex-col z-20 shadow-lg">
+                             <div className="h-8 border-b border-zinc-800 bg-zinc-800/50 flex items-center justify-center text-[10px] font-bold text-zinc-500">
+                                 TIMECODE
                              </div>
-                         ))}
-                         {/* Playhead Marker */}
-                         <div 
-                            className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-10 pointer-events-none"
-                            style={{ left: currentTime * scale }}
-                         >
-                             <div className="absolute -top-1 -left-1.5 w-3 h-3 bg-red-500 transform rotate-45" />
+                             {TRACK_CONFIG.map(track => (
+                                 <div key={track.id} className="h-24 border-b border-zinc-800 flex flex-col items-center justify-center text-xs text-zinc-500">
+                                     <div className="font-bold flex items-center gap-1">
+                                        {track.type === 'audio' ? <Music size={10} /> : <Video size={10} />}
+                                        {track.label}
+                                    </div>
+                                 </div>
+                             ))}
+                         </div>
+
+                         {/* Scrollable Tracks & Ruler */}
+                         <div className="flex-1 overflow-auto bg-zinc-900/10 relative" ref={scrollContainerRef}>
+                              <div className="relative min-w-full" style={{ width: totalDuration * scale, minWidth: '100%' }}>
+                                   {/* Ruler */}
+                                   <div 
+                                        className="h-8 border-b border-zinc-800 bg-zinc-900/80 sticky top-0 z-10 flex cursor-ew-resize"
+                                        onMouseDown={() => setIsScrubbing(true)}
+                                   >
+                                        {Array.from({ length: Math.ceil(totalDuration) }).map((_, i) => (
+                                            <div key={i} className="absolute top-0 bottom-0 border-l border-zinc-800 text-[9px] text-zinc-600 pl-1 pt-1 pointer-events-none" style={{ left: i * scale * 5 }}>
+                                                {i * 5}s
+                                            </div>
+                                        ))}
+                                   </div>
+
+                                   {/* Track Rows */}
+                                   <div className="relative" ref={timelineContainerRef}>
+                                       {/* Playhead Line (Under clips? No, Overlay) */}
+                                       <div 
+                                            className="absolute top-0 bottom-0 w-[1px] bg-red-500 z-30 pointer-events-none"
+                                            style={{ left: currentTime * scale, height: '100%' }}
+                                       >
+                                            <div className="absolute -top-3 -left-1.5 w-3 h-3 bg-red-500 transform rotate-45" />
+                                       </div>
+
+                                       {TRACK_CONFIG.map(track => (
+                                           <div 
+                                                key={track.id} 
+                                                className={`h-24 border-b border-zinc-800 relative ${track.type === 'audio' ? 'bg-zinc-900/40' : 'bg-zinc-900/20'}`}
+                                                onDragOver={handleDragOver}
+                                                onDrop={(e) => handleDrop(e, track.id)}
+                                            >
+                                                {clips.filter(c => c.track === track.id).map(clip => (
+                                                    <div
+                                                        key={clip.id}
+                                                        className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-pointer border ring-offset-1 ring-offset-zinc-900 transition-shadow select-none
+                                                            ${selectedClipId === clip.id ? 'border-white ring-2 ring-blue-500 z-20' : 'border-zinc-700 hover:border-zinc-500 opacity-90'}
+                                                            ${draggingClip?.id === clip.id ? 'opacity-50 cursor-grabbing' : ''}
+                                                        `}
+                                                        style={{
+                                                            left: clip.start * scale,
+                                                            width: clip.duration * scale,
+                                                            backgroundColor: clip.mediaType === 'video' ? '#1e3a8a' : (track.type === 'audio' ? '#0f766e' : '#581c87')
+                                                        }}
+                                                        onMouseDown={(e) => handleClipMouseDown(e, clip)}
+                                                    >
+                                                        <div className="w-full h-full flex items-center relative overflow-hidden">
+                                                            {clip.thumbnail && track.type !== 'audio' && (
+                                                                <img src={clip.thumbnail} className="h-full w-auto object-cover opacity-50 grayscale mix-blend-overlay pointer-events-none" />
+                                                            )}
+                                                            <div className="absolute inset-0 p-1.5 flex flex-col justify-between pointer-events-none">
+                                                                <span className="text-[10px] font-bold text-white truncate drop-shadow-md">{clip.label}</span>
+                                                                {track.type !== 'audio' && <span className="text-[9px] text-white/70 font-mono drop-shadow-md">{clip.duration.toFixed(1)}s</span>}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                           </div>
+                                       ))}
+                                   </div>
+                              </div>
                          </div>
                     </div>
                 </div>
-
-                {/* Tracks Container */}
-                <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
-                    {[0, 1].map(trackIdx => (
-                        <div key={trackIdx} className="h-24 border-b border-zinc-800 relative flex group">
-                            <div className="w-24 shrink-0 border-r border-zinc-800 bg-zinc-900 flex flex-col items-center justify-center text-xs text-zinc-500 group-hover:bg-zinc-800 transition-colors">
-                                <div className="font-bold">V{trackIdx + 1}</div>
-                                {trackIdx === 0 && <span className="text-[9px] opacity-50">Main</span>}
-                            </div>
-                            
-                            {/* Track Lane */}
-                            <div className="flex-1 relative bg-zinc-900/30">
-                                {clips.filter(c => c.track === trackIdx).map(clip => (
-                                    <div
-                                        key={clip.id}
-                                        className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-pointer border ring-offset-1 ring-offset-zinc-900 transition-all ${selectedClipId === clip.id ? 'border-yellow-400 ring-2 ring-yellow-500 z-10' : 'border-zinc-700 hover:border-zinc-500 opacity-90'}`}
-                                        style={{
-                                            left: clip.start * scale,
-                                            width: clip.duration * scale,
-                                            backgroundColor: clip.mediaType === 'video' ? '#1e3a8a' : '#581c87' // Blue vs Purple
-                                        }}
-                                        onClick={(e) => { e.stopPropagation(); setSelectedClipId(clip.id); setCurrentTime(clip.start); }}
-                                    >
-                                        {/* Clip Content */}
-                                        <div className="w-full h-full flex items-center relative overflow-hidden">
-                                            {/* Thumbnail Strip (Simplified) */}
-                                            {clip.thumbnail && (
-                                                <img src={clip.thumbnail} className="h-full w-auto object-cover opacity-50 grayscale mix-blend-overlay" />
-                                            )}
-                                            <div className="absolute inset-0 p-1.5 flex flex-col justify-between">
-                                                <span className="text-[10px] font-bold text-white truncate drop-shadow-md">{clip.label}</span>
-                                                <span className="text-[9px] text-white/70 font-mono drop-shadow-md">{clip.duration.toFixed(1)}s</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
-                    
-                    {/* Playhead Line extending down */}
-                    <div 
-                        className="absolute top-0 bottom-0 w-[1px] bg-red-500 pointer-events-none z-20"
-                        style={{ left: currentTime * scale + 96 }} // +96 for sidebar width
-                    />
-                </div>
             </div>
+
+            {/* Context Menu for Bin Items */}
+            {contextMenu && (
+                <div 
+                    className="fixed z-50 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 min-w-[140px]"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Set Status</div>
+                    <button onClick={() => handleSetNodeStatus('approved')} className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-400 flex items-center gap-2">
+                        <CheckCircle size={12} /> Approved
+                    </button>
+                    <button onClick={() => handleSetNodeStatus('review')} className="w-full text-left px-3 py-2 text-xs hover:bg-yellow-900/30 text-yellow-400 flex items-center gap-2">
+                        <AlertCircle size={12} /> Review
+                    </button>
+                    <button onClick={() => handleSetNodeStatus('archived')} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-400 flex items-center gap-2">
+                        <Archive size={12} /> Archive
+                    </button>
+                </div>
+            )}
         </div>
     );
 };
