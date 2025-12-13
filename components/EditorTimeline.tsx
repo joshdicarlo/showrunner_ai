@@ -1,8 +1,7 @@
 
-
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ProjectAsset, FlowNode, TimelineClip, NodeType } from '../types';
-import { Play, Pause, Scissors, Trash2, SkipBack, Plus, Layers, Image as ImageIcon, Video, Volume2, MousePointer2, Filter, Music, Mic, CheckCircle, AlertCircle, Archive, MoreHorizontal, Undo, GripHorizontal, Edit2 } from 'lucide-react';
+import { Play, Pause, Scissors, Trash2, SkipBack, Plus, Layers, Image as ImageIcon, Video, Volume2, MousePointer2, Filter, Music, Mic, CheckCircle, AlertCircle, Archive, MoreHorizontal, Undo, GripHorizontal, Edit2, StepBack, StepForward, SkipForward, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface EditorTimelineProps {
     sequenceAsset: ProjectAsset;
@@ -51,8 +50,10 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
     const [tool, setTool] = useState<'select' | 'split'>('select');
     
     // Interaction State
-    const [isScrubbing, setIsScrubbing] = useState(false);
+    const [interactionMode, setInteractionMode] = useState<'none' | 'scrubbing' | 'dragging' | 'trimming' | 'marquee'>('none');
     const [draggingClips, setDraggingClips] = useState<{ id: string, originalStart: number, originalTrack: number }[] | null>(null);
+    const [trimmingClip, setTrimmingClip] = useState<{ id: string, side: 'start' | 'end', originalStart: number, originalDuration: number, originalOffset: number, sourceDuration?: number } | null>(null);
+    
     const [dragStartX, setDragStartX] = useState(0);
     const [dragStartY, setDragStartY] = useState(0);
     
@@ -78,6 +79,15 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
     const rulerRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
+
+    // --- Effect: Independent Timeline State ---
+    // Reset state when sequence changes to ensure independence
+    useEffect(() => {
+        setClips(sequenceAsset.timelineData?.clips || []);
+        setHistory([]);
+        setCurrentTime(0);
+        setSelectedClipIds(new Set());
+    }, [sequenceAsset.id]);
 
     // --- Sync Scrolling ---
     const handleContentScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -171,7 +181,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         };
     }, [isPlaying]);
 
-    // Auto-Save
+    // Auto-Save to Asset
     useEffect(() => {
         onUpdateAsset({
             ...sequenceAsset,
@@ -184,11 +194,11 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
 
     // --- Mouse Interaction Handlers ---
     
-    // Global Mouse Move/Up for Dragging/Scrubbing/Resizing
+    // Global Mouse Move/Up for Dragging/Scrubbing/Resizing/Trimming
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             // 1. Scrubbing
-            if (isScrubbing && timelineRef.current) {
+            if (interactionMode === 'scrubbing' && timelineRef.current) {
                 const rect = timelineRef.current.getBoundingClientRect();
                 const headerWidth = 96; // Fixed header width
                 const relativeX = e.clientX - rect.left - headerWidth + scrollLeft;
@@ -205,8 +215,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             if (resizingTrackId !== null) {
                 setTracks(prev => prev.map(t => {
                     if (t.id === resizingTrackId) {
-                        // We need approximate height logic here, simplified for dragging
-                        // Using movementY is cleaner if we had start pos, but this works
                         return { ...t, height: Math.max(32, t.height + e.movementY) };
                     }
                     return t;
@@ -214,33 +222,21 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             }
 
             // 4. Clip Dragging
-            if (draggingClips && timelineRef.current) {
+            if (interactionMode === 'dragging' && draggingClips && contentRef.current) {
                 const deltaX = (e.clientX - dragStartX) / scale;
-                const deltaYPixel = e.clientY - dragStartY;
                 
                 // Track Switch Logic
-                // We need to find which track we are hovering over.
-                // Since tracks have variable heights, we iterate.
+                const rect = contentRef.current.getBoundingClientRect();
+                const relativeY = e.clientY - rect.top + scrollTop;
+                
                 let targetTrackId = draggingClips[0].originalTrack;
-                
-                // Calculate offset from the original track center to finding new track
-                // This is complex because each track has a different height.
-                // Simple heuristic: If we moved vertically enough to cross a threshold?
-                // Let's use simple index steps if all tracks were same height, but they aren't.
-                // Better: Check valid drop targets based on mouse Y relative to timeline container.
-                
-                if (contentRef.current) {
-                    const rect = contentRef.current.getBoundingClientRect();
-                    const relativeY = e.clientY - rect.top + scrollTop;
-                    
-                    let currentY = 0;
-                    for (const track of tracks) {
-                        if (relativeY >= currentY && relativeY < currentY + track.height) {
-                            targetTrackId = track.id;
-                            break;
-                        }
-                        currentY += track.height;
+                let currentY = 0;
+                for (const track of tracks) {
+                    if (relativeY >= currentY && relativeY < currentY + track.height) {
+                        targetTrackId = track.id;
+                        break;
                     }
+                    currentY += track.height;
                 }
 
                 setClips(prev => prev.map(c => {
@@ -251,7 +247,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                         const isCompatible = targetTrack && 
                             ((c.mediaType === 'video' && targetTrack.type === 'video') || 
                              (c.mediaType === 'audio' && targetTrack.type === 'audio') ||
-                             (c.mediaType === 'image' && targetTrack.type === 'video')); // Images go on video tracks
+                             (c.mediaType === 'image' && targetTrack.type === 'video'));
 
                         return {
                             ...c,
@@ -263,8 +259,51 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                 }));
             }
 
-            // 5. Marquee Selection
-            if (marqueeBox && contentRef.current) {
+            // 5. Clip Trimming
+            if (interactionMode === 'trimming' && trimmingClip) {
+                const deltaX = (e.clientX - dragStartX) / scale;
+                
+                setClips(prev => prev.map(c => {
+                    if (c.id === trimmingClip.id) {
+                        if (trimmingClip.side === 'end') {
+                            // Adjust Duration
+                            let newDuration = Math.max(0.1, trimmingClip.originalDuration + deltaX);
+                            
+                            // Video source limit constraint
+                            if (trimmingClip.sourceDuration) {
+                                newDuration = Math.min(newDuration, trimmingClip.sourceDuration - trimmingClip.originalOffset);
+                            }
+                            return { ...c, duration: newDuration };
+                        } else {
+                            // Adjust Start (Left Handle)
+                            // Moving right (positive delta) -> Start increases, Duration decreases, Offset increases
+                            // Moving left (negative delta) -> Start decreases, Duration increases, Offset decreases
+                            
+                            let newStart = Math.max(0, trimmingClip.originalStart + deltaX);
+                            let change = newStart - trimmingClip.originalStart;
+                            
+                            // Check Offset constraint (cannot go below 0)
+                            if (c.mediaType === 'video') {
+                                if (trimmingClip.originalOffset + change < 0) {
+                                    change = -trimmingClip.originalOffset;
+                                    newStart = trimmingClip.originalStart + change;
+                                }
+                            }
+                            
+                            return {
+                                ...c,
+                                start: newStart,
+                                duration: Math.max(0.1, trimmingClip.originalDuration - change),
+                                offset: c.mediaType === 'video' ? trimmingClip.originalOffset + change : 0
+                            };
+                        }
+                    }
+                    return c;
+                }));
+            }
+
+            // 6. Marquee Selection
+            if (interactionMode === 'marquee' && marqueeBox && contentRef.current) {
                 const rect = contentRef.current.getBoundingClientRect();
                 const currentX = e.clientX - rect.left + scrollLeft;
                 const currentY = e.clientY - rect.top + scrollTop;
@@ -277,14 +316,15 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         };
 
         const handleMouseUp = (e: MouseEvent) => {
-            if (isScrubbing) setIsScrubbing(false);
-            if (isResizingTimeline) setIsResizingTimeline(false);
-            setResizingTrackId(null);
-            
-            if (draggingClips) {
+            if (interactionMode === 'dragging' || interactionMode === 'trimming') {
                 saveToHistory(clips);
-                setDraggingClips(null);
             }
+            
+            setInteractionMode('none');
+            setIsResizingTimeline(false);
+            setResizingTrackId(null);
+            setDraggingClips(null);
+            setTrimmingClip(null);
 
             // Finalize Marquee
             if (marqueeBox) {
@@ -335,7 +375,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             }
         }
 
-        if (isScrubbing || isResizingTimeline || resizingTrackId !== null || draggingClips || marqueeBox) {
+        if (interactionMode !== 'none' || isResizingTimeline || resizingTrackId !== null) {
             window.addEventListener('mousemove', handleMouseMove);
             window.addEventListener('mouseup', handleMouseUp);
         }
@@ -347,7 +387,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             window.removeEventListener('mouseup', handleMouseUp);
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [isScrubbing, draggingClips, dragStartX, dragStartY, clips, handleUndo, saveToHistory, scale, tracks, isResizingTimeline, resizingTrackId, marqueeBox, selectedClipIds, scrollLeft, scrollTop]);
+    }, [interactionMode, draggingClips, trimmingClip, dragStartX, dragStartY, clips, handleUndo, saveToHistory, scale, tracks, isResizingTimeline, resizingTrackId, marqueeBox, selectedClipIds, scrollLeft, scrollTop]);
 
 
     // --- Actions ---
@@ -430,6 +470,31 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         setSelectedClipIds(new Set());
     };
 
+    // --- Transport Logic ---
+    const stepFrame = (frames: number) => {
+        const frameTime = 1/24; // Assume 24fps
+        setCurrentTime(t => Math.max(0, t + (frames * frameTime)));
+    };
+
+    const stepToCut = (direction: 'next' | 'prev') => {
+        // Collect all cut points (start and end of all clips)
+        const cuts = new Set<number>([0]);
+        clips.forEach(c => {
+            cuts.add(c.start);
+            cuts.add(c.start + c.duration);
+        });
+        const sortedCuts = Array.from(cuts).sort((a, b) => a - b);
+        
+        if (direction === 'next') {
+            const next = sortedCuts.find(c => c > currentTime + 0.01);
+            if (next !== undefined) setCurrentTime(next);
+        } else {
+            // Find last cut smaller than current
+            const prev = sortedCuts.reverse().find(c => c < currentTime - 0.01);
+            if (prev !== undefined) setCurrentTime(prev);
+        }
+    };
+
     // --- Event Handlers ---
 
     const handleClipMouseDown = (e: React.MouseEvent, clipId: string) => {
@@ -451,6 +516,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         if (tool === 'select') {
             setDragStartX(e.clientX);
             setDragStartY(e.clientY);
+            setInteractionMode('dragging');
             
             // Prepare dragging for ALL selected clips
             const dragging = clips
@@ -461,6 +527,29 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         }
     };
 
+    const handleTrimMouseDown = (e: React.MouseEvent, clip: TimelineClip, side: 'start' | 'end') => {
+        e.stopPropagation();
+        setDragStartX(e.clientX);
+        setInteractionMode('trimming');
+        
+        // Determine source duration if possible
+        let sourceDuration: number | undefined = undefined;
+        if (clip.mediaType === 'video') {
+            const node = projectNodes.find(n => n.id === clip.sourceNodeId);
+            if (node && node.data.duration) sourceDuration = parseFloat(node.data.duration);
+            else sourceDuration = 8; // Default fallback for Veo
+        }
+
+        setTrimmingClip({
+            id: clip.id,
+            side,
+            originalStart: clip.start,
+            originalDuration: clip.duration,
+            originalOffset: clip.offset,
+            sourceDuration
+        });
+    };
+
     const handleTimelineMouseDown = (e: React.MouseEvent) => {
         if (e.button !== 0) return;
         // Start Marquee
@@ -468,6 +557,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             const rect = contentRef.current.getBoundingClientRect();
             const x = e.clientX - rect.left + scrollLeft;
             const y = e.clientY - rect.top + scrollTop;
+            setInteractionMode('marquee');
             setMarqueeBox({ x, y, w: 0, h: 0 });
             
             if (!e.shiftKey && !e.ctrlKey) {
@@ -542,7 +632,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             
             {/* Top Section: Bin & Player */}
             <div className="flex-1 flex min-h-0 border-b border-zinc-800">
-                {/* BIN (Same as before) */}
+                {/* BIN */}
                 <div className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
                     <div className="p-3 border-b border-zinc-800 flex flex-col gap-2">
                         <div className="flex justify-between items-center">
@@ -568,6 +658,11 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                             >
                                 <img src={item.node.data.imageUrl} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
                                 <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate text-[10px] text-zinc-300">{item.asset.title}</div>
+                                {/* Restored Status Icons */}
+                                <div className="absolute top-1 left-1 flex gap-1">
+                                    {item.node.data.status === 'approved' && <CheckCircle size={14} className="text-green-500 fill-black" />}
+                                    {item.node.data.status === 'review' && <AlertCircle size={14} className="text-yellow-500 fill-black" />}
+                                </div>
                                 <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/50 p-1 rounded"><Layers size={12}/></div>
                             </div>
                         ))}
@@ -596,11 +691,23 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                             <span className="text-sm text-zinc-400 ml-1">.{(currentTime % 1).toFixed(2).substr(2)}</span>
                         </div>
                     </div>
+                    {/* Advanced Transport Controls */}
                     <div className="h-12 border-t border-zinc-800 bg-zinc-900 flex items-center justify-center gap-4">
-                        <button onClick={() => setCurrentTime(0)} className="text-zinc-400 hover:text-white"><SkipBack size={18}/></button>
+                        <button onClick={() => setCurrentTime(0)} className="text-zinc-400 hover:text-white" title="Start"><SkipBack size={16}/></button>
+                        
+                        <div className="flex items-center gap-2 border-r border-zinc-700 pr-4 mr-2">
+                            <button onClick={() => stepToCut('prev')} className="text-zinc-400 hover:text-white p-1" title="Previous Cut"><StepBack size={16}/></button>
+                            <button onClick={() => stepFrame(-1)} className="text-zinc-400 hover:text-white p-1" title="Previous Frame"><ChevronLeft size={16} strokeWidth={3}/></button>
+                        </div>
+
                         <button onClick={() => setIsPlaying(!isPlaying)} className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition-transform">
                             {isPlaying ? <Pause size={16} fill="currentColor"/> : <Play size={16} fill="currentColor" className="ml-0.5"/>}
                         </button>
+
+                        <div className="flex items-center gap-2 border-l border-zinc-700 pl-4 ml-2">
+                            <button onClick={() => stepFrame(1)} className="text-zinc-400 hover:text-white p-1" title="Next Frame"><ChevronRight size={16} strokeWidth={3}/></button>
+                            <button onClick={() => stepToCut('next')} className="text-zinc-400 hover:text-white p-1" title="Next Cut"><StepForward size={16}/></button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -691,7 +798,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                 >
                                     <div className="absolute -top-3 -left-1.5 w-3 h-3 bg-red-500 transform rotate-45" />
                                 </div>
-                                <div className="absolute inset-0 cursor-ew-resize z-20" onMouseDown={() => setIsScrubbing(true)} />
+                                <div className="absolute inset-0 cursor-ew-resize z-20" onMouseDown={() => setInteractionMode('scrubbing')} />
                             </div>
                         </div>
 
@@ -723,7 +830,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                             return (
                                                 <div
                                                     key={clip.id}
-                                                    className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-pointer select-none transition-shadow
+                                                    className={`absolute top-1 bottom-1 rounded overflow-hidden cursor-pointer select-none transition-shadow group/clip
                                                         ${isSelected ? 'ring-2 ring-purple-500 z-10 shadow-lg' : 'border border-zinc-700 opacity-90 hover:opacity-100'}
                                                     `}
                                                     style={{
@@ -748,6 +855,16 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                                             <span className="text-[10px] font-bold text-white truncate drop-shadow-md w-full">{clip.label}</span>
                                                             <span className="text-[9px] text-zinc-300 font-mono drop-shadow-md">{clip.duration.toFixed(1)}s</span>
                                                         </div>
+
+                                                        {/* Trim Handles (Only visible on hover/select) */}
+                                                        <div 
+                                                            className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/50 z-20 opacity-0 group-hover/clip:opacity-100 transition-opacity"
+                                                            onMouseDown={(e) => handleTrimMouseDown(e, clip, 'start')}
+                                                        />
+                                                        <div 
+                                                            className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/50 z-20 opacity-0 group-hover/clip:opacity-100 transition-opacity"
+                                                            onMouseDown={(e) => handleTrimMouseDown(e, clip, 'end')}
+                                                        />
                                                     </div>
                                                 </div>
                                             );

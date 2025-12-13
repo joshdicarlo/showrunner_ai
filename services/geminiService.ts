@@ -357,7 +357,7 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
         2. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them using the format @CharacterName (e.g. "@Zax walks in") in the description.
         3. Identify the type: "Scene", "Sequence", or "Plot Point".
         4. The Title MUST NOT contain '@' symbols (e.g. use "Zax enters", NOT "@Zax enters").
-        ${includeShots ? '5. For each Scene, also identify a list of "Shots". Shot Titles MUST start with "Shot #:" (e.g. "Shot 1: Wide Establish").' : ''}
+        ${includeShots ? '5. For each Scene, also identify a list of "Shots". Shot Titles MUST use a sequential number, e.g. "Shot 1: Wide Establish", "Shot 2: Close Up". Do not use a literal # symbol in the title.' : ''}
 
         Input Text:
         "${scriptText.slice(0, 200000)}" 
@@ -375,7 +375,7 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
                 items: {
                     type: Type.OBJECT,
                     properties: {
-                        title: { type: Type.STRING, description: "Must start with Shot #:" },
+                        title: { type: Type.STRING, description: "Must start with Shot X (where X is a number)" },
                         description: { type: Type.STRING },
                         type: { type: Type.STRING }
                     }
@@ -416,7 +416,7 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
         const prompt = `Act as a Cinematographer. Break down the following scene description into a shot list.
         
         Detailed Requirements:
-        1. For each shot, provide a Title MUST start with the shot number (e.g., "Shot 1: Wide Establish").
+        1. For each shot, provide a Title MUST start with the sequential number (e.g., "Shot 1: Wide Establish"). DO NOT use "Shot #:" literal. Use "Shot 1:", "Shot 2:", etc.
         2. The Title MUST NOT contain '@' symbols (e.g. use "Zax's Revenge", NOT "@Zax's Revenge").
         3. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them in the description using the format @CharacterName (e.g. "@Zax looks up").
         4. Type should be "Shot".
