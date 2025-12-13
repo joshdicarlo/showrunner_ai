@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
@@ -5,10 +6,11 @@ import { GalleryView } from './components/GalleryView';
 import { DepartmentPanel } from './components/DepartmentPanel';
 import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
+import { EditorTimeline } from './components/EditorTimeline';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup } from './components/UI';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors } from 'lucide-react';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene } from './services/geminiService';
 import * as GoogleDriveService from './services/googleDriveService';
 
@@ -1389,15 +1391,17 @@ const App: React.FC = () => {
                  </div>
                  
                  <div className="flex items-center gap-3">
-                     {/* View Toggle */}
-                     <ToggleGroup 
-                        options={[
-                            { value: 'canvas', icon: LayoutGrid, label: 'Canvas' },
-                            { value: 'gallery', icon: List, label: 'Gallery' }
-                        ]}
-                        value={workspaceView}
-                        onChange={(v) => setWorkspaceView(v as any)}
-                     />
+                     {/* View Toggle (Only show if NOT Editorial) */}
+                     {currentDept !== DepartmentType.EDITORIAL && (
+                         <ToggleGroup 
+                            options={[
+                                { value: 'canvas', icon: LayoutGrid, label: 'Canvas' },
+                                { value: 'gallery', icon: List, label: 'Gallery' }
+                            ]}
+                            value={workspaceView}
+                            onChange={(v) => setWorkspaceView(v as any)}
+                         />
+                     )}
 
                      <div className="h-6 w-[1px] bg-zinc-800 mx-2"/>
 
@@ -1412,36 +1416,54 @@ const App: React.FC = () => {
 
              {/* Workspace Content */}
              <div className="flex-1 relative bg-black overflow-hidden">
-                 {workspaceView === 'canvas' ? (
-                     <Canvas 
-                        nodes={activeProject?.nodes || []}
-                        connections={activeProject?.connections || []}
-                        setNodes={handleNodesChange}
-                        setConnections={handleConnectionsChange}
-                        currentDept={currentDept}
-                        currentAssetId={currentAssetId}
-                        activeAsset={activeAsset}
-                        focusNodes={focusNodeIds}
-                        onSetThumbnail={handleSetThumbnail}
-                        projectAssets={activeProject?.assets}
-                        onRefineConcept={handleRefineConcept}
-                        refinedImagesMap={refinedImagesMap}
-                     />
+                 {currentDept === DepartmentType.EDITORIAL ? (
+                     // Editorial View
+                     activeAsset ? (
+                         <EditorTimeline 
+                             sequenceAsset={activeAsset}
+                             projectAssets={activeProject?.assets || []}
+                             projectNodes={activeProject?.nodes || []}
+                             onUpdateAsset={handleUpdateAsset}
+                         />
+                     ) : (
+                         <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-4">
+                             <Scissors size={48} className="opacity-20" />
+                             <p>Select a Sequence (created in Story) to start editing.</p>
+                         </div>
+                     )
                  ) : (
-                    <GalleryView 
-                        nodes={activeProject?.nodes || []}
-                        currentDept={currentDept}
-                        currentAssetId={currentAssetId}
-                        onGenerateBatch={handleGalleryGenerate}
-                        onSetThumbnail={handleSetThumbnail}
-                        onRefineConcept={handleRefineConcept}
-                        onGenerateTurntable={handleGalleryTurntable}
-                        onGenerateExpressions={handleGalleryExpressions}
-                    />
+                     // Standard Canvas/Gallery View
+                     workspaceView === 'canvas' ? (
+                         <Canvas 
+                            nodes={activeProject?.nodes || []}
+                            connections={activeProject?.connections || []}
+                            setNodes={handleNodesChange}
+                            setConnections={handleConnectionsChange}
+                            currentDept={currentDept}
+                            currentAssetId={currentAssetId}
+                            activeAsset={activeAsset}
+                            focusNodes={focusNodeIds}
+                            onSetThumbnail={handleSetThumbnail}
+                            projectAssets={activeProject?.assets}
+                            onRefineConcept={handleRefineConcept}
+                            refinedImagesMap={refinedImagesMap}
+                         />
+                     ) : (
+                        <GalleryView 
+                            nodes={activeProject?.nodes || []}
+                            currentDept={currentDept}
+                            currentAssetId={currentAssetId}
+                            onGenerateBatch={handleGalleryGenerate}
+                            onSetThumbnail={handleSetThumbnail}
+                            onRefineConcept={handleRefineConcept}
+                            onGenerateTurntable={handleGalleryTurntable}
+                            onGenerateExpressions={handleGalleryExpressions}
+                        />
+                     )
                  )}
                  
-                 {/* Chat Assistant */}
-                 <ChatBot scriptContext={scriptContext} />
+                 {/* Chat Assistant - Hide in Editorial for space? Kept for now. */}
+                 {currentDept !== DepartmentType.EDITORIAL && <ChatBot scriptContext={scriptContext} />}
              </div>
         </div>
 
@@ -1550,7 +1572,7 @@ const App: React.FC = () => {
         )}
         
         {/* Asset Editor Panel */}
-        {activeAsset && (
+        {activeAsset && currentDept !== DepartmentType.EDITORIAL && (
             <AssetEditorPanel 
                 asset={activeAsset} 
                 projectAssets={activeProject?.assets}
@@ -1558,7 +1580,7 @@ const App: React.FC = () => {
                 onGenerateConcepts={handleGenerateConcepts}
                 onGenerateOutline={handleGenerateOutline}
                 approvedImages={activeProject?.nodes
-                    .filter(n => n.assetId === activeAsset.id && n.type === NodeType.AI_IMAGE_GEN && n.data.status === 'approved' && n.data.imageUrl)
+                    .filter(n => n.assetId === activeAsset.id && n.type === NodeType.AI_IMAGE_GEN && n.data.status === 'approved' && n.data.imageUrl && n.data.tag !== 'refinement')
                     .map(n => n.data.imageUrl!) || []
                 }
                 onNavigateToAsset={handleNavigateToAsset}

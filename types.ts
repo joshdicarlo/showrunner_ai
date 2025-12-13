@@ -1,4 +1,5 @@
 
+
 export enum DepartmentType {
   WRITERS_ROOM = "Writers Room",
   CASTING_WARDROBE = "Casting & Wardrobe",
@@ -68,6 +69,24 @@ export interface FlowConnection {
   toNode: string;
 }
 
+export interface TimelineClip {
+    id: string;
+    sourceNodeId: string; // Trace back to generation node
+    mediaUrl: string;
+    mediaType: 'image' | 'video';
+    start: number; // Start time in timeline (seconds)
+    duration: number; // Duration in timeline (seconds)
+    offset: number; // Start time in source media (trimming)
+    track: number; // 0 = Video 1, 1 = Video 2, etc.
+    label: string;
+    thumbnail?: string;
+}
+
+export interface TimelineData {
+    clips: TimelineClip[];
+    duration: number; // Total timeline duration
+}
+
 export interface ProjectAsset {
   id: string;
   department: DepartmentType;
@@ -79,6 +98,7 @@ export interface ProjectAsset {
   parentId?: string; // For hierarchical assets (e.g. Shots inside Sequences)
   driveId?: string; // Folder ID or File ID in Drive
   status?: 'active' | 'archived';
+  timelineData?: TimelineData; // For Editorial Sequences
 }
 
 export interface Project {

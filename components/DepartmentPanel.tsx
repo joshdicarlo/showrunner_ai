@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DepartmentType, ProjectAsset, FlowNode } from '../types';
 import { DEPARTMENTS } from '../constants';
 import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard, Shirt, Trash2, Archive, RotateCcw } from 'lucide-react';
@@ -36,6 +36,37 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
   
+  // Resizable Width State
+  const [width, setWidth] = useState(256); // Start at 256px
+  const [isResizing, setIsResizing] = useState(false);
+
+  useEffect(() => {
+      const handleMouseMove = (e: MouseEvent) => {
+          if (!isResizing) return;
+          // Constrain width between 200 and 600
+          setWidth(Math.max(200, Math.min(600, e.clientX)));
+      };
+      
+      const handleMouseUp = () => {
+          setIsResizing(false);
+      };
+
+      if (isResizing) {
+          document.addEventListener('mousemove', handleMouseMove);
+          document.addEventListener('mouseup', handleMouseUp);
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none'; // Prevent selection during resize
+      } else {
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+      }
+
+      return () => {
+          document.removeEventListener('mousemove', handleMouseMove);
+          document.removeEventListener('mouseup', handleMouseUp);
+      };
+  }, [isResizing]);
+
   const deptConfig = DEPARTMENTS.find(d => d.id === department);
   const assetLabel = deptConfig?.assetLabel || "Item";
 
@@ -113,7 +144,7 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
       return (
         <React.Fragment key={asset.id}>
             <div 
-                className={`group relative flex items-center gap-2 px-2 py-2 rounded-lg transition-all border mb-1 cursor-pointer
+                className={`group relative flex items-center gap-2 px-2 py-2 rounded-lg transition-all border mb-1 cursor-pointer overflow-hidden
                     ${isActive ? 'bg-zinc-800 border-blue-500/30 ring-1 ring-blue-500/20' : 'bg-zinc-900/30 border-transparent hover:bg-zinc-800 hover:border-zinc-700'}
                     ${isArchived ? 'opacity-50 grayscale' : 'opacity-100'}
                 `}
@@ -139,75 +170,77 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
                     )}
                 </div>
                 
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                    <div className={`text-xs font-bold truncate ${isActive ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-200'}`}>
+                {/* Info (Text) - uses flex-1 to take available space but truncates if needed */}
+                <div className="flex-1 min-w-0 pr-2">
+                    <div className={`text-xs font-bold truncate ${isActive ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-200'}`} title={asset.title}>
                         {asset.title}
                     </div>
                     {isArchived && <span className="text-[9px] text-orange-500 uppercase font-bold">Archived</span>}
                 </div>
 
-                {/* Node Count */}
+                {/* Node Count - visible by default if space permits, can be covered by actions */}
                 {nodeCount > 0 && !isArchived && (
-                    <span className="text-[9px] bg-zinc-950 text-zinc-500 px-1.5 rounded-full">
+                    <span className="text-[9px] bg-zinc-950 text-zinc-500 px-1.5 rounded-full shrink-0 group-hover:opacity-0 transition-opacity">
                         {nodeCount}
                     </span>
                 )}
 
-                {/* Actions Hover */}
-                <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1 ml-2">
-                    {/* Restore Action (only if archived) */}
-                    {isArchived ? (
-                        <button 
-                            onClick={(e) => handleRestoreClick(e, asset.id)}
-                            className="p-1 hover:bg-green-900/50 hover:text-green-400 rounded text-zinc-500"
-                            title="Restore Asset"
-                        >
-                            <RotateCcw size={12} />
-                        </button>
-                    ) : (
-                        <>
-                            {/* Discover Shots Action for Scenes */}
-                            {!asset.parentId && department === DepartmentType.STORY && onDiscoverShots && (
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); onDiscoverShots(asset.id); }}
-                                    className="p-1 hover:bg-purple-600 hover:text-white rounded text-zinc-500"
-                                    title="Discover Shots"
-                                >
-                                    <Video size={12} />
-                                </button>
-                            )}
-                            
-                            {/* Add Child Action */}
-                            {isHierarchical && (
-                                <button 
-                                    onClick={(e) => { e.stopPropagation(); onCreateAsset(asset.id); setExpandedAssets(prev => new Set(prev).add(asset.id)); }}
-                                    className="p-1 hover:bg-blue-600 hover:text-white rounded text-zinc-500"
-                                    title={`Add Child (Look/Shot)`}
-                                >
-                                    <Plus size={12} />
-                                </button>
-                            )}
-
-                            {/* Archive Action */}
+                {/* Actions Hover - Absolute positioned to overlay text end smoothly */}
+                <div className="absolute right-0 top-0 bottom-0 flex items-center pr-2 pl-6 bg-gradient-to-l from-zinc-800 via-zinc-800 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-1">
+                        {/* Restore Action (only if archived) */}
+                        {isArchived ? (
                             <button 
-                                onClick={(e) => handleArchiveClick(e, asset.id)}
-                                className="p-1 hover:bg-zinc-700 hover:text-orange-400 rounded text-zinc-500"
-                                title="Archive Asset"
+                                onClick={(e) => handleRestoreClick(e, asset.id)}
+                                className="p-1 hover:bg-green-900/50 hover:text-green-400 rounded text-zinc-500"
+                                title="Restore Asset"
                             >
-                                <Archive size={12} />
+                                <RotateCcw size={12} />
                             </button>
-                        </>
-                    )}
+                        ) : (
+                            <>
+                                {/* Discover Shots Action for Scenes */}
+                                {!asset.parentId && department === DepartmentType.STORY && onDiscoverShots && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onDiscoverShots(asset.id); }}
+                                        className="p-1 hover:bg-purple-600 hover:text-white rounded text-zinc-500"
+                                        title="Discover Shots"
+                                    >
+                                        <Video size={12} />
+                                    </button>
+                                )}
+                                
+                                {/* Add Child Action */}
+                                {isHierarchical && (
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); onCreateAsset(asset.id); setExpandedAssets(prev => new Set(prev).add(asset.id)); }}
+                                        className="p-1 hover:bg-blue-600 hover:text-white rounded text-zinc-500"
+                                        title={`Add Child (Look/Shot)`}
+                                    >
+                                        <Plus size={12} />
+                                    </button>
+                                )}
 
-                    {/* Delete Action (Always available) */}
-                    <button 
-                        onClick={(e) => handleDeleteClick(e, asset.id, asset.title)}
-                        className="p-1 hover:bg-red-900/50 hover:text-red-400 rounded text-zinc-500"
-                        title="Permanently Delete"
-                    >
-                        <Trash2 size={12} />
-                    </button>
+                                {/* Archive Action */}
+                                <button 
+                                    onClick={(e) => handleArchiveClick(e, asset.id)}
+                                    className="p-1 hover:bg-zinc-700 hover:text-orange-400 rounded text-zinc-500"
+                                    title="Archive Asset"
+                                >
+                                    <Archive size={12} />
+                                </button>
+                            </>
+                        )}
+
+                        {/* Delete Action (Always available) */}
+                        <button 
+                            onClick={(e) => handleDeleteClick(e, asset.id, asset.title)}
+                            className="p-1 hover:bg-red-900/50 hover:text-red-400 rounded text-zinc-500"
+                            title="Permanently Delete"
+                        >
+                            <Trash2 size={12} />
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -221,7 +254,16 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
   const rootAssets = isHierarchical ? deptAssets.filter(a => !a.parentId) : deptAssets;
 
   return (
-    <div className="w-64 h-full bg-surface border-r border-border flex flex-col z-10">
+    <div 
+        className="h-full bg-surface border-r border-border flex flex-col z-10 relative"
+        style={{ width: `${width}px` }}
+    >
+        {/* Resize Handle */}
+        <div 
+            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500 z-50 transition-colors opacity-0 hover:opacity-100 active:opacity-100 active:bg-blue-600"
+            onMouseDown={() => setIsResizing(true)}
+        />
+
         {/* Header */}
         <div className="p-4 border-b border-border">
             <div className="flex items-center justify-between mb-4">

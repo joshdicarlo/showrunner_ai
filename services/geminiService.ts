@@ -397,8 +397,8 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
         const prompt = `Act as a Cinematographer. Break down the following scene description into a shot list.
         
         Detailed Requirements:
-        1. For each shot, provide a Title (e.g., "Shot 1: Wide Establish") and a detailed visual description.
-        2. Do NOT use the '@' symbol in the Title (e.g. use "Zax's Revenge", NOT "@Zax's Revenge").
+        1. For each shot, provide a Title MUST start with the shot number (e.g., "Shot 1: Wide Establish").
+        2. Do NOT use the '@' symbol in the Title (e.g. use "Shot 1: Zax's Revenge", NOT "Shot 1: @Zax's Revenge").
         3. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them in the description using the format @CharacterName (e.g. "@Zax looks up").
         4. Type should be "Shot".
 
