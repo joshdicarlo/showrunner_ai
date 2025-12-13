@@ -398,8 +398,9 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
         
         Detailed Requirements:
         1. For each shot, provide a Title (e.g., "Shot 1: Wide Establish") and a detailed visual description.
-        2. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them using the format @CharacterName (e.g. "@Zax looks up").
-        3. Type should be "Shot".
+        2. Do NOT use the '@' symbol in the Title (e.g. use "Zax's Revenge", NOT "@Zax's Revenge").
+        3. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them in the description using the format @CharacterName (e.g. "@Zax looks up").
+        4. Type should be "Shot".
 
         Input Scene:
         "${sceneText}"

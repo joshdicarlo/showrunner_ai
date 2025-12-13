@@ -78,6 +78,7 @@ export interface ProjectAsset {
   thumbnailUrl?: string;
   parentId?: string; // For hierarchical assets (e.g. Shots inside Sequences)
   driveId?: string; // Folder ID or File ID in Drive
+  status?: 'active' | 'archived';
 }
 
 export interface Project {

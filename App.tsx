@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
-import { GalleryView } from './components/GalleryView'; // Import new component
+import { GalleryView } from './components/GalleryView'; 
 import { DepartmentPanel } from './components/DepartmentPanel';
 import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
@@ -93,7 +92,8 @@ const App: React.FC = () => {
                  department: DepartmentType.CASTING_WARDROBE,
                  title: 'Zax',
                  description: 'A cynical robot courier with a rusted chassis and a heart of gold. He often malfunctions at inconvenient times but always delivers the package.',
-                 summary: 'A cynical robot courier with a rusted chassis.'
+                 summary: 'A cynical robot courier with a rusted chassis.',
+                 status: 'active'
              }
           ],
           nodes: [
@@ -145,6 +145,21 @@ const App: React.FC = () => {
   const activeProject = projects.find(p => p.id === currentProjectId);
   const activeAsset = activeProject?.assets.find(a => a.id === currentAssetId);
   const activeDeptConfig = DEPARTMENTS.find(d => d.id === currentDept);
+
+  // --- Derived State: Script Context for Chat ---
+  // Aggregates all text from Writers Room nodes to give context to the ChatBot
+  const scriptContext = useMemo(() => {
+      if (!activeProject) return "";
+      const scriptNodes = activeProject.nodes.filter(n => 
+          n.department === DepartmentType.WRITERS_ROOM && 
+          (n.type === NodeType.TEXT_INPUT || n.type === NodeType.AI_TEXT_GEN) &&
+          n.data.text
+      );
+      
+      return scriptNodes.map(n => 
+          `[Source: ${n.type === NodeType.TEXT_INPUT ? 'Note' : 'Generated Script'}]\n${n.data.text}`
+      ).join('\n\n');
+  }, [activeProject?.nodes]);
 
   // --- Effective Thumbnails ---
   // Memoized map of AssetID -> ImageURL (from Latest Approved Node OR Asset Prop)
@@ -279,7 +294,8 @@ const App: React.FC = () => {
               title: "Story Bible",
               description: `Logline: ${summary}\n\nGenre: ${seed.genre}`,
               visualStyle: visualStyle,
-              summary: summary
+              summary: summary,
+              status: 'active'
           });
 
           if (autoGenAssets) {
@@ -355,8 +371,6 @@ const App: React.FC = () => {
       resetProjectModal();
   };
 
-  // ... (handleCreateAsset, handleUpdateAsset, handleSetThumbnail ... unchanged)
-  
   const handleEnhanceDescription = async () => {
       if (!newAssetDesc) return;
       setIsEnhancing(true);
@@ -395,7 +409,8 @@ const App: React.FC = () => {
           description: newAssetDesc,
           summary: "Generating AI summary...", 
           parentId: newAssetParentId,
-          visualStyle: defaultVisualStyle
+          visualStyle: defaultVisualStyle,
+          status: 'active'
       };
 
       // Drive: Sync Folder
@@ -454,6 +469,103 @@ const App: React.FC = () => {
           return p;
       }));
   }, [currentProjectId]);
+
+  const handleDeleteAsset = (assetId: string) => {
+      if (!currentProjectId) return;
+      
+      // We calculate descendants based on CURRENT state inside the setter to ensure atomicity
+      setProjects(prev => {
+          const project = prev.find(p => p.id === currentProjectId);
+          if (!project) return prev;
+
+          const idsToDelete = new Set<string>();
+          const collectIds = (id: string, assets: ProjectAsset[]) => {
+              idsToDelete.add(id);
+              assets.filter(a => a.parentId === id).forEach(child => collectIds(child.id, assets));
+          };
+          
+          collectIds(assetId, project.assets);
+
+          // If the currently selected asset is being deleted, clear selection
+          if (currentAssetId && idsToDelete.has(currentAssetId)) {
+              // This side effect is safe here as it queues a state update
+              setTimeout(() => {
+                  setCurrentAssetId(null);
+                  setFocusNodeIds([]);
+              }, 0);
+          }
+
+          return prev.map(p => {
+              if (p.id === currentProjectId) {
+                  return {
+                      ...p,
+                      assets: p.assets.filter(a => !idsToDelete.has(a.id))
+                  };
+              }
+              return p;
+          });
+      });
+  };
+
+  const handleArchiveAsset = (assetId: string) => {
+      if (!currentProjectId) return;
+      
+      setProjects(prev => {
+          const project = prev.find(p => p.id === currentProjectId);
+          if (!project) return prev;
+
+          const idsToArchive = new Set<string>();
+          const collectIds = (id: string, assets: ProjectAsset[]) => {
+              idsToArchive.add(id);
+              assets.filter(a => a.parentId === id).forEach(child => collectIds(child.id, assets));
+          };
+          
+          collectIds(assetId, project.assets);
+
+          if (currentAssetId && idsToArchive.has(currentAssetId)) {
+              setTimeout(() => {
+                  setCurrentAssetId(null);
+                  setFocusNodeIds([]);
+              }, 0);
+          }
+
+          return prev.map(p => {
+              if (p.id === currentProjectId) {
+                  return {
+                      ...p,
+                      assets: p.assets.map(a => idsToArchive.has(a.id) ? { ...a, status: 'archived' } : a)
+                  };
+              }
+              return p;
+          });
+      });
+  };
+
+  const handleRestoreAsset = (assetId: string) => {
+      if (!currentProjectId) return;
+
+      setProjects(prev => {
+          const project = prev.find(p => p.id === currentProjectId);
+          if (!project) return prev;
+
+          const idsToRestore = new Set<string>();
+          const collectIds = (id: string, assets: ProjectAsset[]) => {
+              idsToRestore.add(id);
+              assets.filter(a => a.parentId === id).forEach(child => collectIds(child.id, assets));
+          };
+          collectIds(assetId, project.assets);
+
+          return prev.map(p => {
+              if (p.id === currentProjectId) {
+                  return {
+                      ...p,
+                      assets: p.assets.map(a => idsToRestore.has(a.id) ? { ...a, status: 'active' } : a)
+                  };
+              }
+              return p;
+          });
+      });
+  };
 
   const handleSetThumbnail = useCallback(async (assetId: string, imageUrl: string) => {
       if (!currentProjectId) return;
@@ -536,8 +648,10 @@ const App: React.FC = () => {
     const newNodes: FlowNode[] = [];
     
     // Auto-detect if we should use dot syntax for child assets
+    // CHANGE: Only use dot syntax for Casting/Wardrobe to inherit parent description
+    // For Story (Scenes) and Production (Shots), default to simple title so it does NOT inherit.
     let defaultPrompt = `@${activeAsset.title}`;
-    if (activeAsset.parentId) {
+    if (activeAsset.parentId && currentDept === DepartmentType.CASTING_WARDROBE) {
         const parent = activeProject.assets.find(a => a.id === activeAsset.parentId);
         if (parent) {
             defaultPrompt = `@${parent.title}.${activeAsset.title}`;
@@ -973,14 +1087,18 @@ const App: React.FC = () => {
           if (item.type === 'Characters') visualStyle = "Cinematic Portrait";
           else if (item.type === 'Locations') visualStyle = "Wide Shot, Detailed Environment";
           
+          // Sanitize Title (Remove @)
+          const cleanTitle = item.name.replace(/@/g, '').trim();
+
           return {
               id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               department: currentDept,
-              title: item.name,
+              title: cleanTitle,
               description: item.description,
               visualStyle: visualStyle,
               summary: "Auto-detected",
-              parentId: analysisParentId || undefined // Use if adding shots to scene
+              parentId: analysisParentId || undefined, // Use if adding shots to scene
+              status: 'active'
           };
       });
 
@@ -1252,6 +1370,9 @@ const App: React.FC = () => {
             onAnalyzeScripts={handleAnalyzeScripts}
             onDiscoverShots={handleDiscoverShots}
             assetThumbnails={assetThumbnails}
+            onDeleteAsset={handleDeleteAsset}
+            onArchiveAsset={handleArchiveAsset}
+            onRestoreAsset={handleRestoreAsset}
         />
 
         {/* Workspace Area */}
@@ -1307,7 +1428,7 @@ const App: React.FC = () => {
                         refinedImagesMap={refinedImagesMap}
                      />
                  ) : (
-                     <GalleryView 
+                    <GalleryView 
                         nodes={activeProject?.nodes || []}
                         currentDept={currentDept}
                         currentAssetId={currentAssetId}
@@ -1316,23 +1437,128 @@ const App: React.FC = () => {
                         onRefineConcept={handleRefineConcept}
                         onGenerateTurntable={handleGalleryTurntable}
                         onGenerateExpressions={handleGalleryExpressions}
-                     />
+                    />
                  )}
                  
-                 <ChatBot />
+                 {/* Chat Assistant */}
+                 <ChatBot scriptContext={scriptContext} />
              </div>
         </div>
 
-        {/* Right Sidebar: Inspector */}
+        {/* Floating Modals for Asset Creation, Enhancement, Analysis */}
+        {isCreateAssetOpen && (
+            <Modal title={`Create New ${activeDeptConfig?.assetLabel || 'Asset'}`} onClose={() => setIsCreateAssetOpen(false)}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Title</label>
+                        <Input autoFocus value={newAssetTitle} onChange={(e) => setNewAssetTitle(e.target.value)} placeholder="e.g. The Main Character" />
+                    </div>
+                    <div>
+                        <div className="flex justify-between items-center mb-1">
+                            <label className="block text-xs font-bold text-zinc-500 uppercase">Description</label>
+                            <button onClick={handleEnhanceDescription} disabled={!newAssetDesc} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
+                                <Sparkles size={12}/> Enhance with AI
+                            </button>
+                        </div>
+                        <TextArea value={newAssetDesc} onChange={(e) => setNewAssetDesc(e.target.value)} placeholder="Describe visual appearance, personality, role..." />
+                    </div>
+                    <div className="flex justify-end gap-2 pt-4">
+                        <Button variant="ghost" onClick={() => setIsCreateAssetOpen(false)}>Cancel</Button>
+                        <Button onClick={handleCreateAsset} disabled={!newAssetTitle}>Create</Button>
+                    </div>
+                </div>
+            </Modal>
+        )}
+
+        {showEnhanceModal && (
+            <Modal title="Enhance Description" onClose={() => setShowEnhanceModal(false)}>
+                <div className="space-y-4">
+                    <p className="text-sm text-zinc-400">Select the best version:</p>
+                    {isEnhancing ? (
+                        <div className="flex items-center justify-center py-8">
+                            <Loader2 className="animate-spin text-blue-500" size={32} />
+                        </div>
+                    ) : (
+                        <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                            {enhancementOptions.map((opt, i) => (
+                                <div key={i} onClick={() => applyEnhancement(opt)} className="p-3 rounded bg-zinc-800 hover:bg-zinc-700 cursor-pointer border border-zinc-700 hover:border-blue-500 transition-all text-sm text-zinc-200">
+                                    {opt}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </Modal>
+        )}
+        
+        {isAnalyzeModalOpen && (
+             <Modal title={`Analyze for ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)} maxWidth="max-w-2xl">
+                 <div className="flex flex-col h-[60vh]">
+                     {!isAnalyzing && detectedItems.length === 0 && (
+                         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-8">
+                             <Wand2 size={48} className="text-purple-500 opacity-50"/>
+                             <div className="space-y-2">
+                                 <h3 className="text-lg font-bold text-white">Scan Script for {analysisType}</h3>
+                                 <p className="text-sm text-zinc-400 max-w-sm mx-auto">
+                                     We will analyze all generated scripts and notes to automatically identify {analysisType.toLowerCase()}.
+                                 </p>
+                             </div>
+                             <Button onClick={handleRunAnalysis} size="lg">Start Analysis</Button>
+                         </div>
+                     )}
+
+                     {isAnalyzing && (
+                         <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                             <Loader2 size={32} className="animate-spin text-blue-500"/>
+                             <p className="text-zinc-400 animate-pulse">Reading scripts...</p>
+                         </div>
+                     )}
+
+                     {detectedItems.length > 0 && (
+                         <>
+                             <div className="flex-1 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-900/50 p-2 space-y-2 mb-4">
+                                 {detectedItems.map((item, idx) => (
+                                     <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${item.selected ? 'bg-blue-900/20 border-blue-500/50' : 'bg-zinc-900 border-zinc-800 opacity-50'}`}>
+                                         <input 
+                                            type="checkbox" 
+                                            checked={item.selected} 
+                                            onChange={(e) => {
+                                                const newItems = [...detectedItems];
+                                                newItems[idx].selected = e.target.checked;
+                                                setDetectedItems(newItems);
+                                            }}
+                                            className="mt-1"
+                                         />
+                                         <div className="flex-1 min-w-0">
+                                             <div className="flex items-center justify-between">
+                                                 <span className="font-bold text-sm text-white">{item.name}</span>
+                                                 {item.isDuplicate && <span className="text-[10px] text-orange-400 font-mono">Existing</span>}
+                                             </div>
+                                             <p className="text-xs text-zinc-400 mt-1 line-clamp-2">{item.description}</p>
+                                         </div>
+                                     </div>
+                                 ))}
+                             </div>
+                             <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800">
+                                 <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
+                                 <Button onClick={handleApproveAnalysis}>Import Selected ({detectedItems.filter(i => i.selected).length})</Button>
+                             </div>
+                         </>
+                     )}
+                 </div>
+             </Modal>
+        )}
+        
+        {/* Asset Editor Panel */}
         {activeAsset && (
             <AssetEditorPanel 
-                asset={activeAsset}
+                asset={activeAsset} 
                 projectAssets={activeProject?.assets}
-                onUpdate={handleUpdateAsset}
+                onUpdate={handleUpdateAsset} 
                 onGenerateConcepts={handleGenerateConcepts}
                 onGenerateOutline={handleGenerateOutline}
                 approvedImages={activeProject?.nodes
-                    .filter(n => n.assetId === activeAsset.id && n.data.status === 'approved' && n.data.imageUrl && n.data.tag === 'concept')
+                    .filter(n => n.assetId === activeAsset.id && n.type === NodeType.AI_IMAGE_GEN && n.data.status === 'approved' && n.data.imageUrl)
                     .map(n => n.data.imageUrl!) || []
                 }
                 onNavigateToAsset={handleNavigateToAsset}
@@ -1341,120 +1567,7 @@ const App: React.FC = () => {
                 refinedImages={refinedImagesMap[activeAsset.id] || []}
             />
         )}
-
-        {/* Asset Creation Modal */}
-        {isCreateAssetOpen && (
-             <Modal title={newAssetParentId ? "Add Child Item" : `New ${activeDeptConfig?.assetLabel || 'Asset'}`} onClose={() => setIsCreateAssetOpen(false)}>
-                 <div className="space-y-4">
-                     <div>
-                         <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Name</label>
-                         <Input autoFocus value={newAssetTitle} onChange={(e) => setNewAssetTitle(e.target.value)} placeholder="e.g. Interior - Space Station" />
-                     </div>
-                     <div>
-                         <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Description</label>
-                         <TextArea 
-                             value={newAssetDesc} 
-                             onChange={(e) => setNewAssetDesc(e.target.value)} 
-                             className="h-32"
-                             placeholder="Detailed visual description..."
-                         />
-                         <div className="flex justify-end mt-1">
-                             <Button size="sm" variant="ghost" onClick={handleEnhanceDescription} disabled={!newAssetDesc || isEnhancing} icon={Sparkles}>
-                                 {isEnhancing ? "Enhancing..." : "Enhance with AI"}
-                             </Button>
-                         </div>
-                     </div>
-                     <div className="flex justify-end pt-4 border-t border-zinc-800">
-                         <Button onClick={handleCreateAsset} disabled={!newAssetTitle}>Create</Button>
-                     </div>
-                 </div>
-             </Modal>
-        )}
-
-        {/* Enhance Modal (Selection) */}
-        {showEnhanceModal && (
-            <Modal title="Select Enhanced Description" onClose={() => setShowEnhanceModal(false)} maxWidth="max-w-3xl">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {enhancementOptions.map((opt, i) => (
-                        <div 
-                            key={i} 
-                            onClick={() => applyEnhancement(opt)}
-                            className="p-4 bg-zinc-950 border border-zinc-800 rounded-lg hover:border-blue-500 cursor-pointer transition-all text-sm leading-relaxed text-zinc-300 hover:text-white"
-                        >
-                            {opt}
-                        </div>
-                    ))}
-                </div>
-            </Modal>
-        )}
         
-        {/* Analyze/Detect Modal */}
-        {isAnalyzeModalOpen && (
-            <Modal title={`Auto-Detect ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)} maxWidth="max-w-4xl">
-                 <div className="max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                     {isAnalyzing ? (
-                         <div className="py-20 flex flex-col items-center justify-center gap-4 text-zinc-500">
-                             <Loader2 className="animate-spin" size={32} />
-                             <p>Analyzing scripts with Gemini...</p>
-                         </div>
-                     ) : (
-                         <table className="w-full text-left border-collapse">
-                             <thead className="bg-zinc-900 sticky top-0">
-                                 <tr>
-                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800 w-10">
-                                         <input 
-                                            type="checkbox" 
-                                            checked={detectedItems.every(i => i.selected || i.isDuplicate)}
-                                            onChange={(e) => setDetectedItems(prev => prev.map(i => i.isDuplicate ? i : { ...i, selected: e.target.checked }))}
-                                         />
-                                     </th>
-                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800">Name</th>
-                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800">Type</th>
-                                     <th className="p-3 text-xs font-bold text-zinc-500 uppercase border-b border-zinc-800">Description</th>
-                                 </tr>
-                             </thead>
-                             <tbody>
-                                 {detectedItems.map((item, idx) => (
-                                     <tr key={idx} className={`border-b border-zinc-800/50 ${item.isDuplicate ? 'opacity-50 bg-zinc-900/30' : 'hover:bg-zinc-900/50'}`}>
-                                         <td className="p-3">
-                                             <input 
-                                                type="checkbox" 
-                                                checked={item.selected} 
-                                                disabled={item.isDuplicate}
-                                                onChange={(e) => {
-                                                    const newVal = e.target.checked;
-                                                    setDetectedItems(prev => prev.map((p, i) => i === idx ? { ...p, selected: newVal } : p));
-                                                }}
-                                             />
-                                         </td>
-                                         <td className="p-3 text-sm font-bold text-zinc-200">
-                                             {item.name}
-                                             {item.isDuplicate && <span className="ml-2 text-[9px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded border border-zinc-700">Existing</span>}
-                                         </td>
-                                         <td className="p-3 text-xs text-zinc-400">{item.type}</td>
-                                         <td className="p-3 text-xs text-zinc-500 font-mono line-clamp-2">{item.description}</td>
-                                     </tr>
-                                 ))}
-                                 {detectedItems.length === 0 && (
-                                     <tr><td colSpan={4} className="p-8 text-center text-zinc-500">No items found.</td></tr>
-                                 )}
-                             </tbody>
-                         </table>
-                     )}
-                 </div>
-                 <div className="flex justify-end pt-4 border-t border-zinc-800 gap-2 mt-4">
-                     {!isAnalyzing && detectedItems.length === 0 ? (
-                         <Button onClick={handleRunAnalysis} icon={Sparkles} className="bg-purple-600 hover:bg-purple-500">
-                             Run Analysis
-                         </Button>
-                     ) : (
-                         <Button onClick={handleApproveAnalysis} disabled={isAnalyzing || detectedItems.filter(i => i.selected).length === 0}>
-                             Approve Selected ({detectedItems.filter(i => i.selected).length})
-                         </Button>
-                     )}
-                 </div>
-            </Modal>
-        )}
     </div>
   );
 };

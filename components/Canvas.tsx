@@ -2,8 +2,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData } from '../types';
 import { NodeItem } from './NodeItem';
-import { Button, Input, Modal } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug } from 'lucide-react';
+import { Button, Input, Modal, ToggleGroup } from './UI';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 
@@ -62,7 +62,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Debug State
   const [showDebugModal, setShowDebugModal] = useState(false);
-  const [debugTrace, setDebugTrace] = useState<{resolved: string, trace: string[], referenceImages: string[]} | null>(null);
+  const [debugTrace, setDebugTrace] = useState<{resolved: string, trace: string[], referenceImages: string[], model: string} | null>(null);
+  const [debugView, setDebugView] = useState<'trace' | 'js' | 'python'>('trace');
 
   // State Tracking
   const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -540,30 +541,72 @@ export const Canvas: React.FC<CanvasProps> = ({
       const rawPrompt = node.data.prompt || node.data.text || "";
       const { resolved, matchedAssets, trace } = resolvePrompt(rawPrompt, projectAssets, activeAsset, true);
       
-      // Also resolve images
       let referenceImages: string[] = [];
       if (node.data.referenceImageUrl) {
           referenceImages = [node.data.referenceImageUrl];
       } else {
-          // Pass matchedAssets
           referenceImages = resolveReferenceImages(
               rawPrompt, 
               projectAssets, 
               activeAsset, 
               refinedImagesMap, 
-              // We don't have assetThumbnails directly here in a clean way unless passed, 
-              // but we can try to infer if we had access to App state.
-              // For debug, let's assume we pass empty thumbnails map or rely on ProjectAsset.thumbnailUrl
               {}, 
               matchedAssets
           );
       }
 
-      setDebugTrace({ resolved, trace, referenceImages });
+      setDebugTrace({ resolved, trace, referenceImages, model: node.data.model || 'default-model' });
       setShowDebugModal(true);
   }
 
-  // --- Mouse Handlers ---
+  const getCodeSnippet = (lang: 'js' | 'python') => {
+      if (!debugTrace) return "";
+      const { resolved, model, referenceImages } = debugTrace;
+      const safePrompt = resolved.replace(/`/g, '\\`').replace(/"/g, '\\"');
+      
+      if (lang === 'js') {
+          return `import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+const response = await ai.models.generateContent({
+  model: '${model}',
+  contents: [
+    ${referenceImages.map((_, i) => `{ 
+      inlineData: { 
+        mimeType: 'image/png', 
+        data: 'base64_image_data_here' 
+      } 
+    },`).join('\n    ')}
+    { text: \`${safePrompt}\` }
+  ],
+});
+
+console.log(response.text);`;
+      } else {
+          return `from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="YOUR_API_KEY")
+
+response = client.models.generate_content(
+    model='${model}',
+    contents=[
+        ${referenceImages.map((_, i) => `types.Content(parts=[types.Part.from_bytes(data=b'base64_data', mime_type='image/png')])`).join(',\n        ')}
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(text="""${safePrompt}"""),
+            ]
+        )
+    ]
+)
+
+print(response.text)`;
+      }
+  }
+
+  // --- Mouse Handlers (Existing) ---
   const handleMouseDown = (e: React.MouseEvent) => {
     if (contextMenu) setContextMenu(null);
     if (tabMenu) setTabMenu(null);
@@ -853,6 +896,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 style={{ left: contextMenu.x, top: contextMenu.y }}
                 onClick={(e) => e.stopPropagation()}
             >
+                {/* ... existing context menu content ... */}
                 {contextMenu.nodeId ? (
                     // Node Context Menu
                     <>
@@ -910,7 +954,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                         </button>
                     </>
                 ) : (
-                    // Canvas Context Menu (Unchanged logic)
+                    // Canvas Context Menu
                     <>
                          <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">
                             Canvas Actions
@@ -1065,32 +1109,56 @@ export const Canvas: React.FC<CanvasProps> = ({
         {/* Debug Modal */}
         {showDebugModal && debugTrace && (
             <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl">
-                <div className="flex flex-col gap-4 max-h-[70vh] overflow-hidden">
-                    <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
-                        <div className="text-xs font-bold text-zinc-500 mb-1">FINAL RESOLVED PROMPT</div>
-                        <div className="font-mono text-sm text-green-400 whitespace-pre-wrap">{debugTrace.resolved}</div>
+                <div className="flex flex-col gap-4 max-h-[70vh] h-full overflow-hidden">
+                    <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800 shrink-0">
+                        <button onClick={() => setDebugView('trace')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'trace' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Trace & Data</button>
+                        <button onClick={() => setDebugView('js')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'js' ? 'bg-zinc-800 text-yellow-400' : 'text-zinc-500 hover:text-zinc-300'}`}>JavaScript</button>
+                        <button onClick={() => setDebugView('python')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'python' ? 'bg-zinc-800 text-blue-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Python</button>
                     </div>
-                    
-                    {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && (
-                        <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
-                            <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div>
-                            <div className="flex gap-2 overflow-x-auto pb-2">
-                                {debugTrace.referenceImages.map((img, i) => (
-                                    <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group">
-                                        <img src={img} className="w-full h-full object-cover" />
-                                        <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white p-1 text-center truncate">Ref #{i+1}</div>
+
+                    {debugView === 'trace' ? (
+                        <>
+                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                <div className="text-xs font-bold text-zinc-500 mb-1">FINAL RESOLVED PROMPT</div>
+                                <div className="font-mono text-sm text-green-400 whitespace-pre-wrap">{debugTrace.resolved}</div>
+                            </div>
+                            
+                            {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && (
+                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                    <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div>
+                                    <div className="flex gap-2 overflow-x-auto pb-2">
+                                        {debugTrace.referenceImages.map((img, i) => (
+                                            <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group">
+                                                <img src={img} className="w-full h-full object-cover" />
+                                                <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white p-1 text-center truncate">Ref #{i+1}</div>
+                                            </div>
+                                        ))}
                                     </div>
+                                </div>
+                            )}
+                            
+                            <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2">
+                                <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div>
+                                {debugTrace.trace.map((line, i) => (
+                                    <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div>
                                 ))}
                             </div>
+                        </>
+                    ) : (
+                        <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black">
+                            <textarea 
+                                readOnly
+                                value={getCodeSnippet(debugView)}
+                                className="w-full h-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none"
+                            />
+                            <button 
+                                onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView))}
+                                className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2"
+                            >
+                                <CodeIcon size={14}/> Copy Code
+                            </button>
                         </div>
                     )}
-                    
-                    <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2">
-                        <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div>
-                        {debugTrace.trace.map((line, i) => (
-                            <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div>
-                        ))}
-                    </div>
                 </div>
             </Modal>
         )}

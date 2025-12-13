@@ -1,5 +1,7 @@
+
 import React from 'react';
 import * as Icons from 'lucide-react';
+import { Settings } from 'lucide-react';
 import { DEPARTMENTS } from '../constants';
 import { DepartmentType } from '../types';
 
@@ -47,6 +49,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentDept, onChangeDept, onB
                 </button>
             )
         })}
+
+        <div className="flex-1" />
+        
+        <button 
+            className="p-3 rounded-xl text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-all"
+            title="Settings"
+        >
+            <Settings size={20} />
+        </button>
     </div>
   );
 };

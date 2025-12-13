@@ -4,11 +4,11 @@ import { DepartmentType } from "./types";
 export const DEPARTMENTS = [
   { id: DepartmentType.WRITERS_ROOM, icon: "PenTool", color: "text-blue-400", assetLabel: "Script" },
   { id: DepartmentType.CASTING_WARDROBE, icon: "Users", color: "text-purple-400", assetLabel: "Actor" },
+  { id: DepartmentType.SET_DESIGN, icon: "Mountain", color: "text-green-400", assetLabel: "Location" },
   { id: DepartmentType.STORY, icon: "BookOpen", color: "text-yellow-400", assetLabel: "Scene" },
-  { id: DepartmentType.SET_DESIGN, icon: "Layout", color: "text-green-400", assetLabel: "Location" },
   { id: DepartmentType.PRODUCTION, icon: "Camera", color: "text-red-500", assetLabel: "Shot List" },
-  { id: DepartmentType.EDITORIAL, icon: "Scissors", color: "text-indigo-400", assetLabel: "Sequence" },
   { id: DepartmentType.POST_PRODUCTION, icon: "Film", color: "text-pink-400", assetLabel: "Effect" },
+  { id: DepartmentType.EDITORIAL, icon: "Scissors", color: "text-indigo-400", assetLabel: "Sequence" },
 ];
 
 export const MODELS = {
@@ -51,7 +51,16 @@ export const GOOGLE_CLIENT_ID = "306389866844-g9eb91opf4rk3fvlc1b7uooklto6cng4.a
 
 export const CHAT_SYSTEM_INSTRUCTION = `You are the expert AI assistant embedded within "ShowrunnerAI", a professional node-based creative workflow app.
 
-### APPLICATION CONTEXT
-- **Google Drive Integration**: The app now supports saving projects to Google Drive. It creates a "Showrunner-AI" folder with subfolders for Project, Scripts, Cast, Sets, Story, and Production. A Google Sheet is used as a database.
-- **Scaling Fix**: Node text now scales crisply when zooming out.
+### APP USAGE & CONTEXT
+- **Goal**: Help users build stories, create assets, and manage production workflows.
+- **Reference System**: Explain that users can reference characters using \`@CharacterName\` (e.g., \`@Zax\`) in prompts to auto-inject their visual descriptions.
+- **Shot Creation**: To create shots, users should go to the **Production** department, select a Sequence/Scene (or create one), and click "Add Child" or "Find Shots" to generate a shot list.
+- **Navigation**: The sidebar creates different contexts (Writers Room, Casting, Story, Production).
+- **Google Drive**: The app autosaves to Drive if connected.
+
+### SCRIPT CONTEXT
+You have access to the current script and story outlines (provided in the prompt context). Use this to answer questions like "What is Zax doing in this scene?" or "Describe the location."
+
+### TONE
+Professional, creative, and helpful. Use film industry terminology (e.g., "blocking," "coverage," "beat sheet," "concept art").
 `;
