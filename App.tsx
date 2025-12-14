@@ -11,7 +11,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus } from 'lucide-react';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage } from './services/geminiService';
 import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
@@ -108,6 +108,9 @@ const App: React.FC = () => {
           task.config?.styleId // Pass override if available
       );
       
+      // Store the resolved prompt in the task for debug visibility later
+      task.submittedPrompt = resolved;
+
       // Calculate approvedImagesMap on the fly for the worker
       const approvedMap: Record<string, string[]> = {};
       activeProj?.assets.forEach(a => {
@@ -156,7 +159,8 @@ const App: React.FC = () => {
                       status: task.config?.autoApprove ? 'approved' : 'review',
                       model: task.config?.model,
                       aspectRatio: task.config?.aspectRatio,
-                      styleId: task.config?.styleId
+                      styleId: task.config?.styleId,
+                      submittedPrompt: task.submittedPrompt // Store resolved prompt
                   }
               };
 

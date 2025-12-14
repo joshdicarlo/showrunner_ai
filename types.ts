@@ -1,4 +1,5 @@
 
+
 export enum DepartmentType {
   WRITERS_ROOM = "Writers Room",
   CASTING_WARDROBE = "Casting & Wardrobe",
@@ -49,6 +50,7 @@ export interface NodeData {
   withAudio?: boolean; // Video audio toggle
   history?: NodeHistoryItem[]; // Store previous generations
   styleId?: string; // Explicit style selection for this node
+  submittedPrompt?: string; // The exact prompt used for the last generation
 }
 
 export interface FlowNode {
@@ -174,6 +176,7 @@ export interface RenderTask {
         sequenceId?: string; // For auto-assemble targeting
         styleId?: string;
     };
+    submittedPrompt?: string; // The resolved prompt used for generation
     onComplete?: (result: string, task: RenderTask) => void;
 }
 

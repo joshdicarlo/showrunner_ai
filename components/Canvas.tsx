@@ -64,8 +64,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Debug State
   const [showDebugModal, setShowDebugModal] = useState(false);
-  const [debugTrace, setDebugTrace] = useState<{resolved: string, trace: string[], referenceImages: string[], model: string} | null>(null);
-  const [debugView, setDebugView] = useState<'trace' | 'js' | 'python'>('trace');
+  const [debugTrace, setDebugTrace] = useState<{resolved: string, trace: string[], referenceImages: string[], model: string, submittedPrompt?: string} | null>(null);
+  const [debugView, setDebugView] = useState<'trace' | 'js' | 'python' | 'submitted'>('trace');
 
   // State Tracking
   const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -573,7 +573,13 @@ export const Canvas: React.FC<CanvasProps> = ({
           );
       }
 
-      setDebugTrace({ resolved, trace, referenceImages, model: node.data.model || 'default-model' });
+      setDebugTrace({ 
+          resolved, 
+          trace, 
+          referenceImages, 
+          model: node.data.model || 'default-model',
+          submittedPrompt: node.data.submittedPrompt // Load saved prompt
+      });
       setShowDebugModal(true);
   }
 
@@ -1145,12 +1151,38 @@ print(response.text)`;
                         <button onClick={() => setDebugView('trace')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'trace' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Trace & Data</button>
                         <button onClick={() => setDebugView('js')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'js' ? 'bg-zinc-800 text-yellow-400' : 'text-zinc-500 hover:text-zinc-300'}`}>JavaScript</button>
                         <button onClick={() => setDebugView('python')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'python' ? 'bg-zinc-800 text-blue-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Python</button>
+                        <button onClick={() => setDebugView('submitted')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'submitted' ? 'bg-zinc-800 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Submitted Prompt</button>
                     </div>
 
-                    {debugView === 'trace' ? (
+                    {debugView === 'submitted' ? (
+                        <div className="flex-1 flex flex-col min-h-0">
+                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800 h-full flex flex-col">
+                                <div className="text-xs font-bold text-zinc-500 mb-2">EXACT PROMPT SENT TO API</div>
+                                {debugTrace.submittedPrompt ? (
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar font-mono text-sm text-green-300 whitespace-pre-wrap select-text">
+                                        {debugTrace.submittedPrompt}
+                                    </div>
+                                ) : (
+                                    <div className="flex-1 flex items-center justify-center text-zinc-600 italic text-sm">
+                                        No submitted prompt recorded for this item. Try regenerating.
+                                    </div>
+                                )}
+                                {debugTrace.submittedPrompt && (
+                                    <div className="mt-4 flex justify-end">
+                                        <button 
+                                            onClick={() => navigator.clipboard.writeText(debugTrace.submittedPrompt || '')}
+                                            className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs flex items-center gap-2 transition-colors"
+                                        >
+                                            <Copy size={14} /> Copy to Clipboard
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : debugView === 'trace' ? (
                         <div className="flex-1 flex flex-col min-h-0 gap-4">
                             <div className="bg-zinc-950 p-4 rounded border border-zinc-800 relative group shrink-0">
-                                <div className="text-xs font-bold text-zinc-500 mb-1">FINAL RESOLVED PROMPT</div>
+                                <div className="text-xs font-bold text-zinc-500 mb-1">PREVIEW RESOLVED PROMPT</div>
                                 <div className="font-mono text-sm text-green-400 whitespace-pre-wrap select-text max-h-[150px] overflow-y-auto custom-scrollbar">{debugTrace.resolved}</div>
                                 <button 
                                     onClick={() => navigator.clipboard.writeText(debugTrace.resolved)}
@@ -1188,11 +1220,11 @@ print(response.text)`;
                         <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black flex flex-col">
                             <textarea 
                                 readOnly
-                                value={getCodeSnippet(debugView)}
+                                value={getCodeSnippet(debugView as 'js' | 'python')}
                                 className="flex-1 w-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none select-text custom-scrollbar"
                             />
                             <button 
-                                onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView))}
+                                onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView as 'js' | 'python'))}
                                 className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2 z-10"
                             >
                                 <CodeIcon size={14}/> Copy Code

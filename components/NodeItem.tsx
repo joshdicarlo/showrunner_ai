@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, memo, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
@@ -712,7 +713,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           refImages
       );
       const newHistory = addToHistory('image', result);
-      onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review', history: newHistory });
+      onUpdate(node.id, { 
+          ...node.data, 
+          imageUrl: result, 
+          status: 'review', 
+          history: newHistory,
+          submittedPrompt: resolved // Save exact submitted prompt for debugging
+      });
     } catch (e) {
       setError("Image generation failed.");
     } finally {
@@ -730,7 +737,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           const { resolved } = resolvePrompt(node.data.prompt || "Enhance this", projectAssets, activeAsset, projectSettings);
           const result = await GeminiService.editImage(node.data.imageUrl, resolved);
           const newHistory = addToHistory('image', result);
-          onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review', history: newHistory }); 
+          onUpdate(node.id, { 
+              ...node.data, 
+              imageUrl: result, 
+              status: 'review', 
+              history: newHistory,
+              submittedPrompt: resolved 
+          }); 
       } catch(e) {
           setError("Edit failed.");
       } finally {
@@ -780,7 +793,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
               (msg) => setProgressMsg(msg)
           );
           const newHistory = addToHistory('video', result);
-          onUpdate(node.id, { ...node.data, videoUrl: result, status: 'review', history: newHistory });
+          onUpdate(node.id, { 
+              ...node.data, 
+              videoUrl: result, 
+              status: 'review', 
+              history: newHistory,
+              submittedPrompt: resolved 
+          });
       } catch (e) {
           setError("Video generation failed.");
       } finally {
