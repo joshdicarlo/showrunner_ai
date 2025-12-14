@@ -1,4 +1,6 @@
+
 import { DepartmentType, NodeType, Project } from "../types";
+import { DEFAULT_PROJECT_SETTINGS } from "../constants";
 
 const demoAssetId = 'asset-1';
 
@@ -58,7 +60,11 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
        }
     ],
     connections: [],
-    updatedAt: new Date()
+    updatedAt: new Date(),
+    settings: {
+        ...DEFAULT_PROJECT_SETTINGS,
+        defaultStyleId: 'style-pixar'
+    }
 };
 
 export const TEMPLATES = [GALACTIC_COURIER_TEMPLATE];

@@ -61,14 +61,14 @@ export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = (
     </div>
 );
 
-export const Modal: React.FC<{ title: string; children: React.ReactNode; onClose: () => void; maxWidth?: string }> = ({ title, children, onClose, maxWidth = 'max-w-lg' }) => (
+export const Modal: React.FC<{ title: string; children: React.ReactNode; onClose: () => void; maxWidth?: string; noPadding?: boolean }> = ({ title, children, onClose, maxWidth = 'max-w-lg', noPadding = false }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
     <div className={`bg-zinc-900 border border-zinc-800 rounded-lg w-full shadow-2xl ${maxWidth} flex flex-col max-h-[90vh]`}>
       <div className="flex items-center justify-between p-4 border-b border-zinc-800 shrink-0">
         <h3 className="text-lg font-semibold text-zinc-100">{title}</h3>
         <button onClick={onClose} className="text-zinc-500 hover:text-white">✕</button>
       </div>
-      <div className="p-4 flex-1 overflow-y-auto">
+      <div className={`${noPadding ? '' : 'p-4'} flex-1 overflow-y-auto`}>
         {children}
       </div>
     </div>

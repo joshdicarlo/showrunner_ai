@@ -1,9 +1,9 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData } from '../types';
+import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData, ProjectSettings } from '../types';
 import { NodeItem } from './NodeItem';
 import { Button, Input, Modal, ToggleGroup } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon } from 'lucide-react';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 
@@ -20,6 +20,8 @@ interface CanvasProps {
   projectAssets?: ProjectAsset[];
   onRefineConcept?: (assetId: string, sourceImageUrl: string) => void;
   refinedImagesMap?: Record<string, string[]>;
+  approvedImagesMap?: Record<string, string[]>;
+  projectSettings?: ProjectSettings;
 }
 
 // Available Nodes for Tab Menu
@@ -38,7 +40,7 @@ interface HistoryState {
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
-    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}
+    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings
 }) => {
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
@@ -398,6 +400,14 @@ export const Canvas: React.FC<CanvasProps> = ({
       setContextMenu(null);
   };
 
+  const handleAddToRefAction = () => {
+      if (contextMenu && contextMenu.nodeId) {
+          // Update node to be a refinement and approved
+          updateNodeData(contextMenu.nodeId, { tag: 'refinement', status: 'approved' });
+      }
+      setContextMenu(null);
+  };
+
   const handleTurntableAction = () => {
       if (contextMenu && contextMenu.nodeId) {
           const node = nodes.find(n => n.id === contextMenu.nodeId);
@@ -526,7 +536,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   }, [setNodes, setConnections, saveHistory]);
 
   const updateNodeData = useCallback((id: string, data: any) => {
-      setNodes(prev => prev.map(n => n.id === id ? { ...n, data } : n));
+      setNodes(prev => prev.map(n => n.id === id ? { ...n, data: { ...n.data, ...data } } : n));
   }, [setNodes]);
 
   // --- Debug Logic ---
@@ -539,7 +549,14 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (!node) return;
 
       const rawPrompt = node.data.prompt || node.data.text || "";
-      const { resolved, matchedAssets, trace } = resolvePrompt(rawPrompt, projectAssets, activeAsset, true);
+      const { resolved, matchedAssets, trace } = resolvePrompt(
+          rawPrompt, 
+          projectAssets, 
+          activeAsset, 
+          projectSettings, 
+          node.data.styleId, // Pass explicit node style
+          true
+      );
       
       let referenceImages: string[] = [];
       if (node.data.referenceImageUrl) {
@@ -550,6 +567,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               projectAssets, 
               activeAsset, 
               refinedImagesMap, 
+              approvedImagesMap,
               {}, 
               matchedAssets
           );
@@ -749,7 +767,7 @@ print(response.text)`;
                  const minX = Math.min(...members.map(n => n.position.x), targetGroup.position.x + padding);
                  const minY = Math.min(...members.map(n => n.position.y), targetGroup.position.y + padding + headerHeight);
                  const maxX = Math.max(...members.map(n => n.position.x + (n.width || 300)), targetGroup.position.x + (targetGroup.width || 400) - padding);
-                 const maxY = Math.max(...members.map(n => n.position.y + (n.height || 300)), targetGroup.position.y + (targetGroup.height || 400) - padding);
+                 const maxY = Math.max(...members.map(n => n.position.y + (n.height || 300)), targetGroup.position.x + (targetGroup.height || 400) - padding);
 
                  setNodes(prev => prev.map(n => {
                      if (n.id === dragTargetGroupId) {
@@ -871,6 +889,8 @@ print(response.text)`;
                         projectAssets={projectAssets}
                         assetThumbnails={onSetThumbnail ? {} : undefined} 
                         refinedImagesMap={refinedImagesMap}
+                        approvedImagesMap={approvedImagesMap} // Pass down
+                        projectSettings={projectSettings}
                     />
                 ))}
             </div>
@@ -916,28 +936,39 @@ print(response.text)`;
                                         </button>
 
                                         {/* Refine Option for Approved Concepts in Casting */}
-                                        {node.department === DepartmentType.CASTING_WARDROBE && node.data.status === 'approved' && (
+                                        {node.department === DepartmentType.CASTING_WARDROBE && (
                                             <>
-                                                {onRefineConcept && (
+                                                <button 
+                                                    onClick={handleAddToRefAction}
+                                                    className="w-full text-left px-3 py-2 text-xs hover:bg-yellow-900/30 text-zinc-200 hover:text-yellow-300 flex items-center gap-2"
+                                                >
+                                                    <BookmarkPlus size={12} /> Add to Ref
+                                                </button>
+
+                                                {node.data.status === 'approved' && (
+                                                    <>
+                                                    {onRefineConcept && (
+                                                        <button 
+                                                            onClick={handleRefineAction}
+                                                            className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-zinc-200 hover:text-green-300 flex items-center gap-2"
+                                                        >
+                                                            <ScanFace size={12} /> Refine Character
+                                                        </button>
+                                                    )}
                                                     <button 
-                                                        onClick={handleRefineAction}
-                                                        className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-zinc-200 hover:text-green-300 flex items-center gap-2"
+                                                        onClick={handleTurntableAction}
+                                                        className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/30 text-zinc-200 hover:text-red-300 flex items-center gap-2"
                                                     >
-                                                        <ScanFace size={12} /> Refine Character
+                                                        <Rotate3d size={12} /> Generate 3D Turntable
                                                     </button>
+                                                    <button 
+                                                        onClick={handleGenerateExpressions}
+                                                        className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-zinc-200 hover:text-purple-300 flex items-center gap-2"
+                                                    >
+                                                        <Smile size={12} /> Generate Expressions
+                                                    </button>
+                                                    </>
                                                 )}
-                                                <button 
-                                                    onClick={handleTurntableAction}
-                                                    className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/30 text-zinc-200 hover:text-red-300 flex items-center gap-2"
-                                                >
-                                                    <Rotate3d size={12} /> Generate 3D Turntable
-                                                </button>
-                                                <button 
-                                                    onClick={handleGenerateExpressions}
-                                                    className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-zinc-200 hover:text-purple-300 flex items-center gap-2"
-                                                >
-                                                    <Smile size={12} /> Generate Expressions
-                                                </button>
                                             </>
                                         )}
                                     </>
@@ -1109,7 +1140,7 @@ print(response.text)`;
         {/* Debug Modal */}
         {showDebugModal && debugTrace && (
             <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl">
-                <div className="flex flex-col gap-4 max-h-[70vh] h-full overflow-hidden">
+                <div className="flex flex-col gap-4 h-[70vh] overflow-hidden">
                     <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800 shrink-0">
                         <button onClick={() => setDebugView('trace')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'trace' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Trace & Data</button>
                         <button onClick={() => setDebugView('js')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'js' ? 'bg-zinc-800 text-yellow-400' : 'text-zinc-500 hover:text-zinc-300'}`}>JavaScript</button>
@@ -1117,16 +1148,32 @@ print(response.text)`;
                     </div>
 
                     {debugView === 'trace' ? (
-                        <>
-                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                        <div className="flex-1 flex flex-col min-h-0 gap-4">
+                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800 relative group shrink-0">
                                 <div className="text-xs font-bold text-zinc-500 mb-1">FINAL RESOLVED PROMPT</div>
-                                <div className="font-mono text-sm text-green-400 whitespace-pre-wrap">{debugTrace.resolved}</div>
+                                <div className="font-mono text-sm text-green-400 whitespace-pre-wrap select-text max-h-[150px] overflow-y-auto custom-scrollbar">{debugTrace.resolved}</div>
+                                <button 
+                                    onClick={() => navigator.clipboard.writeText(debugTrace.resolved)}
+                                    className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Copy Prompt"
+                                >
+                                    <Copy size={14} />
+                                </button>
                             </div>
                             
+                            {/* Trace Log */}
+                            <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2 select-text custom-scrollbar">
+                                <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div>
+                                {debugTrace.trace.map((line, i) => (
+                                    <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div>
+                                ))}
+                            </div>
+
+                            {/* Ref Images (if any) */}
                             {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && (
-                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800 shrink-0">
                                     <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div>
-                                    <div className="flex gap-2 overflow-x-auto pb-2">
+                                    <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                                         {debugTrace.referenceImages.map((img, i) => (
                                             <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group">
                                                 <img src={img} className="w-full h-full object-cover" />
@@ -1136,24 +1183,17 @@ print(response.text)`;
                                     </div>
                                 </div>
                             )}
-                            
-                            <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2">
-                                <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div>
-                                {debugTrace.trace.map((line, i) => (
-                                    <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div>
-                                ))}
-                            </div>
-                        </>
+                        </div>
                     ) : (
-                        <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black">
+                        <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black flex flex-col">
                             <textarea 
                                 readOnly
                                 value={getCodeSnippet(debugView)}
-                                className="w-full h-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none"
+                                className="flex-1 w-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none select-text custom-scrollbar"
                             />
                             <button 
                                 onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView))}
-                                className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2"
+                                className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2 z-10"
                             >
                                 <CodeIcon size={14}/> Copy Code
                             </button>

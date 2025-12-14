@@ -1,5 +1,5 @@
 
-import { DepartmentType } from "./types";
+import { DepartmentType, ProjectSettings, VisualStyle } from "./types";
 
 export const DEPARTMENTS = [
   { id: DepartmentType.WRITERS_ROOM, icon: "PenTool", color: "text-blue-400", assetLabel: "Script" },
@@ -54,6 +54,7 @@ export const CHAT_SYSTEM_INSTRUCTION = `You are the expert AI assistant embedded
 ### APP USAGE & CONTEXT
 - **Goal**: Help users build stories, create assets, and manage production workflows.
 - **Reference System**: Explain that users can reference characters using \`@CharacterName\` (e.g., \`@Zax\`) in prompts to auto-inject their visual descriptions.
+- **Visual Styles**: Explain that users can use \`@style:key\` to apply consistent looks (e.g. \`@style:cinematic\`).
 - **Shot Creation**: To create shots, users should go to the **Production** department, select a Sequence/Scene (or create one), and click "Add Child" or "Find Shots" to generate a shot list.
 - **Navigation**: The sidebar creates different contexts (Writers Room, Casting, Story, Production).
 - **Google Drive**: The app autosaves to Drive if connected.
@@ -64,3 +65,51 @@ You have access to the current script and story outlines (provided in the prompt
 ### TONE
 Professional, creative, and helpful. Use film industry terminology (e.g., "blocking," "coverage," "beat sheet," "concept art").
 `;
+
+export const DEFAULT_STYLES: VisualStyle[] = [
+    { 
+        id: 'style-cinematic', 
+        label: 'Cinematic', 
+        value: 'cinematic', 
+        prompt: 'high budget film aesthetic, arri alexa, anamorphic lens, shallow depth of field, dramatic lighting, color graded, 8k, highly detailed texture', 
+        isSystem: true 
+    },
+    { 
+        id: 'style-cyberpunk', 
+        label: 'Cyberpunk', 
+        value: 'cyberpunk', 
+        prompt: 'high-contrast realism with cool desaturated tones, green-teal color bias, deep shadows, sharp minimalist geometry, neon accents, dramatic rim lighting, atmospheric haze', 
+        isSystem: true 
+    },
+    { 
+        id: 'style-pixar', 
+        label: '3D Animation', 
+        value: 'pixar', 
+        prompt: 'high-end 3D rendering, soft global illumination, warm cinematic lighting, vibrant but controlled color palette, clean silhouettes, subsurface scattering, physically based rendering', 
+        isSystem: true 
+    },
+    { 
+        id: 'style-anime', 
+        label: 'Anime', 
+        value: 'anime', 
+        prompt: 'high fidelity cel-shaded aesthetic, detailed backgrounds, vibrant colors, clean lines, atmospheric lighting, makoto shinkai style lighting', 
+        isSystem: true 
+    },
+    { 
+        id: 'style-noir', 
+        label: 'Film Noir', 
+        value: 'noir', 
+        prompt: 'black and white photography, high contrast, chiaroscuro lighting, film grain, vintage lens artifacts, mysterious atmosphere, low key lighting', 
+        isSystem: true 
+    }
+];
+
+export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
+    defaultStyleId: 'style-cinematic',
+    styles: DEFAULT_STYLES,
+    assetConfigs: {
+        [DepartmentType.CASTING_WARDROBE]: { hiddenPrompt: "full body shot, neutral background, consistent lighting" },
+        [DepartmentType.SET_DESIGN]: { hiddenPrompt: "wide shot, establishing shot, detailed environment, architectural visualization" },
+        [DepartmentType.PRODUCTION]: { hiddenPrompt: "" }
+    }
+};

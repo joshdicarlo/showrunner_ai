@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
-import { ProjectAsset, DepartmentType } from '../types';
+import { ProjectAsset, DepartmentType, ProjectSettings } from '../types';
 import { Input, TextArea, Button, Select } from './UI';
-import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace } from 'lucide-react';
+import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace, Settings, Eye, EyeOff, ChevronDown, Frame, XCircle } from 'lucide-react';
 import { generateSummary } from '../services/geminiService';
 
 interface AssetEditorPanelProps {
@@ -15,12 +16,9 @@ interface AssetEditorPanelProps {
     onGenerateRefSheet?: (assetId: string, sourceImageUrl?: string) => void;
     assetThumbnails?: Record<string, string>;
     refinedImages?: string[];
+    projectSettings?: ProjectSettings; 
+    onRemoveRef?: (imageUrl: string) => void; // New prop
 }
-
-const VISUAL_STYLES = [
-    "Cinematic", "Cyberpunk", "Anime", "Watercolor", "Claymation", 
-    "Retro 80s", "Concept Art", "Photorealistic", "Noir", "Gothic"
-];
 
 export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ 
     asset, 
@@ -32,26 +30,41 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     onNavigateToAsset,
     onGenerateRefSheet,
     assetThumbnails = {},
-    refinedImages = []
+    refinedImages = [],
+    projectSettings,
+    onRemoveRef
 }) => {
     const [title, setTitle] = useState(asset.title);
     const [description, setDescription] = useState(asset.description);
-    const [visualStyle, setVisualStyle] = useState(asset.visualStyle || "");
+    const [styleId, setStyleId] = useState(asset.styleId || "");
     const [isGenerating, setIsGenerating] = useState(false);
     const [conceptCount, setConceptCount] = useState(4);
     
+    // Hidden Prompt State
+    const [overrideHidden, setOverrideHidden] = useState(asset.overrideHiddenPrompt || false);
+    const [hiddenPrompt, setHiddenPrompt] = useState(asset.hiddenPrompt || "");
+    const [showHiddenSection, setShowHiddenSection] = useState(false);
+
     // Button Context Menu
     const [btnContextMenu, setBtnContextMenu] = useState<{x: number, y: number, visible: boolean} | null>(null);
+    
+    // Image Context Menu (For removing refs)
+    const [imgContextMenu, setImgContextMenu] = useState<{x: number, y: number, url: string} | null>(null);
 
     // Sync local state when asset changes
     useEffect(() => {
         setTitle(asset.title);
         setDescription(asset.description);
-        setVisualStyle(asset.visualStyle || "");
+        setStyleId(asset.styleId || "");
+        setOverrideHidden(asset.overrideHiddenPrompt || false);
+        setHiddenPrompt(asset.hiddenPrompt || "");
     }, [asset.id]);
 
     useEffect(() => {
-        const handleClickOutside = () => setBtnContextMenu(null);
+        const handleClickOutside = () => {
+            setBtnContextMenu(null);
+            setImgContextMenu(null);
+        }
         window.addEventListener('click', handleClickOutside);
         return () => window.removeEventListener('click', handleClickOutside);
     }, []);
@@ -86,19 +99,22 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
         onUpdate({ ...asset, description: newDesc });
     };
 
-    const handleChangeStyle = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newStyle = e.target.value;
-        setVisualStyle(newStyle);
-        onUpdate({ ...asset, visualStyle: newStyle });
+    const handleStyleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const newStyleId = e.target.value;
+        setStyleId(newStyleId);
+        onUpdate({ ...asset, styleId: newStyleId });
     };
-    
-    const addStyleTag = (tag: string) => {
-        const current = visualStyle.split(',').map(s => s.trim()).filter(s => s);
-        if (!current.includes(tag)) {
-            const newStyle = current.length > 0 ? `${visualStyle}, ${tag}` : tag;
-            setVisualStyle(newStyle);
-            onUpdate({ ...asset, visualStyle: newStyle });
-        }
+
+    const toggleOverrideHidden = () => {
+        const newValue = !overrideHidden;
+        setOverrideHidden(newValue);
+        onUpdate({ ...asset, overrideHiddenPrompt: newValue });
+    };
+
+    const handleHiddenPromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const val = e.target.value;
+        setHiddenPrompt(val);
+        onUpdate({ ...asset, hiddenPrompt: val });
     };
 
     const handleRegenerateSummary = async () => {
@@ -115,6 +131,12 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
         e.preventDefault();
         e.stopPropagation();
         setBtnContextMenu({ x: e.clientX, y: e.clientY, visible: true });
+    };
+
+    const handleImageContextMenu = (e: React.MouseEvent, url: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setImgContextMenu({ x: e.clientX, y: e.clientY, url });
     };
     
     // Effective Thumbnail
@@ -149,28 +171,21 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                     <Input value={title} onChange={handleChangeTitle} className="font-bold text-white bg-zinc-950" />
                 </div>
 
-                {/* Visual Style Section */}
-                <div className="space-y-2">
+                {/* Visual Style Section (One Line) */}
+                <div className="flex items-center justify-between">
                     <label className="text-xs uppercase font-bold text-zinc-500">Visual Style</label>
-                    <div className="relative">
-                        <Tag size={14} className="absolute top-2.5 left-2.5 text-zinc-500" />
-                        <Input 
-                            value={visualStyle} 
-                            onChange={handleChangeStyle} 
-                            placeholder="e.g. Cinematic, Dark, 3D" 
-                            className="pl-8 bg-zinc-950" 
-                        />
-                    </div>
-                    <div className="flex flex-wrap gap-1 mt-2">
-                        {VISUAL_STYLES.map(style => (
-                            <button
-                                key={style}
-                                onClick={() => addStyleTag(style)}
-                                className="text-[10px] px-2 py-1 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 transition-colors border border-zinc-700"
-                            >
-                                {style}
-                            </button>
-                        ))}
+                    <div className="relative group">
+                        <select 
+                            value={styleId} 
+                            onChange={handleStyleChange} 
+                            className="appearance-none bg-zinc-950 border border-zinc-700 rounded px-2 py-1 pr-6 text-[10px] font-mono text-zinc-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:bg-zinc-900 w-32 text-right"
+                        >
+                            <option value="">PROJECT DEFAULT</option>
+                            {projectSettings?.styles.map(s => (
+                                <option key={s.id} value={s.id}>@{s.value.toUpperCase()}</option>
+                            ))}
+                        </select>
+                        <ChevronDown size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"/>
                     </div>
                 </div>
 
@@ -183,13 +198,13 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                         className="h-48 text-sm leading-relaxed bg-zinc-950 border-zinc-800" 
                     />
                     <p className="text-[10px] text-zinc-600">
-                        Use <strong>@{asset.title}</strong> or <strong>@character</strong> to inject description + visual style.
+                        Use <strong>@{asset.title}</strong> to inject this description elsewhere.
                     </p>
                 </div>
                 
                 {/* Cast Section (Dynamic) */}
                 {referencedCharacters.length > 0 && (
-                     <div className="space-y-2">
+                     <div className="space-y-2 pt-4 border-t border-zinc-800">
                         <label className="text-xs uppercase font-bold text-zinc-500">Cast</label>
                         <div className="grid grid-cols-3 gap-2">
                             {referencedCharacters.map(char => (
@@ -235,14 +250,14 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                     <p className="text-xs text-zinc-300 italic leading-relaxed min-h-[40px]">
                         {asset.summary || (isGenerating ? "Generating..." : "No summary available.")}
                     </p>
-                    <p className="text-[9px] text-zinc-600 mt-1">
-                        Displayed in the top bar to save space.
-                    </p>
                 </div>
 
-                {/* Approved Concepts Section */}
-                <div className="space-y-2">
-                     <label className="text-xs uppercase font-bold text-zinc-500">Approved Concept Thumbnails</label>
+                {/* Approved Concepts Section (Moved Up) */}
+                <div className="space-y-2 pt-4 border-t border-zinc-800">
+                     <label className="text-xs uppercase font-bold text-zinc-500 flex items-center gap-2">
+                        <ImageIcon size={12} />
+                        Approved Concepts
+                     </label>
                      
                      {approvedImages && approvedImages.length > 0 ? (
                          <div className="grid grid-cols-2 gap-2">
@@ -256,34 +271,64 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                      ) : (
                          <div className="h-24 border-2 border-dashed border-zinc-800 rounded-lg flex flex-col items-center justify-center text-zinc-600 gap-2 bg-zinc-900/20">
                             <div className="p-2 rounded-full bg-zinc-800/50">
-                                <ImageIcon size={14} />
+                                <Frame size={14} />
                             </div>
-                            <span className="text-[10px]">Approved concepts appear here</span>
+                            <span className="text-[10px]">No approved concepts</span>
                          </div>
                      )}
                 </div>
 
-                {/* Refined Concepts Section */}
-                <div className="space-y-2">
-                     <label className="text-xs uppercase font-bold text-zinc-500 flex items-center justify-between">
-                         <span>Refined Concepts</span>
-                         <span className="text-[10px] bg-green-900/20 text-green-400 px-1.5 rounded">{refinedImages.length}</span>
-                     </label>
-                     
-                     {refinedImages && refinedImages.length > 0 ? (
-                         <div className="grid grid-cols-3 gap-2">
-                             {refinedImages.map((img, idx) => (
-                                 <div key={idx} className="relative aspect-[3/4] rounded-lg overflow-hidden border border-zinc-800 bg-white group cursor-pointer" title="Refined Generation">
-                                     <img src={img} alt={`Refinement ${idx}`} className="w-full h-full object-contain" />
-                                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-                                 </div>
-                             ))}
-                         </div>
-                     ) : (
-                         <div className="h-16 border border-zinc-800 rounded-lg flex items-center justify-center text-zinc-600 text-[10px] bg-zinc-900/20 italic">
-                            No refinements yet
-                         </div>
-                     )}
+                {/* Character Sheets / Turnarounds (Moved Down & Renamed) */}
+                {refinedImages && refinedImages.length > 0 && (
+                    <div className="space-y-2 pt-4 border-t border-zinc-800">
+                        <label className="text-xs uppercase font-bold text-zinc-500 flex items-center gap-2">
+                            <ScanFace size={12} className="text-green-500" />
+                            Approved Ref
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                            {refinedImages.map((img, idx) => (
+                                <div 
+                                    key={idx} 
+                                    className="relative aspect-video rounded-lg overflow-hidden border border-green-900/50 bg-zinc-950 group cursor-context-menu"
+                                    onContextMenu={(e) => handleImageContextMenu(e, img)}
+                                >
+                                    <img src={img} alt={`Refined ${idx}`} className="w-full h-full object-cover" />
+                                    <div className="absolute top-1 left-1 bg-black/60 text-white text-[8px] px-1 rounded backdrop-blur-sm">REF</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Advanced: Hidden Prompt (Moved to bottom) */}
+                <div className="border-t border-zinc-800 pt-4 pb-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs uppercase font-bold text-zinc-500 flex items-center gap-2">
+                            <EyeOff size={12}/> Advanced Generation
+                        </label>
+                        <div className="flex items-center gap-2">
+                            <span className="text-[9px] text-zinc-600">Override Default</span>
+                            <input 
+                                type="checkbox" 
+                                checked={overrideHidden} 
+                                onChange={toggleOverrideHidden} 
+                                className="cursor-pointer bg-zinc-900 border-zinc-700 rounded w-3 h-3"
+                            />
+                        </div>
+                    </div>
+                    
+                    {overrideHidden ? (
+                        <TextArea 
+                            value={hiddenPrompt} 
+                            onChange={handleHiddenPromptChange} 
+                            className="h-24 text-xs bg-zinc-950 border-zinc-700 text-zinc-300 font-mono" 
+                            placeholder="Enter hidden prompt tokens to inject during generation..."
+                        />
+                    ) : (
+                        <div className="p-3 bg-zinc-900/30 rounded border border-zinc-800/50 text-[10px] text-zinc-600 italic text-center">
+                            Using project defaults for {asset.department}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -354,6 +399,25 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                             <ScanFace size={12} /> Refine Character (Dataset)
                         </button>
                     )}
+                </div>
+            )}
+
+            {/* Image Context Menu (Ref Removal) */}
+            {imgContextMenu && (
+                <div 
+                    className="fixed bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 z-50 min-w-[140px] overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+                    style={{ left: imgContextMenu.x, top: imgContextMenu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">
+                        Ref Actions
+                    </div>
+                    <button 
+                        onClick={() => { if(onRemoveRef) onRemoveRef(imgContextMenu.url); setImgContextMenu(null); }}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/30 text-red-200 flex items-center gap-2"
+                    >
+                        <XCircle size={12} /> Remove Ref
+                    </button>
                 </div>
             )}
         </div>

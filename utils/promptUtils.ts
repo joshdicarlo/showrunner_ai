@@ -1,10 +1,12 @@
 
-import { ProjectAsset, DepartmentType } from '../types';
+import { ProjectAsset, DepartmentType, ProjectSettings } from '../types';
 
 export const resolvePrompt = (
     text: string, 
     projectAssets: ProjectAsset[] = [], 
     activeAsset: ProjectAsset | undefined,
+    projectSettings?: ProjectSettings,
+    overrideStyleId?: string | null, // If passed, overrides all other style logic. Pass "none" to force no style.
     debug: boolean = false
 ): { resolved: string, trace: string[], matchedAssets: ProjectAsset[] } => {
     let resolved = text;
@@ -16,6 +18,72 @@ export const resolvePrompt = (
     if (!text) return { resolved: "", trace, matchedAssets: [] };
 
     try {
+        // --- 1. Style Resolution ---
+        // Determine the effective style to apply
+        let appliedStyleId: string | undefined = undefined;
+        let explicitStyleFound = false;
+
+        // Check Override First
+        if (overrideStyleId) {
+            if (overrideStyleId === 'none') {
+                appliedStyleId = undefined; // Force no style
+                if (debug) trace.push(`[Style] Explicitly set to NONE via node settings.`);
+            } else {
+                appliedStyleId = overrideStyleId;
+                if (debug) trace.push(`[Style] Explicitly set to: ${appliedStyleId}`);
+            }
+        } else {
+            // A. Check for explicit @style:key in the prompt
+            const styleRegex = /@style:(\w+)/gi;
+            const styleMatches = Array.from(resolved.matchAll(styleRegex));
+            
+            if (styleMatches.length > 0) {
+                // Use the last one found as authoritative
+                const styleKey = styleMatches[styleMatches.length - 1][1];
+                const style = projectSettings?.styles.find(s => s.value === styleKey);
+                if (style) {
+                    appliedStyleId = style.id;
+                    explicitStyleFound = true;
+                    if (debug) trace.push(`[Style] Explicit tag found in text: @style:${styleKey}`);
+                }
+            }
+
+            // B. If no explicit style, check Active Asset context
+            if (!appliedStyleId && activeAsset) {
+                if (activeAsset.styleId) {
+                    appliedStyleId = activeAsset.styleId;
+                    if (debug) trace.push(`[Style] Using Active Asset style: ${appliedStyleId}`);
+                } else if (projectSettings?.assetConfigs[activeAsset.department]?.defaultStyleId) {
+                    appliedStyleId = projectSettings.assetConfigs[activeAsset.department]!.defaultStyleId;
+                    if (debug) trace.push(`[Style] Using Department Default style: ${appliedStyleId}`);
+                }
+            }
+
+            // C. Fallback to Project Default
+            if (!appliedStyleId && projectSettings?.defaultStyleId) {
+                appliedStyleId = projectSettings.defaultStyleId;
+                if (debug) trace.push(`[Style] Using Project Default style: ${appliedStyleId}`);
+            }
+        }
+
+        // Apply Style Expansion
+        const styleDef = projectSettings?.styles.find(s => s.id === appliedStyleId);
+        const styleRegex = /@style:(\w+)/gi;
+        
+        // Remove explicit tags regardless of whether we found a definition (cleanup)
+        // If we found a definition, we will append it properly.
+        if (explicitStyleFound) {
+             resolved = resolved.replace(styleRegex, "");
+        }
+
+        if (styleDef) {
+            // Append effective style with correct prefix
+            resolved += `, visual style: ${styleDef.prompt}`;
+            if (debug) trace.push(`[Style] Appended: "${styleDef.prompt}"`);
+        }
+
+
+        // --- 2. Asset Reference Expansion ---
         // Sort assets by length desc to ensure we match longest titles first
         const sortedAssets = [...projectAssets].sort((a, b) => b.title.length - a.title.length);
         
@@ -29,7 +97,7 @@ export const resolvePrompt = (
 
             for (const asset of sortedAssets) {
                 
-                // 1. Dot Syntax (@Parent.Child)
+                // Dot Syntax (@Parent.Child)
                 const children = projectAssets.filter(c => c.parentId === asset.id);
                 children.sort((a, b) => b.title.length - a.title.length);
 
@@ -55,12 +123,12 @@ export const resolvePrompt = (
                         
                         if (before !== resolved) {
                             changes = true;
-                            if (debug) trace.push(`   Match: "${compoundKey}"\n   Action: Injected description\n   Result Preview: "...${resolved.substring(Math.max(0, resolved.indexOf(replacement.substring(0,10)) - 10), resolved.indexOf(replacement.substring(0,10)) + 50)}..."`);
+                            if (debug) trace.push(`   Match: "${compoundKey}"\n   Action: Injected description`);
                         }
                     }
                 }
 
-                // 2. Standard Syntax (@Asset)
+                // Standard Syntax (@Asset)
                 const safeTitle = asset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const standardRegex = new RegExp(`(^|\\s)@${safeTitle}\\b`, 'gi');
 
@@ -68,37 +136,28 @@ export const resolvePrompt = (
                     matchedAssets.add(asset);
 
                     let replacement = asset.description;
-                    let effectiveStyle = asset.visualStyle;
                     
-                    if (!effectiveStyle && asset.parentId) {
-                         const parent = projectAssets.find(p => p.id === asset.parentId);
-                         if (parent) effectiveStyle = parent.visualStyle;
-                    }
-                    if (effectiveStyle) replacement += `, visual style: ${effectiveStyle}`;
-
                     const safeReplacement = replacement.replace(/\$/g, '$$$$');
                     const before = resolved;
                     resolved = resolved.replace(standardRegex, `$1${safeReplacement}`);
                     
                     if (before !== resolved) {
                         changes = true;
-                        if (debug) trace.push(`   Match: "@${asset.title}"\n   Action: Injected description\n   Result Preview: "...${resolved.substring(Math.max(0, resolved.indexOf(replacement.substring(0,10)) - 10), resolved.indexOf(replacement.substring(0,10)) + 50)}..."`);
+                        if (debug) trace.push(`   Match: "@${asset.title}"\n   Action: Injected description`);
                     }
                 }
             }
             passes++;
         }
 
-        // 3. Contextual Keywords (@character, @parent)
+        // --- 3. Contextual Keywords (@character, @parent) ---
         if (activeAsset) {
-             let activeStyle = activeAsset.visualStyle;
              let parentDesc = "";
              let parentAsset: ProjectAsset | undefined;
              
              if (activeAsset.parentId) {
                  parentAsset = projectAssets.find(p => p.id === activeAsset.parentId);
                  if (parentAsset) {
-                     if (!activeStyle) activeStyle = parentAsset.visualStyle;
                      parentDesc = parentAsset.description;
                  }
              }
@@ -107,7 +166,6 @@ export const resolvePrompt = (
              if (parentAsset && activeAsset.department === DepartmentType.CASTING_WARDROBE) {
                  replacement = `${parentAsset.description}, wearing ${activeAsset.description}`;
              }
-             if (activeStyle) replacement += `, visual style: ${activeStyle}`;
 
              const safeReplacement = replacement.replace(/\$/g, '$$$$');
              const beforeChar = resolved;
@@ -130,6 +188,29 @@ export const resolvePrompt = (
              }
         }
 
+        // --- 4. Hidden Prompt Injection ---
+        // Determine hidden prompt based on context
+        let hiddenPrompt = "";
+        
+        // Priority 1: Active Asset Override
+        if (activeAsset && activeAsset.overrideHiddenPrompt && activeAsset.hiddenPrompt) {
+            hiddenPrompt = activeAsset.hiddenPrompt;
+            if (debug) trace.push(`[Hidden] Using Active Asset Override`);
+        } 
+        // Priority 2: Department Default from Settings
+        else if (activeAsset && projectSettings?.assetConfigs) {
+            const config = projectSettings.assetConfigs[activeAsset.department];
+            if (config?.hiddenPrompt) {
+                hiddenPrompt = config.hiddenPrompt;
+                if (debug) trace.push(`[Hidden] Using Department Default for ${activeAsset.department}`);
+            }
+        }
+
+        if (hiddenPrompt) {
+            resolved += ` --no-display-text ${hiddenPrompt}`; // Appending cleanly
+            if (debug) trace.push(`[Final] Appended hidden prompt: "${hiddenPrompt}"`);
+        }
+
     } catch(e) {
         if (debug) trace.push(`Error: ${e}`);
         console.error("Prompt Resolution Error", e);
@@ -144,6 +225,7 @@ export const resolveReferenceImages = (
     projectAssets: ProjectAsset[] = [],
     activeAsset: ProjectAsset | undefined,
     refinedImagesMap: Record<string, string[]> = {},
+    approvedImagesMap: Record<string, string[]> = {},
     assetThumbnails: Record<string, string> = {},
     preMatchedAssets: ProjectAsset[] = []
 ): string[] => {
@@ -174,11 +256,15 @@ export const resolveReferenceImages = (
         if (processedIds.has(asset.id)) continue;
         processedIds.add(asset.id);
 
-        // Priority 1: Refined Images (Approved variations)
+        // Priority 1: Refined Images (Approved variations tagged 'refinement')
         if (refinedImagesMap[asset.id] && refinedImagesMap[asset.id].length > 0) {
             collectedImageSets.push(refinedImagesMap[asset.id]);
         }
-        // Priority 2: Single Thumbnail
+        // Priority 2: Any Approved Images (If no specific refinement found)
+        else if (approvedImagesMap[asset.id] && approvedImagesMap[asset.id].length > 0) {
+            collectedImageSets.push(approvedImagesMap[asset.id]);
+        }
+        // Priority 3: Single Thumbnail
         else {
             const thumb = assetThumbnails[asset.id] || asset.thumbnailUrl;
             if (thumb) collectedImageSets.push([thumb]);
@@ -186,7 +272,6 @@ export const resolveReferenceImages = (
     }
 
     // Distribute Logic
-    // We want to pass reference images for ALL matched characters, but stay within API limits.
     const MAX_TOTAL_IMAGES = 12; 
     const assetCount = collectedImageSets.length;
     
@@ -194,11 +279,10 @@ export const resolveReferenceImages = (
 
     const result: string[] = [];
     
-    // Calculate fair share per asset (e.g. 2 assets = 6 images each)
+    // Calculate fair share per asset
     const maxPerAsset = Math.floor(MAX_TOTAL_IMAGES / assetCount);
 
     for (const set of collectedImageSets) {
-        // Take up to fair share from each set
         const slice = set.slice(0, Math.max(1, maxPerAsset));
         result.push(...slice);
     }

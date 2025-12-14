@@ -7,8 +7,9 @@ import { DepartmentPanel } from './components/DepartmentPanel';
 import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
 import { EditorTimeline } from './components/EditorTimeline';
-import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip } from './types';
-import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from './constants';
+import { SettingsModal } from './components/SettingsModal';
+import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings } from './types';
+import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
 import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers } from 'lucide-react';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage } from './services/geminiService';
@@ -49,7 +50,8 @@ const App: React.FC = () => {
   const [showEnhanceModal, setShowEnhanceModal] = useState(false);
   const [isAnalyzeModalOpen, setIsAnalyzeModalOpen] = useState(false);
   const [isOneShotModalOpen, setIsOneShotModalOpen] = useState(false);
-  const [isRenderQueueOpen, setIsRenderQueueOpen] = useState(false); // Manual queue view
+  const [isRenderQueueOpen, setIsRenderQueueOpen] = useState(false); 
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   // Form State (New Project)
   const [creationMode, setCreationMode] = useState<'blank' | 'seed'>('blank');
@@ -98,8 +100,32 @@ const App: React.FC = () => {
       const activeProj = projectsRef.current.find(p => p.id === currentProjectIdRef.current);
       const asset = activeProj?.assets.find(a => a.id === task.assetId);
       
-      const { resolved, matchedAssets } = resolvePrompt(task.prompt, activeProj?.assets, asset);
-      const refImages = resolveReferenceImages(task.prompt, activeProj?.assets, asset, {}, {}, matchedAssets);
+      const { resolved, matchedAssets } = resolvePrompt(
+          task.prompt, 
+          activeProj?.assets, 
+          asset,
+          activeProj?.settings || DEFAULT_PROJECT_SETTINGS,
+          task.config?.styleId // Pass override if available
+      );
+      
+      // Calculate approvedImagesMap on the fly for the worker
+      const approvedMap: Record<string, string[]> = {};
+      activeProj?.assets.forEach(a => {
+          const images = activeProj.nodes
+            .filter(n => n.assetId === a.id && n.data.status === 'approved' && n.data.imageUrl)
+            .map(n => n.data.imageUrl!);
+          if (images.length > 0) approvedMap[a.id] = images;
+      });
+
+      const refImages = resolveReferenceImages(
+          task.prompt, 
+          activeProj?.assets, 
+          asset, 
+          {}, 
+          approvedMap, 
+          {}, // assetThumbnails
+          matchedAssets
+      );
 
       if (task.type === 'image') {
           return await generateImage(resolved, task.config?.aspectRatio || "16:9", task.config?.model, refImages);
@@ -130,6 +156,7 @@ const App: React.FC = () => {
                       status: task.config?.autoApprove ? 'approved' : 'review',
                       model: task.config?.model,
                       aspectRatio: task.config?.aspectRatio,
+                      styleId: task.config?.styleId
                   }
               };
 
@@ -184,8 +211,13 @@ const App: React.FC = () => {
   }, []);
 
   // Mock initial data load - Load Templates
+  // Ensure templates have settings
   useEffect(() => {
-      setProjects(TEMPLATES);
+      const initTemplates = TEMPLATES.map(t => ({
+          ...t,
+          settings: t.settings || DEFAULT_PROJECT_SETTINGS
+      }));
+      setProjects(initTemplates);
   }, []);
 
   const activeProject = projects.find(p => p.id === currentProjectId);
@@ -213,8 +245,7 @@ const App: React.FC = () => {
       if (!activeProject) return "";
       const scriptNodes = activeProject.nodes.filter(n => 
           n.department === DepartmentType.WRITERS_ROOM && 
-          (n.type === NodeType.TEXT_INPUT || n.type === NodeType.AI_TEXT_GEN) &&
-          n.data.text
+          (n.type === NodeType.TEXT_INPUT || n.type === NodeType.AI_TEXT_GEN && n.data.text)
       );
       
       return scriptNodes.map(n => 
@@ -258,6 +289,19 @@ const App: React.FC = () => {
       activeProject.assets.forEach(asset => {
           const images = activeProject.nodes
             .filter(n => n.assetId === asset.id && n.data.status === 'approved' && n.data.imageUrl && n.data.tag === 'refinement')
+            .map(n => n.data.imageUrl!);
+          if (images.length > 0) map[asset.id] = images;
+      });
+      return map;
+  }, [activeProject?.nodes, activeProject?.assets]);
+
+  // --- Approved Images Map (All approved, used as fallback for reference) ---
+  const approvedImagesMap = useMemo(() => {
+      if (!activeProject) return {};
+      const map: Record<string, string[]> = {};
+      activeProject.assets.forEach(asset => {
+          const images = activeProject.nodes
+            .filter(n => n.assetId === asset.id && n.data.status === 'approved' && n.data.imageUrl)
             .map(n => n.data.imageUrl!);
           if (images.length > 0) map[asset.id] = images;
       });
@@ -345,13 +389,13 @@ const App: React.FC = () => {
           const seed = generatedSeeds[selectedSeedIdx];
           title = seed.title;
           summary = seed.logline;
-          visualStyle = seed.visualStyle;
+          visualStyle = seed.visualStyle; // Legacy, map to prompt or description?
           
           initialAssets.push({
               id: `asset-bible-${Date.now()}`,
               department: DepartmentType.STORY,
               title: "Story Bible",
-              description: `Logline: ${summary}\n\nGenre: ${seed.genre}`,
+              description: `Logline: ${summary}\n\nGenre: ${seed.genre}\n\nStyle Notes: ${visualStyle}`,
               visualStyle: visualStyle,
               summary: summary,
               status: 'active'
@@ -421,6 +465,7 @@ const App: React.FC = () => {
           nodes: initialNodes,
           connections: [],
           updatedAt: new Date(),
+          settings: DEFAULT_PROJECT_SETTINGS,
           ...driveData
       };
 
@@ -428,6 +473,11 @@ const App: React.FC = () => {
       setCurrentProjectId(newProj.id);
       setView('project');
       resetProjectModal();
+  };
+
+  const handleUpdateProjectSettings = (settings: ProjectSettings) => {
+      if (!currentProjectId) return;
+      setProjects(prev => prev.map(p => p.id === currentProjectId ? { ...p, settings } : p));
   };
 
   const handleEnhanceDescription = async () => {
@@ -456,11 +506,8 @@ const App: React.FC = () => {
       
       const newId = `asset-${Date.now()}`;
       
-      let defaultVisualStyle = "";
-      if (currentDept === DepartmentType.STORY) {
-          defaultVisualStyle = "Storyboard";
-      }
-
+      let defaultVisualStyle = ""; // Deprecated, will rely on Settings default now
+      
       const newAsset: ProjectAsset = {
           id: newId,
           department: currentDept,
@@ -1160,33 +1207,88 @@ const App: React.FC = () => {
   };
 
   const handleRefineConcept = (assetId: string, sourceImageUrl?: string) => {
-    if (!currentProjectId) return;
-    
-    const asset = activeProject?.assets.find(a => a.id === assetId);
-    if (!asset) return;
+      if (!currentProjectId || !activeProject) return;
+      const asset = activeProject.assets.find(a => a.id === assetId);
+      if (!asset) return;
 
-    const newNode: FlowNode = {
-        id: `refine-${Date.now()}`,
-        type: NodeType.AI_IMAGE_GEN,
-        department: currentDept,
-        assetId: assetId,
-        position: { x: 100, y: 100 },
-        data: {
-            prompt: `@${asset.title}, detailed, high quality`,
-            referenceImageUrl: sourceImageUrl,
-            tag: 'refinement',
-            status: 'draft',
-            aspectRatio: '1:1'
-        }
-    };
-    
-    setProjects(prev => prev.map(p => {
-        if (p.id === currentProjectId) {
-            return { ...p, nodes: [...p.nodes, newNode] };
-        }
-        return p;
-    }));
-  };
+      const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === assetId &&
+          n.data.status !== 'archived'
+      );
+      let maxY = 0;
+      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
+
+      const startY = maxY > 0 ? maxY + 100 : 100;
+      const startX = 100;
+      const nodeWidth = 300;
+      const nodeHeight = 400;
+      const gap = 20;
+      const padding = 20;
+
+      const prompts = [
+          `@${asset.title}, Full body character standing in a NEUTRAL POSE on a white background, soft neutral lighting, hands at sides, no props, whole body visible in frame`,
+          `@${asset.title}, Extreme closeup of head and shoulders facing the camera on a white background, neutral lighting, neutral expression, high detail face`,
+          `@${asset.title}, Full body front view on white background. CHARACTER IS FACING DIRECTLY TOWARD THE CAMERA IN A NEUTRAL POSE, front-on, hands at sides, no props.`,
+          `@${asset.title}, Full body three quarter view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING SCREEN LEFT (45 degrees).`,
+          `@${asset.title}, Full body three quarter view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING SCREEN RIGHT (45 degrees).`,
+          `@${asset.title}, Full body side profile view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING DIRECTLY LEFT (90 degrees).`,
+          `@${asset.title}, Full body side profile view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING DIRECTLY RIGHT (90 degrees).`,
+          `@${asset.title}, Full body back view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING AWAY FROM THE CAMERA.`
+      ];
+
+      const columns = 4;
+      const rows = 2;
+      const groupWidth = (nodeWidth * columns) + (gap * (columns - 1)) + (padding * 2);
+      const groupHeight = (nodeHeight * rows) + (gap * (rows - 1)) + (padding * 2) + 40;
+
+      const groupId = `group-ref-${Date.now()}`;
+      const groupNode: FlowNode = {
+          id: groupId,
+          type: NodeType.GROUP,
+          department: currentDept,
+          assetId: assetId,
+          position: { x: startX, y: startY },
+          width: groupWidth,
+          height: groupHeight,
+          data: { label: `Refined Character Sheet`, collapsed: false }
+      };
+
+      const newNodes: FlowNode[] = [];
+      prompts.forEach((p, i) => {
+          const col = i % columns;
+          const row = Math.floor(i / columns);
+          const childX = startX + padding + (col * (nodeWidth + gap));
+          const childY = startY + 60 + (row * (nodeHeight + gap));
+
+          newNodes.push({
+              id: `ref-gen-${Date.now()}-${i}`,
+              type: NodeType.AI_IMAGE_GEN,
+              department: currentDept,
+              assetId: assetId,
+              parentId: groupId,
+              position: { x: childX, y: childY },
+              width: nodeWidth,
+              height: nodeHeight,
+              data: {
+                  prompt: p,
+                  aspectRatio: "1:1",
+                  model: MODELS.IMAGE_GEN, 
+                  status: 'generating',
+                  tag: 'refinement', 
+                  referenceImageUrl: sourceImageUrl 
+              }
+          });
+      });
+
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
+          }
+          return p;
+      }));
+      setFocusNodeIds([groupId]);
+  }
 
   const handleGenerateOutline = () => {
     if (!currentProjectId || !activeAsset) return;
@@ -1212,73 +1314,140 @@ const App: React.FC = () => {
   };
 
   const handleGalleryTurntable = (node: FlowNode) => {
-    if (!currentProjectId) return;
-    
-    const newNode: FlowNode = {
-        id: `vid-turn-${Date.now()}`,
-        type: NodeType.AI_VIDEO_GEN,
-        department: node.department,
-        assetId: node.assetId,
-        parentId: node.parentId,
-        position: { x: node.position.x + 320, y: node.position.y },
-        data: {
-            prompt: "360 degree turntable, seamless loop",
-            imageUrl: node.data.imageUrl,
-            lastFrameImageUrl: node.data.imageUrl,
-            model: MODELS.VIDEO_HQ,
-            duration: '4',
-            status: 'draft'
-        }
-    };
+      if (!currentProjectId || !activeProject) return;
+      
+      const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === (currentAssetId || undefined)
+      );
+      let maxY = 0;
+      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
+      
+      const pos = { x: 100, y: maxY + 50 };
+      const width = 300;
+      const height = 400;
 
-    setProjects(prev => prev.map(p => {
-        if (p.id === currentProjectId) {
-            return { ...p, nodes: [...p.nodes, newNode] };
-        }
-        return p;
-    }));
-  };
+      const model = MODELS.VIDEO_HQ;
+      const supportsLastFrame = VIDEO_MODEL_CAPABILITIES[model]?.supportsLastFrame || false;
+
+      const newNode: FlowNode = {
+           id: `vid-turntable-${Date.now()}`,
+           type: NodeType.AI_VIDEO_GEN,
+           department: currentDept,
+           assetId: node.assetId,
+           parentId: node.parentId,
+           position: pos,
+           width: width,
+           height: height,
+           data: {
+               prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
+               imageUrl: node.data.imageUrl, // Seed image
+               lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
+               model: model,
+               aspectRatio: '16:9',
+               status: 'draft',
+               duration: '8', // Prefer long for turntable
+               withAudio: false
+           }
+      };
+
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return { ...p, nodes: [...p.nodes, newNode] };
+          }
+          return p;
+      }));
+      setFocusNodeIds([newNode.id]);
+  }
 
   const handleGalleryExpressions = (node: FlowNode) => {
-    if (!currentProjectId) return;
-    
-    const emotions = ['Happy', 'Sad', 'Angry', 'Surprised'];
-    const newNodes: FlowNode[] = [];
-    const groupId = `group-expr-${Date.now()}`;
-    
-    newNodes.push({
-        id: groupId,
-        type: NodeType.GROUP,
-        department: node.department,
-        assetId: node.assetId,
-        position: { x: node.position.x + 320, y: node.position.y },
-        width: 600, height: 600,
-        data: { label: "Expressions", collapsed: false }
-    });
+       if (!currentProjectId || !activeProject) return;
+       
+       const contextNodes = activeProject.nodes.filter(n => 
+          n.department === currentDept && 
+          n.assetId === (currentAssetId || undefined)
+       );
+       let maxY = 0;
+       if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
+       const startY = maxY + 50;
+       
+       const emotions = [
+           { name: 'Happiness', prompt: 'face closeup, expressing pure joy, smiling, eyes crinkling, cinematic lighting' },
+           { name: 'Sadness', prompt: 'face closeup, expression of deep grief, frowning, looking down, subtle tears, moody lighting' },
+           { name: 'Fear', prompt: 'face closeup, expression of terror, wide eyes, screaming, dramatic lighting' },
+           { name: 'Anger', prompt: 'face closeup, expression of rage, clenched teeth, narrowed eyes, intense lighting' },
+           { name: 'Surprise', prompt: 'face closeup, expression of shock, wide open mouth, wide eyes' },
+           { name: 'Disgust', prompt: 'face closeup, expression of revulsion, wrinkled nose, grimace' },
+           { name: 'Contempt', prompt: 'face closeup, expression of scorn, smirk, one raised eyebrow' }
+       ];
+       
+       const columns = 4;
+       const rows = 2;
+       const nodeW = 300;
+       const nodeH = 400;
+       const gap = 20;
+       const padding = 20;
+       const groupWidth = (nodeW * columns) + (gap * (columns - 1)) + (padding * 2);
+       const groupHeight = (nodeH * rows) + (gap * (rows - 1)) + (padding * 2) + 40;
+       
+       const groupId = `group-expr-${Date.now()}`;
+       const groupNode: FlowNode = {
+            id: groupId,
+            type: NodeType.GROUP,
+            department: currentDept,
+            assetId: node.assetId,
+            position: { x: 100, y: startY },
+            width: groupWidth,
+            height: groupHeight,
+            data: { label: `Expressions Batch`, collapsed: false }
+       };
+       
+       const targetModel = MODELS.VIDEO_FAST;
+       const newNodes: FlowNode[] = [];
+       emotions.forEach((emo, idx) => {
+           const col = idx % columns;
+           const row = Math.floor(idx / columns);
+           const childX = 100 + padding + (col * (nodeW + gap));
+           const childY = startY + 60 + (row * (nodeH + gap));
 
-    emotions.forEach((emo, i) => {
-         newNodes.push({
-             id: `expr-${Date.now()}-${i}`,
-             type: NodeType.AI_IMAGE_GEN,
-             department: node.department,
-             assetId: node.assetId,
-             parentId: groupId,
-             position: { x: node.position.x + 320 + (i%2)*310, y: node.position.y + 60 + Math.floor(i/2)*310 },
-             data: {
-                 prompt: `@${activeAsset?.title || 'Character'}, ${emo} expression`,
-                 referenceImageUrl: node.data.imageUrl,
-                 status: 'draft'
-             }
-         });
-    });
+           newNodes.push({
+               id: `vid-expr-${Date.now()}-${idx}`,
+               type: NodeType.AI_VIDEO_GEN,
+               department: currentDept,
+               assetId: node.assetId,
+               parentId: groupId, // Link to group
+               position: { x: childX, y: childY },
+               width: nodeW,
+               height: nodeH,
+               data: {
+                   prompt: `@${activeAsset?.title || 'Character'}, ${emo.prompt}, neutral background, high quality`,
+                   imageUrl: node.data.imageUrl,
+                   model: targetModel,
+                   aspectRatio: '16:9',
+                   status: 'draft',
+                   duration: '4', // Shortest
+                   withAudio: false
+               }
+           });
+       });
+       
+       setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
+          }
+          return p;
+       }));
+       setFocusNodeIds([groupId]);
+  }
 
-    setProjects(prev => prev.map(p => {
-        if (p.id === currentProjectId) {
-            return { ...p, nodes: [...p.nodes, ...newNodes] };
-        }
-        return p;
-    }));
-  };
+  // --- Remove Ref Handler ---
+  const handleRemoveRef = (imageUrl: string) => {
+      if (!currentProjectId || !activeProject) return;
+      const node = activeProject.nodes.find(n => n.data.imageUrl === imageUrl);
+      if (node) {
+          handleUpdateNode(node.id, { tag: undefined });
+      }
+  }
 
   if (view === 'dashboard') {
     return (
@@ -1428,6 +1597,7 @@ const App: React.FC = () => {
             currentDept={currentDept} 
             onChangeDept={(d) => { setCurrentDept(d); setCurrentAssetId(null); setFocusNodeIds([]); }}
             onBack={() => setView('dashboard')}
+            onOpenSettings={() => setIsSettingsOpen(true)}
         />
         
         {/* Department Panel */}
@@ -1530,6 +1700,8 @@ const App: React.FC = () => {
                             projectAssets={activeProject?.assets}
                             onRefineConcept={handleRefineConcept}
                             refinedImagesMap={refinedImagesMap}
+                            approvedImagesMap={approvedImagesMap} // New Prop
+                            projectSettings={activeProject?.settings}
                          />
                      ) : (
                         <GalleryView 
@@ -1557,6 +1729,14 @@ const App: React.FC = () => {
         )}
 
         {/* Floating Modals */}
+        {isSettingsOpen && activeProject && (
+            <SettingsModal 
+                settings={activeProject.settings || DEFAULT_PROJECT_SETTINGS}
+                onSave={handleUpdateProjectSettings}
+                onClose={() => setIsSettingsOpen(false)}
+            />
+        )}
+
         {isCreateAssetOpen && (
             <Modal title={`Create New ${activeDeptConfig?.assetLabel || 'Asset'}`} onClose={() => setIsCreateAssetOpen(false)}>
                 <div className="space-y-4">
@@ -1684,6 +1864,8 @@ const App: React.FC = () => {
                 onGenerateRefSheet={handleRefineConcept}
                 assetThumbnails={assetThumbnails}
                 refinedImages={refinedImagesMap[activeAsset.id] || []}
+                projectSettings={activeProject?.settings} // Pass settings
+                onRemoveRef={handleRemoveRef} // Pass new handler
             />
         )}
         

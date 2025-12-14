@@ -48,6 +48,7 @@ export interface NodeData {
   duration?: string; // Video duration in seconds
   withAudio?: boolean; // Video audio toggle
   history?: NodeHistoryItem[]; // Store previous generations
+  styleId?: string; // Explicit style selection for this node
 }
 
 export interface FlowNode {
@@ -91,13 +92,37 @@ export interface ProjectAsset {
   department: DepartmentType;
   title: string;
   description: string;
-  visualStyle?: string;
+  visualStyle?: string; // Deprecated in favor of styleId, kept for legacy
+  styleId?: string; // ID of the VisualStyle
+  hiddenPrompt?: string; // Asset-specific hidden prompt
+  overrideHiddenPrompt?: boolean; // Toggle for using asset-specific vs project default
   summary?: string;
   thumbnailUrl?: string;
   parentId?: string; // For hierarchical assets (e.g. Shots inside Sequences)
   driveId?: string; // Folder ID or File ID in Drive
   status?: 'active' | 'archived';
   timelineData?: TimelineData; // For Editorial Sequences
+}
+
+// --- New Settings Types ---
+
+export interface VisualStyle {
+    id: string;
+    label: string; // e.g., "Cyberpunk"
+    value: string; // e.g., "cyberpunk" (key for @style:key)
+    prompt: string; // The expansion text
+    isSystem?: boolean;
+}
+
+export interface AssetTypeConfig {
+    hiddenPrompt: string;
+    defaultStyleId?: string; // Optional override for this department
+}
+
+export interface ProjectSettings {
+    defaultStyleId?: string;
+    styles: VisualStyle[];
+    assetConfigs: Partial<Record<DepartmentType, AssetTypeConfig>>;
 }
 
 export interface Project {
@@ -111,6 +136,7 @@ export interface Project {
   updatedAt: Date;
   driveFolderId?: string; // Root folder for this project in Drive
   driveDbId?: string; // Sheet ID
+  settings: ProjectSettings; // New settings container
 }
 
 export interface StorySeed {
@@ -146,6 +172,7 @@ export interface RenderTask {
         autoApprove?: boolean;
         autoAssemble?: boolean;
         sequenceId?: string; // For auto-assemble targeting
+        styleId?: string;
     };
     onComplete?: (result: string, task: RenderTask) => void;
 }

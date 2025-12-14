@@ -1,9 +1,8 @@
-
 import React, { useState, useRef, useEffect, memo, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
-import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem, DepartmentType } from '../types';
-import { Move, Play, X, Sparkles, Edit, Image as ImageIcon, Film, CheckCircle, Eye, Archive, AlertCircle, Folder, FolderOpen, ChevronDown, ChevronRight, RotateCcw, User, Maximize2, Minimize2, Bold, Italic, Heading1, Heading2, List, Quote, Code, EyeOff, Bot, Upload, Download, HardDrive, FileText, Cloud, Music, Volume2, VolumeX, ChevronLeft, History } from 'lucide-react';
+import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem, DepartmentType, ProjectSettings } from '../types';
+import { Move, Play, X, Sparkles, Edit, Image as ImageIcon, Film, CheckCircle, Eye, Archive, AlertCircle, Folder, FolderOpen, ChevronDown, ChevronRight, RotateCcw, User, Maximize2, Minimize2, Bold, Italic, Heading1, Heading2, List, Quote, Code, EyeOff, Bot, Upload, Download, HardDrive, FileText, Cloud, Music, Volume2, VolumeX, ChevronLeft, History, Palette, Search } from 'lucide-react';
 import { Button, Input, TextArea, Select } from './UI';
 import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS, VIDEO_MODELS_OPTIONS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import * as GeminiService from '../services/geminiService';
@@ -24,7 +23,163 @@ interface NodeItemProps {
   projectAssets?: ProjectAsset[];
   assetThumbnails?: Record<string, string>;
   refinedImagesMap?: Record<string, string[]>;
+  approvedImagesMap?: Record<string, string[]>;
+  projectSettings?: ProjectSettings;
 }
+
+interface Suggestion {
+    id: string;
+    label: string;
+    subLabel: string;
+    insertText: string;
+    type: 'asset' | 'style';
+    iconClass: string;
+}
+
+// --- Style Selector Component (Portal-based) ---
+const StyleSelector: React.FC<{
+    selectedId?: string;
+    onChange: (id: string) => void;
+    projectSettings?: ProjectSettings;
+}> = ({ selectedId, onChange, projectSettings }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [filter, setFilter] = useState('');
+    const [highlightIndex, setHighlightIndex] = useState(0);
+    const [coords, setCoords] = useState({ top: 0, left: 0, minWidth: 0 });
+    const buttonRef = useRef<HTMLButtonElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const listRef = useRef<HTMLDivElement>(null);
+
+    // Prepare Options
+    const options = useMemo(() => {
+        const all = [
+            { id: "", label: "Default Style", isSystem: true },
+            { id: "none", label: "No Style", isSystem: true },
+            ...(projectSettings?.styles || [])
+        ];
+        return all.filter(opt => opt.label.toLowerCase().includes(filter.toLowerCase()));
+    }, [projectSettings?.styles, filter]);
+
+    const getLabel = (id?: string) => {
+        if (!id) return "Default Style";
+        if (id === 'none') return "No Style";
+        return projectSettings?.styles.find(s => s.id === id)?.label || "Unknown Style";
+    };
+
+    const handleOpen = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (buttonRef.current) {
+            const rect = buttonRef.current.getBoundingClientRect();
+            setCoords({
+                top: rect.bottom + window.scrollY + 4,
+                left: rect.left + window.scrollX,
+                minWidth: Math.max(rect.width, 200)
+            });
+        }
+        setFilter('');
+        setHighlightIndex(0);
+        setIsOpen(!isOpen);
+    };
+
+    const handleSelect = (id: string) => {
+        onChange(id);
+        setIsOpen(false);
+    };
+
+    // Auto-focus input on open
+    useEffect(() => {
+        if (isOpen && inputRef.current) {
+            inputRef.current.focus();
+        }
+    }, [isOpen]);
+
+    // Close on outside click
+    useEffect(() => {
+        if (!isOpen) return;
+        const handleClick = (e: MouseEvent) => {
+            if (buttonRef.current && buttonRef.current.contains(e.target as Node)) return;
+            if (listRef.current && listRef.current.contains(e.target as Node)) return;
+            setIsOpen(false);
+        };
+        window.addEventListener('mousedown', handleClick);
+        return () => window.removeEventListener('mousedown', handleClick);
+    }, [isOpen]);
+
+    // Keyboard Nav
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (!isOpen) return;
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setHighlightIndex(prev => (prev + 1) % options.length);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setHighlightIndex(prev => (prev - 1 + options.length) % options.length);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (options[highlightIndex]) {
+                handleSelect(options[highlightIndex].id);
+            }
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setIsOpen(false);
+        }
+    };
+
+    return (
+        <>
+            <button 
+                ref={buttonRef}
+                onClick={handleOpen}
+                className="text-[10px] font-bold text-zinc-400 hover:text-white flex items-center gap-1 transition-colors px-1 py-0.5 -ml-1 rounded hover:bg-zinc-800"
+                title="Select Visual Style"
+            >
+                <Palette size={10} />
+                {getLabel(selectedId)}
+                <ChevronDown size={10} className={`transform transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isOpen && createPortal(
+                <div 
+                    ref={listRef}
+                    className="fixed z-[9999] bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-75"
+                    style={{ top: coords.top, left: coords.left, minWidth: coords.minWidth, width: '220px' }}
+                >
+                    <div className="p-2 border-b border-zinc-800 flex items-center gap-2">
+                        <Search size={12} className="text-zinc-500" />
+                        <input
+                            ref={inputRef}
+                            value={filter}
+                            onChange={e => { setFilter(e.target.value); setHighlightIndex(0); }}
+                            onKeyDown={handleKeyDown}
+                            placeholder="Filter styles..."
+                            className="bg-transparent text-xs text-white placeholder-zinc-600 focus:outline-none w-full"
+                        />
+                    </div>
+                    <div className="max-h-60 overflow-y-auto py-1">
+                        {options.map((opt, idx) => (
+                            <button
+                                key={opt.id}
+                                onClick={() => handleSelect(opt.id)}
+                                onMouseEnter={() => setHighlightIndex(idx)}
+                                className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 ${
+                                    idx === highlightIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'
+                                } ${selectedId === opt.id ? 'font-bold' : ''}`}
+                            >
+                                <span className={`w-1.5 h-1.5 rounded-full ${selectedId === opt.id ? 'bg-white' : 'bg-transparent'}`} />
+                                {opt.label}
+                            </button>
+                        ))}
+                        {options.length === 0 && (
+                            <div className="px-3 py-2 text-xs text-zinc-500 italic text-center">No styles found</div>
+                        )}
+                    </div>
+                </div>,
+                document.body
+            )}
+        </>
+    );
+};
 
 // --- Highlighted Input Component ---
 const HighlightedInput: React.FC<{
@@ -34,34 +189,44 @@ const HighlightedInput: React.FC<{
     className?: string;
     projectAssets?: ProjectAsset[];
     activeAsset?: ProjectAsset;
-}> = ({ value, onChange, placeholder, className, projectAssets, activeAsset }) => {
+    projectSettings?: ProjectSettings;
+}> = ({ value, onChange, placeholder, className, projectAssets, activeAsset, projectSettings }) => {
     const [showSuggestions, setShowSuggestions] = useState(false);
-    const [filteredAssets, setFilteredAssets] = useState<ProjectAsset[]>([]);
+    const [filteredSuggestions, setFilteredSuggestions] = useState<Suggestion[]>([]);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [cursorPos, setCursorPos] = useState(0);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     // Create sorted regex patterns for highlighting
     const highlightConfig = useMemo(() => {
-        if (!projectAssets) return { pattern: null, map: {} };
-        
         const map: Record<string, string> = {};
         const keys: string[] = [];
 
         // Add standard assets
-        projectAssets.forEach(a => {
-            const key = `@${a.title}`;
-            keys.push(key);
-            map[key.toLowerCase()] = a.department;
-            
-            // Add Dot Syntax Children
-            const children = projectAssets.filter(c => c.parentId === a.id);
-            children.forEach(c => {
-                const childKey = `@${a.title}.${c.title}`;
-                keys.push(childKey);
-                map[childKey.toLowerCase()] = c.department;
+        if (projectAssets) {
+            projectAssets.forEach(a => {
+                const key = `@${a.title}`;
+                keys.push(key);
+                map[key.toLowerCase()] = a.department;
+                
+                // Add Dot Syntax Children
+                const children = projectAssets.filter(c => c.parentId === a.id);
+                children.forEach(c => {
+                    const childKey = `@${a.title}.${c.title}`;
+                    keys.push(childKey);
+                    map[childKey.toLowerCase()] = c.department;
+                });
             });
-        });
+        }
+
+        // Add Styles
+        if (projectSettings?.styles) {
+            projectSettings.styles.forEach(s => {
+                const key = `@style:${s.value}`;
+                keys.push(key);
+                map[key.toLowerCase()] = 'Style';
+            });
+        }
 
         // Add context keywords
         if (activeAsset) {
@@ -71,7 +236,7 @@ const HighlightedInput: React.FC<{
             map['@parent'] = 'Context';
         }
 
-        // Sort by length desc to match longest first
+        // Sort by length desc to match longest first (e.g. @style:key before @style)
         keys.sort((a, b) => b.length - a.length);
         
         if (keys.length === 0) return { pattern: null, map };
@@ -81,7 +246,7 @@ const HighlightedInput: React.FC<{
         const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
         
         return { pattern, map };
-    }, [projectAssets, activeAsset]);
+    }, [projectAssets, activeAsset, projectSettings]);
 
     const getDeptColor = (dept: string) => {
         switch (dept) {
@@ -91,6 +256,7 @@ const HighlightedInput: React.FC<{
             case DepartmentType.SET_DESIGN: return "bg-green-500/20 text-green-200";
             case DepartmentType.PRODUCTION: return "bg-red-500/20 text-red-200";
             case 'Context': return "bg-zinc-600/30 text-zinc-300";
+            case 'Style': return "bg-pink-500/20 text-pink-200";
             default: return "bg-orange-500/20 text-orange-200";
         }
     };
@@ -117,7 +283,8 @@ const HighlightedInput: React.FC<{
     // --- Auto Complete Logic ---
     const getActiveToken = (text: string, cursor: number) => {
         const textBeforeCursor = text.slice(0, cursor);
-        const match = textBeforeCursor.match(/@([\w\.]*)$/);
+        // Include ':' in the token match for styles (e.g. @style:cinematic)
+        const match = textBeforeCursor.match(/@([\w\.:]*)$/);
         return match ? match[1] : null;
     };
 
@@ -128,14 +295,47 @@ const HighlightedInput: React.FC<{
         setCursorPos(newCursor);
 
         const token = getActiveToken(newValue, newCursor);
-        if (token !== null && projectAssets) {
+        if (token !== null) {
             const search = token.toLowerCase();
-            const matches = projectAssets
-                .filter(a => a.title.toLowerCase().startsWith(search))
-                .slice(0, 5); // Limit to 5 suggestions
+            const suggestions: Suggestion[] = [];
+
+            // 1. Filter Assets
+            if (projectAssets) {
+                projectAssets.forEach(a => {
+                    if (a.title.toLowerCase().startsWith(search)) {
+                        suggestions.push({
+                            id: a.id,
+                            label: a.title,
+                            subLabel: a.department,
+                            insertText: a.title,
+                            type: 'asset',
+                            iconClass: a.department === DepartmentType.CASTING_WARDROBE ? 'bg-purple-500' : 'bg-zinc-500'
+                        });
+                    }
+                });
+            }
+
+            // 2. Filter Styles
+            if (projectSettings?.styles) {
+                projectSettings.styles.forEach(s => {
+                    const key = `style:${s.value}`;
+                    if (key.toLowerCase().startsWith(search)) {
+                        suggestions.push({
+                            id: s.id,
+                            label: key,
+                            subLabel: s.label,
+                            insertText: key,
+                            type: 'style',
+                            iconClass: 'bg-pink-500'
+                        });
+                    }
+                });
+            }
             
-            if (matches.length > 0) {
-                setFilteredAssets(matches);
+            if (suggestions.length > 0) {
+                // Sort? Maybe prioritize exact starts
+                suggestions.sort((a, b) => a.label.localeCompare(b.label));
+                setFilteredSuggestions(suggestions.slice(0, 15)); // Increased limit
                 setShowSuggestions(true);
                 setSelectedIndex(0);
                 return;
@@ -144,12 +344,12 @@ const HighlightedInput: React.FC<{
         setShowSuggestions(false);
     };
 
-    const insertSuggestion = (asset: ProjectAsset) => {
+    const insertSuggestion = (suggestion: Suggestion) => {
         const token = getActiveToken(value, cursorPos);
         if (token !== null) {
             const before = value.slice(0, cursorPos - token.length - 1); // -1 for @
             const after = value.slice(cursorPos);
-            const inserted = `@${asset.title} `;
+            const inserted = `@${suggestion.insertText} `;
             onChange(before + inserted + after);
             setShowSuggestions(false);
             
@@ -168,13 +368,13 @@ const HighlightedInput: React.FC<{
         if (showSuggestions) {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                setSelectedIndex(prev => (prev + 1) % filteredAssets.length);
+                setSelectedIndex(prev => (prev + 1) % filteredSuggestions.length);
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                setSelectedIndex(prev => (prev - 1 + filteredAssets.length) % filteredAssets.length);
+                setSelectedIndex(prev => (prev - 1 + filteredSuggestions.length) % filteredSuggestions.length);
             } else if (e.key === 'Tab' || e.key === 'Enter') {
                 e.preventDefault();
-                insertSuggestion(filteredAssets[selectedIndex]);
+                insertSuggestion(filteredSuggestions[selectedIndex]);
             } else if (e.key === 'Escape') {
                 setShowSuggestions(false);
             }
@@ -220,21 +420,25 @@ const HighlightedInput: React.FC<{
              />
 
              {/* Suggestions Menu */}
-             {showSuggestions && filteredAssets.length > 0 && (
-                 <div className="absolute left-0 top-full mt-1 w-56 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-75">
-                     <div className="px-2 py-1 bg-zinc-950 text-[9px] text-zinc-500 font-bold border-b border-zinc-800">
+             {showSuggestions && filteredSuggestions.length > 0 && (
+                 <div className="absolute left-0 top-full mt-1 w-64 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-75 max-h-96 overflow-y-auto">
+                     <div className="px-2 py-1 bg-zinc-950 text-[9px] text-zinc-500 font-bold border-b border-zinc-800 sticky top-0 z-10">
                          SUGGESTIONS
                      </div>
-                     {filteredAssets.map((asset, idx) => (
+                     {filteredSuggestions.map((item, idx) => (
                          <button
-                            key={asset.id}
-                            onMouseDown={(e) => { e.preventDefault(); insertSuggestion(asset); }}
-                            className={`px-3 py-2 text-left text-xs flex items-center gap-2 ${idx === selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`}
+                            key={item.id}
+                            onMouseDown={(e) => { e.preventDefault(); insertSuggestion(item); }}
+                            className={`px-3 py-2 text-left text-xs flex items-center gap-2 w-full ${idx === selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`}
                          >
-                            <span className={`w-2 h-2 rounded-full ${asset.department === DepartmentType.CASTING_WARDROBE ? 'bg-purple-500' : 'bg-zinc-500'}`} />
-                            <div className="flex flex-col">
-                                <span className="font-bold">{asset.title}</span>
-                                <span className="text-[9px] opacity-70">{asset.department}</span>
+                            {item.type === 'style' ? (
+                                <Palette size={12} className={item.iconClass.replace('bg-', 'text-')} />
+                            ) : (
+                                <span className={`w-2 h-2 rounded-full ${item.iconClass}`} />
+                            )}
+                            <div className="flex flex-col min-w-0">
+                                <span className="font-bold truncate">{item.label}</span>
+                                <span className="text-[9px] opacity-70 truncate">{item.subLabel}</span>
                             </div>
                          </button>
                      ))}
@@ -244,69 +448,47 @@ const HighlightedInput: React.FC<{
     );
 };
 
-const MarkdownToolbar: React.FC<{ 
-    onInsert: (syntax: string, wrap?: boolean) => void,
-    onImportClick: () => void,
-    onSaveClick: () => void,
-    onDriveImport: () => void,
-    onDriveSave: () => void
-}> = ({ onInsert, onImportClick, onSaveClick, onDriveImport, onDriveSave }) => {
-    return (
-        <div className="flex items-center justify-between p-2 bg-zinc-800 border-b border-zinc-700">
-            <div className="flex items-center gap-1">
-                <button onClick={() => onInsert('**', true)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="Bold">
-                    <Bold size={14} />
-                </button>
-                <button onClick={() => onInsert('*', true)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="Italic">
-                    <Italic size={14} />
-                </button>
-                <div className="w-[1px] h-4 bg-zinc-700 mx-1" />
-                <button onClick={() => onInsert('# ', false)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="Heading 1">
-                    <Heading1 size={14} />
-                </button>
-                <button onClick={() => onInsert('## ', false)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="Heading 2">
-                    <Heading2 size={14} />
-                </button>
-                <div className="w-[1px] h-4 bg-zinc-700 mx-1" />
-                <button onClick={() => onInsert('- ', false)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="List">
-                    <List size={14} />
-                </button>
-                <button onClick={() => onInsert('> ', false)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="Quote">
-                    <Quote size={14} />
-                </button>
-                <button onClick={() => onInsert('`', true)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-zinc-200" title="Code">
-                    <Code size={14} />
-                </button>
-            </div>
-            
-            <div className="flex items-center gap-2 pl-2 border-l border-zinc-700">
-                <div className="flex items-center bg-zinc-900 rounded p-0.5 border border-zinc-700">
-                    <button onClick={onImportClick} className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors" title="Upload local file">
-                        <Upload size={12} /> Upload
-                    </button>
-                    <div className="w-[1px] h-3 bg-zinc-700 mx-0.5" />
-                    <button onClick={onDriveImport} className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors" title="Import from Drive">
-                        <Cloud size={12} /> Drive
-                    </button>
-                </div>
-
-                <div className="flex items-center bg-zinc-900 rounded p-0.5 border border-zinc-700">
-                    <button onClick={onSaveClick} className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors" title="Save to Disk">
-                        <Download size={12} /> Save
-                    </button>
-                    <div className="w-[1px] h-3 bg-zinc-700 mx-0.5" />
-                    <button onClick={onDriveSave} className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors" title="Save to Drive">
-                        <Cloud size={12} /> Drive
-                    </button>
-                </div>
-            </div>
+const MarkdownToolbar: React.FC<{
+    onInsert: (syntax: string, wrap?: boolean) => void;
+    onImportClick: () => void;
+    onSaveClick: () => void;
+    onDriveImport: () => void;
+    onDriveSave: () => void;
+}> = ({ onInsert, onImportClick, onSaveClick, onDriveImport, onDriveSave }) => (
+    <div className="flex items-center gap-1 p-2 border-b border-zinc-800 bg-zinc-900/50">
+        <div className="flex items-center gap-0.5 border-r border-zinc-700 pr-2 mr-2">
+            <button onClick={() => onInsert('**', true)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="Bold"><Bold size={14}/></button>
+            <button onClick={() => onInsert('*', true)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="Italic"><Italic size={14}/></button>
+            <button onClick={() => onInsert('# ')} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="Heading 1"><Heading1 size={14}/></button>
+            <button onClick={() => onInsert('## ')} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="Heading 2"><Heading2 size={14}/></button>
         </div>
-    );
-};
+        <div className="flex items-center gap-0.5 border-r border-zinc-700 pr-2 mr-2">
+            <button onClick={() => onInsert('- ')} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="List"><List size={14}/></button>
+            <button onClick={() => onInsert('> ')} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="Quote"><Quote size={14}/></button>
+            <button onClick={() => onInsert('`', true)} className="p-1.5 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white" title="Code"><Code size={14}/></button>
+        </div>
+        <div className="flex-1" />
+        <div className="flex items-center gap-0.5">
+             <button onClick={onImportClick} className="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white text-[10px]" title="Import Local File">
+                 <Upload size={12}/> Import
+             </button>
+             <button onClick={onSaveClick} className="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white text-[10px]" title="Save Local File">
+                 <Download size={12}/> Save
+             </button>
+             <div className="w-[1px] h-4 bg-zinc-700 mx-1" />
+             <button onClick={onDriveImport} className="flex items-center gap-1.5 px-2 py-1 hover:bg-green-900/30 text-green-400 hover:text-green-300 rounded text-[10px]" title="Load from Drive">
+                 <Cloud size={12}/> Drive Load
+             </button>
+             <button onClick={onDriveSave} className="flex items-center gap-1.5 px-2 py-1 hover:bg-green-900/30 text-green-400 hover:text-green-300 rounded text-[10px]" title="Save to Drive">
+                 <HardDrive size={12}/> Drive Save
+             </button>
+        </div>
+    </div>
+);
 
 const NodeItemComponent: React.FC<NodeItemProps> = ({ 
     node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, 
-    activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {}, refinedImagesMap = {}
+    activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {}, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progressMsg, setProgressMsg] = useState("");
@@ -480,7 +662,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     setProgressMsg("Writing...");
     setError(null);
     try {
-      const { resolved } = resolvePrompt(node.data.prompt || "", projectAssets, activeAsset);
+      const { resolved } = resolvePrompt(node.data.prompt || "", projectAssets, activeAsset, projectSettings);
       const result = await GeminiService.generateCreativeText(resolved);
       const newHistory = addToHistory('text', result);
       onUpdate(node.id, { ...node.data, text: result, status: 'review', history: newHistory });
@@ -498,7 +680,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     setError(null);
     try {
       const rawPrompt = node.data.prompt || (activeAsset ? `@${activeAsset.title}` : "A cinematic shot");
-      const { resolved, matchedAssets } = resolvePrompt(rawPrompt, projectAssets, activeAsset);
+      const { resolved, matchedAssets } = resolvePrompt(
+          rawPrompt, 
+          projectAssets, 
+          activeAsset, 
+          projectSettings,
+          node.data.styleId // Pass explicit style override
+      );
       const model = node.data.model || MODELS.IMAGE_GEN;
 
       let refImages: string[] = [];
@@ -506,7 +694,15 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           refImages = [node.data.referenceImageUrl];
       } else {
           // Use shared util with matchedAssets
-          refImages = resolveReferenceImages(rawPrompt, projectAssets, activeAsset, refinedImagesMap, assetThumbnails, matchedAssets);
+          refImages = resolveReferenceImages(
+              rawPrompt, 
+              projectAssets, 
+              activeAsset, 
+              refinedImagesMap, 
+              approvedImagesMap, 
+              assetThumbnails, 
+              matchedAssets
+          );
       }
 
       const result = await GeminiService.generateImage(
@@ -531,7 +727,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       setProgressMsg("Editing...");
       setError(null);
       try {
-          const { resolved } = resolvePrompt(node.data.prompt || "Enhance this", projectAssets, activeAsset);
+          const { resolved } = resolvePrompt(node.data.prompt || "Enhance this", projectAssets, activeAsset, projectSettings);
           const result = await GeminiService.editImage(node.data.imageUrl, resolved);
           const newHistory = addToHistory('image', result);
           onUpdate(node.id, { ...node.data, imageUrl: result, status: 'review', history: newHistory }); 
@@ -549,13 +745,27 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       setError(null);
       try {
           const rawPrompt = node.data.prompt || "A video scene";
-          const { resolved, matchedAssets } = resolvePrompt(rawPrompt, projectAssets, activeAsset);
+          const { resolved, matchedAssets } = resolvePrompt(
+              rawPrompt, 
+              projectAssets, 
+              activeAsset, 
+              projectSettings,
+              node.data.styleId // Pass explicit style override
+          );
           const model = node.data.model || MODELS.VIDEO_FAST;
           
           let refImage = node.data.imageUrl;
           if (!refImage) {
                // Use shared util with matchedAssets
-               const images = resolveReferenceImages(rawPrompt, projectAssets, activeAsset, refinedImagesMap, assetThumbnails, matchedAssets);
+               const images = resolveReferenceImages(
+                   rawPrompt, 
+                   projectAssets, 
+                   activeAsset, 
+                   refinedImagesMap, 
+                   approvedImagesMap,
+                   assetThumbnails, 
+                   matchedAssets
+               );
                if (images.length > 0) refImage = images[0];
           }
 
@@ -571,7 +781,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           );
           const newHistory = addToHistory('video', result);
           onUpdate(node.id, { ...node.data, videoUrl: result, status: 'review', history: newHistory });
-      } catch(e) {
+      } catch (e) {
           setError("Video generation failed.");
       } finally {
           setIsProcessing(false);
@@ -589,9 +799,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
        }
     }
   }, [node.data.status]);
-
-  // ... (rest of render logic remains unchanged)
-  // Re-pasting the render logic for context:
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'imageUrl' | 'lastFrameImageUrl' = 'imageUrl') => {
       const file = e.target.files?.[0];
@@ -783,10 +990,21 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                             value={node.data.prompt || ''}
                             onChange={(val) => onUpdate(node.id, { ...node.data, prompt: val })}
                             placeholder={activeAsset ? `@${activeAsset.title} in a scene...` : "A futuristic city..."}
-                            className={`${expanded ? 'h-20' : 'h-14'} mb-2 w-full bg-zinc-900 rounded border border-zinc-700`}
+                            className={`${expanded ? 'h-20' : 'h-14'} mb-1 w-full bg-zinc-900 rounded border border-zinc-700`}
                             projectAssets={projectAssets}
                             activeAsset={activeAsset}
+                            projectSettings={projectSettings}
                         />
+                        
+                        {/* Style Selector Row */}
+                        <div className="relative z-20 mb-1">
+                            <StyleSelector 
+                                selectedId={node.data.styleId} 
+                                onChange={(id) => onUpdate(node.id, { ...node.data, styleId: id })}
+                                projectSettings={projectSettings}
+                            />
+                        </div>
+
                         <div className="flex gap-2">
                              <Select 
                                 value={node.data.model || MODELS.IMAGE_GEN}
@@ -910,11 +1128,21 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                             value={node.data.prompt || ''}
                             onChange={(val) => onUpdate(node.id, { ...node.data, prompt: val })}
                             placeholder={activeAsset ? `@${activeAsset.title} running...` : "A cat flying in space..."}
-                            className={`${expanded ? 'h-20' : 'h-14'} mb-2 w-full bg-zinc-900 rounded border border-zinc-700`}
+                            className={`${expanded ? 'h-20' : 'h-14'} mb-1 w-full bg-zinc-900 rounded border border-zinc-700`}
                             projectAssets={projectAssets}
                             activeAsset={activeAsset}
+                            projectSettings={projectSettings}
                     />
                     
+                    {/* Style Selector Row */}
+                    <div className="relative z-20 mb-1">
+                        <StyleSelector 
+                            selectedId={node.data.styleId} 
+                            onChange={(id) => onUpdate(node.id, { ...node.data, styleId: id })}
+                            projectSettings={projectSettings}
+                        />
+                    </div>
+
                      <div className="flex flex-col gap-2">
                          <div className="flex gap-1">
                              <Select 

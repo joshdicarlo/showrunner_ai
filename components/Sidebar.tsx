@@ -9,9 +9,10 @@ interface SidebarProps {
   currentDept: DepartmentType;
   onChangeDept: (dept: DepartmentType) => void;
   onBack: () => void;
+  onOpenSettings: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentDept, onChangeDept, onBack }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentDept, onChangeDept, onBack, onOpenSettings }) => {
   return (
     <div className="w-16 h-full bg-surface border-r border-border flex flex-col items-center py-4 gap-4 z-20">
         <button 
@@ -53,8 +54,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentDept, onChangeDept, onB
         <div className="flex-1" />
         
         <button 
+            onClick={onOpenSettings}
             className="p-3 rounded-xl text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-all"
-            title="Settings"
+            title="Project Settings"
         >
             <Settings size={20} />
         </button>
