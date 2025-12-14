@@ -1,5 +1,7 @@
+
 import React from 'react';
-import { LucideIcon } from 'lucide-react';
+import { LucideIcon, Loader2, CheckCircle, AlertTriangle } from 'lucide-react';
+import { RenderTask } from '../types';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
@@ -61,12 +63,12 @@ export const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = (
 
 export const Modal: React.FC<{ title: string; children: React.ReactNode; onClose: () => void; maxWidth?: string }> = ({ title, children, onClose, maxWidth = 'max-w-lg' }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-    <div className={`bg-zinc-900 border border-zinc-800 rounded-lg w-full shadow-2xl ${maxWidth}`}>
-      <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+    <div className={`bg-zinc-900 border border-zinc-800 rounded-lg w-full shadow-2xl ${maxWidth} flex flex-col max-h-[90vh]`}>
+      <div className="flex items-center justify-between p-4 border-b border-zinc-800 shrink-0">
         <h3 className="text-lg font-semibold text-zinc-100">{title}</h3>
         <button onClick={onClose} className="text-zinc-500 hover:text-white">✕</button>
       </div>
-      <div className="p-4">
+      <div className="p-4 flex-1 overflow-y-auto">
         {children}
       </div>
     </div>
@@ -92,3 +94,36 @@ export const ToggleGroup: React.FC<{ options: { value: string, icon?: LucideIcon
         ))}
     </div>
 );
+
+// --- Queue Indicator ---
+export const QueueIndicator: React.FC<{ queue: RenderTask[] }> = ({ queue }) => {
+    const processing = queue.filter(t => t.status === 'processing').length;
+    const pending = queue.filter(t => t.status === 'pending').length;
+    const completed = queue.filter(t => t.status === 'completed').length;
+    const failed = queue.filter(t => t.status === 'failed').length;
+
+    if (queue.length === 0) return null;
+
+    return (
+        <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2 pointer-events-none">
+            {processing > 0 && (
+                <div className="bg-zinc-900/90 border border-blue-500/30 text-blue-200 px-4 py-2 rounded-lg shadow-lg flex items-center gap-3 backdrop-blur-md">
+                    <Loader2 size={16} className="animate-spin text-blue-500"/>
+                    <div className="text-xs">
+                        <span className="font-bold">Processing</span>
+                        <div className="opacity-70">{processing} active, {pending} pending</div>
+                    </div>
+                </div>
+            )}
+            {(completed > 0 || failed > 0) && (
+                <div className="bg-zinc-900/90 border border-zinc-800 text-zinc-300 px-4 py-2 rounded-lg shadow-lg flex items-center gap-3 backdrop-blur-md transition-opacity duration-1000 delay-3000">
+                    {failed > 0 ? <AlertTriangle size={16} className="text-red-500"/> : <CheckCircle size={16} className="text-green-500"/>}
+                    <div className="text-xs">
+                        <span className="font-bold">Batch Status</span>
+                        <div className="opacity-70">{completed} done, {failed} failed</div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};

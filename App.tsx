@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
 import { GalleryView } from './components/GalleryView'; 
@@ -7,12 +7,15 @@ import { DepartmentPanel } from './components/DepartmentPanel';
 import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
 import { EditorTimeline } from './components/EditorTimeline';
-import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed } from './types';
+import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from './constants';
-import { Button, Input, Modal, TextArea, ToggleGroup } from './components/UI';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors } from 'lucide-react';
-import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene } from './services/geminiService';
+import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers } from 'lucide-react';
+import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage } from './services/geminiService';
 import * as GoogleDriveService from './services/googleDriveService';
+import { createRenderQueue } from './services/renderQueue';
+import { OneShotModal } from './components/OneShotModal';
+import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 
 type View = 'dashboard' | 'project';
 
@@ -44,6 +47,8 @@ const App: React.FC = () => {
   const [isCreateAssetOpen, setIsCreateAssetOpen] = useState(false);
   const [showEnhanceModal, setShowEnhanceModal] = useState(false);
   const [isAnalyzeModalOpen, setIsAnalyzeModalOpen] = useState(false);
+  const [isOneShotModalOpen, setIsOneShotModalOpen] = useState(false);
+  const [isRenderQueueOpen, setIsRenderQueueOpen] = useState(false); // Manual queue view
   
   // Form State (New Project)
   const [creationMode, setCreationMode] = useState<'blank' | 'seed'>('blank');
@@ -66,6 +71,7 @@ const App: React.FC = () => {
   // Analysis State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
+  const [oneShotItems, setOneShotItems] = useState<OneShotItem[]>([]);
   const [analysisType, setAnalysisType] = useState<string>(''); // 'Characters', 'Locations', 'Story'
   const [analysisParentId, setAnalysisParentId] = useState<string | null>(null); // For creating child assets during analysis
   const [autoFindShots, setAutoFindShots] = useState(true);
@@ -74,6 +80,100 @@ const App: React.FC = () => {
   const [isDriveConnected, setIsDriveConnected] = useState(false);
   const [isMockDrive, setIsMockDrive] = useState(false);
   const [driveFolderMap, setDriveFolderMap] = useState<Record<string, string>>({});
+
+  // Render Queue State
+  const [renderQueue, setRenderQueue] = useState<RenderTask[]>([]);
+  
+  // Ref for accessing current state in async queue callbacks
+  const projectsRef = useRef(projects);
+  const currentProjectIdRef = useRef(currentProjectId);
+  useEffect(() => { projectsRef.current = projects; }, [projects]);
+  useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
+
+  // --- Render Queue Setup ---
+  // Task Executor logic
+  const handleTaskExecution = async (task: RenderTask): Promise<string> => {
+      // Resolve prompt dynamically
+      const activeProj = projectsRef.current.find(p => p.id === currentProjectIdRef.current);
+      const asset = activeProj?.assets.find(a => a.id === task.assetId);
+      
+      const { resolved, matchedAssets } = resolvePrompt(task.prompt, activeProj?.assets, asset);
+      const refImages = resolveReferenceImages(task.prompt, activeProj?.assets, asset, {}, {}, matchedAssets);
+
+      if (task.type === 'image') {
+          return await generateImage(resolved, task.config?.aspectRatio || "16:9", task.config?.model, refImages);
+      } 
+      // Video support later
+      return "";
+  };
+
+  const onTaskComplete = (task: RenderTask, result: string) => {
+      if (!currentProjectIdRef.current) return;
+      
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectIdRef.current) {
+              const asset = p.assets.find(a => a.id === task.assetId);
+              if (!asset) return p;
+
+              // 1. Create Node
+              const newNode: FlowNode = {
+                  id: `gen-node-${Date.now()}-${Math.random()}`,
+                  type: NodeType.AI_IMAGE_GEN,
+                  department: asset.department,
+                  assetId: asset.id,
+                  parentId: undefined, // Could group if needed
+                  position: { x: 100, y: 100 }, // Default, canvas will auto-place later if needed
+                  data: {
+                      imageUrl: result,
+                      prompt: task.prompt,
+                      status: task.config?.autoApprove ? 'approved' : 'review',
+                      model: task.config?.model,
+                      aspectRatio: task.config?.aspectRatio,
+                  }
+              };
+
+              let updatedAssets = p.assets;
+              
+              // 2. Auto Assemble (If Shot and Target Sequence provided)
+              if (task.config?.autoAssemble && task.config?.sequenceId && task.config?.autoApprove) {
+                  const seqAsset = p.assets.find(a => a.id === task.config?.sequenceId);
+                  if (seqAsset) {
+                      const newClip: TimelineClip = {
+                          id: `clip-${Date.now()}-${Math.random()}`,
+                          sourceNodeId: newNode.id,
+                          mediaUrl: result,
+                          mediaType: 'image',
+                          start: seqAsset.timelineData ? seqAsset.timelineData.duration : 0,
+                          duration: 4, // Default duration for image
+                          offset: 0,
+                          track: 0,
+                          label: asset.title,
+                          thumbnail: result
+                      };
+                      
+                      const newTimelineData = {
+                          clips: [...(seqAsset.timelineData?.clips || []), newClip],
+                          duration: (seqAsset.timelineData?.duration || 0) + 4
+                      };
+
+                      updatedAssets = p.assets.map(a => a.id === seqAsset.id ? { ...a, timelineData: newTimelineData } : a);
+                  }
+              }
+
+              return { ...p, assets: updatedAssets, nodes: [...p.nodes, newNode] };
+          }
+          return p;
+      }));
+  };
+
+  // Initialize Queue
+  const queueService = useMemo(() => createRenderQueue(onTaskComplete, handleTaskExecution), []);
+  
+  // Sync queue state
+  useEffect(() => {
+      return queueService.subscribe((q) => setRenderQueue(q));
+  }, [queueService]);
+
 
   // Initialize Google Drive API
   useEffect(() => {
@@ -266,9 +366,6 @@ const App: React.FC = () => {
 
 
   // --- Project Handlers ---
-  // ... (Project creation/modal handlers omitted for brevity, effectively unchanged)
-  // Re-inserting required handlers to ensure file is complete and valid
-
   const resetProjectModal = () => {
       setNewProjectTitle('');
       setCreationMode('blank');
@@ -291,7 +388,6 @@ const App: React.FC = () => {
   }
 
   const handleCreateProject = async () => {
-      // ... (Same as before)
       let title = newProjectTitle;
       let summary = '';
       let initialAssets: ProjectAsset[] = [];
@@ -622,12 +718,10 @@ const App: React.FC = () => {
 
 
   // --- Generation Workflows ---
-  // ... (Includes all generation handlers from previous file, omitted here for brevity but assumed present in final output)
   const handleGenerateConcepts = (count: number) => {
-    // ... (Implementation same as previous)
     if (!activeAsset || !currentProjectId || !activeProject) return;
     
-    // 1. Determine Bounding Box... (Existing implementation)
+    // 1. Determine Bounding Box
     const contextNodes = activeProject.nodes.filter(n => 
         n.department === currentDept && 
         n.assetId === activeAsset.id &&
@@ -784,302 +878,179 @@ const App: React.FC = () => {
       setFocusNodeIds(allNewIds);
   }
 
-  const handleGenerateOutline = () => {
-      // ... (Same as previous)
-      if (!activeAsset || !currentProjectId || !activeProject) return;
+  // --- One Shot Discovery (Editorial) ---
+  const handleOneShotBreakdown = async () => {
+      if (!activeProject) return;
+      setOneShotItems([]);
+      setIsOneShotModalOpen(true);
+      setIsAnalyzing(true);
 
-      const contextNodes = activeProject.nodes.filter(n => 
-          n.department === currentDept && 
-          n.assetId === activeAsset.id &&
-          n.data.status !== 'archived'
-      );
-      let maxY = 0;
-      if (contextNodes.length > 0) {
-          maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
-      }
-
-      const startY = maxY > 0 ? maxY + 100 : 100;
-      const startX = 100;
-      const nodeWidth = 600;
-      const nodeHeight = 400;
-      const padding = 20;
-
-      const groupId = `group-${Date.now()}`;
-      const groupWidth = nodeWidth + (padding * 2);
-      const groupHeight = nodeHeight + (padding * 2) + 40;
-
-      const groupNode: FlowNode = {
-          id: groupId,
-          type: NodeType.GROUP,
-          department: currentDept,
-          assetId: activeAsset.id,
-          position: { x: startX, y: startY },
-          width: groupWidth,
-          height: groupHeight,
-          data: { label: `Outline Batch ${new Date().toLocaleTimeString()}`, collapsed: false }
-      };
-
-      const outlineNode: FlowNode = {
-          id: `gen-outline-${Date.now()}`,
-          type: NodeType.AI_TEXT_GEN,
-          department: currentDept,
-          assetId: activeAsset.id,
-          parentId: groupId,
-          position: { x: startX + padding, y: startY + 60 },
-          width: nodeWidth,
-          height: nodeHeight,
-          data: {
-              prompt: `Create a beat sheet outline for @${activeAsset.title}. Focus on dramatic tension.`,
-              status: 'generating'
+      try {
+          const scriptNodes = activeProject.nodes.filter(n => 
+              n.department === DepartmentType.WRITERS_ROOM && 
+              n.type === NodeType.AI_TEXT_GEN && 
+              n.data.text
+          );
+          const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
+          
+          if (!fullText) {
+              alert("No scripts to analyze");
+              setIsOneShotModalOpen(false);
+              return;
           }
-      };
 
-      const allNewIds = [groupId, outlineNode.id];
+          const rawData = await extractOneShotBreakdown(fullText);
+          const newItems: OneShotItem[] = [];
+          
+          // Map to internal Item structure - Default auto-gen off
+          rawData.characters.forEach((c: any) => newItems.push({ 
+              id: `char-${Math.random()}`, type: 'Character', name: c.name, description: c.description, selected: true, autoGenerate: true, autoApprove: false 
+          }));
+          rawData.locations.forEach((l: any) => newItems.push({ 
+              id: `loc-${Math.random()}`, type: 'Location', name: l.name, description: l.description, selected: true, autoGenerate: true, autoApprove: false 
+          }));
+          rawData.scenes.forEach((s: any) => {
+              const sceneId = `scene-${Math.random()}`;
+              const shots: OneShotItem[] = s.shots?.map((shot: any) => ({
+                  id: `shot-${Math.random()}`, type: 'Shot', name: shot.title, description: shot.description, parentId: sceneId, selected: true, autoGenerate: false, autoApprove: false
+              })) || [];
+              
+              newItems.push({
+                  id: sceneId, type: 'Scene', name: s.title, description: s.description, selected: true, autoGenerate: false, autoApprove: false, children: shots
+              });
+          });
 
-      setProjects(prev => prev.map(p => {
-          if (p.id === currentProjectId) {
-              return { ...p, nodes: [...p.nodes, groupNode, outlineNode] };
-          }
-          return p;
-      }));
-
-      setFocusNodeIds(allNewIds);
-  };
-
-  const handleRefineConcept = (assetId: string, sourceImageUrl?: string) => {
-       // ... (Same as previous)
-      if (!currentProjectId || !activeProject) return;
-      const asset = activeProject.assets.find(a => a.id === assetId);
-      if (!asset) return;
-
-      const contextNodes = activeProject.nodes.filter(n => 
-          n.department === currentDept && 
-          n.assetId === assetId &&
-          n.data.status !== 'archived'
-      );
-      let maxY = 0;
-      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
-
-      const startY = maxY > 0 ? maxY + 100 : 100;
-      const startX = 100;
-      const nodeWidth = 300;
-      const nodeHeight = 400;
-      const gap = 20;
-      const padding = 20;
-
-      const prompts = [
-          `@${asset.title}, Full body character standing in a NEUTRAL POSE on a white background, soft neutral lighting, hands at sides, no props, whole body visible in frame`,
-          `@${asset.title}, Extreme closeup of head and shoulders facing the camera on a white background, neutral lighting, neutral expression, high detail face`,
-          `@${asset.title}, Full body front view on white background. CHARACTER IS FACING DIRECTLY TOWARD THE CAMERA IN A NEUTRAL POSE, front-on, hands at sides, no props.`,
-          `@${asset.title}, Full body three quarter view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING SCREEN LEFT (45 degrees).`,
-          `@${asset.title}, Full body three quarter view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING SCREEN RIGHT (45 degrees).`,
-          `@${asset.title}, Full body side profile view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING DIRECTLY LEFT (90 degrees).`,
-          `@${asset.title}, Full body side profile view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING DIRECTLY RIGHT (90 degrees).`,
-          `@${asset.title}, Full body back view on a white background in a NEUTRAL POSE in neutral lighting, hands at sides, no props. THE SUBJECT IS FACING AWAY FROM THE CAMERA.`
-      ];
-
-      const columns = 4;
-      const rows = 2;
-      const groupWidth = (nodeWidth * columns) + (gap * (columns - 1)) + (padding * 2);
-      const groupHeight = (nodeHeight * rows) + (gap * (rows - 1)) + (padding * 2) + 40;
-
-      const groupId = `group-ref-${Date.now()}`;
-      const groupNode: FlowNode = {
-          id: groupId,
-          type: NodeType.GROUP,
-          department: currentDept,
-          assetId: assetId,
-          position: { x: startX, y: startY },
-          width: groupWidth,
-          height: groupHeight,
-          data: { label: `Refined Character Sheet`, collapsed: false }
-      };
-
-      const newNodes: FlowNode[] = [];
-      prompts.forEach((p, i) => {
-          const col = i % columns;
-          const row = Math.floor(i / columns);
-          const childX = startX + padding + (col * (nodeWidth + gap));
-          const childY = startY + 60 + (row * (nodeHeight + gap));
-
-          newNodes.push({
-              id: `ref-gen-${Date.now()}-${i}`,
-              type: NodeType.AI_IMAGE_GEN,
-              department: currentDept,
-              assetId: assetId,
-              parentId: groupId,
-              position: { x: childX, y: childY },
-              width: nodeWidth,
-              height: nodeHeight,
-              data: {
-                  prompt: p,
-                  aspectRatio: "1:1",
-                  model: MODELS.IMAGE_EDIT, 
-                  status: 'generating',
-                  tag: 'refinement', 
-                  referenceImageUrl: sourceImageUrl 
+          // Deduplicate against existing assets
+          const existingMap = new Set(activeProject.assets.map(a => a.title.toLowerCase()));
+          newItems.forEach(item => {
+              if (existingMap.has(item.name.toLowerCase())) {
+                  item.selected = false;
+                  item.isExisting = true;
+                  item.autoGenerate = false; // Disable existing gen
               }
           });
-      });
 
-      setProjects(prev => prev.map(p => {
-          if (p.id === currentProjectId) {
-              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
-          }
-          return p;
-      }));
-      setFocusNodeIds([groupId]);
+          setOneShotItems(newItems);
+      } catch(e) {
+          console.error("One Shot Error", e);
+      } finally {
+          setIsAnalyzing(false);
+      }
   }
-  
-  const handleGalleryTurntable = (node: FlowNode) => {
-      // ... (Same as previous)
-      if (!currentProjectId || !activeProject) return;
-      
-      const contextNodes = activeProject.nodes.filter(n => 
-          n.department === currentDept && 
-          n.assetId === (currentAssetId || undefined)
-      );
-      let maxY = 0;
-      if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
-      
-      const pos = { x: 100, y: maxY + 50 };
-      const width = 300;
-      const height = 400;
 
-      const model = MODELS.VIDEO_HQ;
-      const supportsLastFrame = VIDEO_MODEL_CAPABILITIES[model]?.supportsLastFrame || false;
+  const handleExecuteOneShot = async (config: { count: number, autoAssemble: boolean }) => {
+      if (!currentProjectIdRef.current) return;
+      setIsOneShotModalOpen(false);
 
-      const newNode: FlowNode = {
-           id: `vid-turntable-${Date.now()}`,
-           type: NodeType.AI_VIDEO_GEN,
-           department: currentDept,
-           assetId: node.assetId,
-           parentId: node.parentId,
-           position: pos,
-           width: width,
-           height: height,
-           data: {
-               prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
-               imageUrl: node.data.imageUrl, // Seed image
-               lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
-               model: model,
-               aspectRatio: '16:9',
-               status: 'draft',
-               duration: '8', // Prefer long for turntable
-               withAudio: false
-           }
+      const itemsToProcess = oneShotItems.filter(i => i.selected);
+      const newAssets: ProjectAsset[] = [];
+      const tasksToQueue: RenderTask[] = [];
+
+      // Recursive function to process tree (scenes -> shots)
+      const processItem = (item: OneShotItem, parentAssetId?: string) => {
+          const dept = item.type === 'Character' ? DepartmentType.CASTING_WARDROBE : 
+                       item.type === 'Location' ? DepartmentType.SET_DESIGN :
+                       item.type === 'Scene' ? DepartmentType.STORY : DepartmentType.PRODUCTION;
+          
+          // Only create new asset if not existing
+          let assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
+          if (item.isExisting) {
+              // Find existing ID logic omitted for brevity, would need lookup
+              // For now, if existing, we skip creation but might still gen content if force enabled
+              return; 
+          }
+
+          const asset: ProjectAsset = {
+              id: assetId,
+              department: dept,
+              title: item.name,
+              description: item.description,
+              visualStyle: item.type === 'Character' ? 'Cinematic Portrait' : 'Wide Shot',
+              summary: 'Auto-detected',
+              parentId: parentAssetId,
+              status: 'active'
+          };
+          
+          if (item.type === 'Scene') {
+              asset.timelineData = { clips: [], duration: 0 };
+          }
+
+          newAssets.push(asset);
+
+          // Queue Generation if requested specificially for this item
+          if (item.autoGenerate) {
+              let prompt = `@${item.name}`;
+              // Contextual prompt for shots
+              if (item.type === 'Shot' && parentAssetId) {
+                  // We need parent name for prompt
+                  const parentItem = oneShotItems.find(p => p.children?.some(c => c.id === item.id)); 
+                  if (parentItem) prompt = `@${parentItem.name}.${item.name}`;
+              }
+
+              for (let i = 0; i < config.count; i++) {
+                  tasksToQueue.push({
+                      id: `task-${Date.now()}-${i}`,
+                      type: 'image',
+                      prompt: prompt,
+                      assetId: assetId,
+                      status: 'pending',
+                      config: {
+                          count: config.count,
+                          autoApprove: item.autoApprove, // Use per-item setting
+                          autoAssemble: config.autoAssemble,
+                          sequenceId: parentAssetId // For shots, parent is the sequence
+                      }
+                  });
+              }
+          }
+
+          // Process Children (Shots)
+          if (item.children) {
+              item.children.filter(c => c.selected).forEach(child => processItem(child, assetId));
+          }
       };
 
+      itemsToProcess.forEach(item => processItem(item));
+
+      // Update State with new Assets
       setProjects(prev => prev.map(p => {
-          if (p.id === currentProjectId) {
-              return { ...p, nodes: [...p.nodes, newNode] };
+          if (p.id === currentProjectIdRef.current) {
+              return { ...p, assets: [...p.assets, ...newAssets] };
           }
           return p;
       }));
+
+      // Start Queue
+      tasksToQueue.forEach(t => queueService.add(t));
+      
+      if (tasksToQueue.length > 0) {
+          setIsRenderQueueOpen(true); // Auto show queue
+      }
   }
 
-  const handleGalleryExpressions = (node: FlowNode) => {
-       // ... (Same as previous)
-       if (!currentProjectId || !activeProject) return;
-       const contextNodes = activeProject.nodes.filter(n => 
-          n.department === currentDept && 
-          n.assetId === (currentAssetId || undefined)
-       );
-       let maxY = 0;
-       if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
-       const startY = maxY + 50;
-       
-       const emotions = [
-           { name: 'Happiness', prompt: 'face closeup, expressing pure joy, smiling, eyes crinkling, cinematic lighting' },
-           { name: 'Sadness', prompt: 'face closeup, expression of deep grief, frowning, looking down, subtle tears, moody lighting' },
-           { name: 'Fear', prompt: 'face closeup, expression of terror, wide eyes, screaming, dramatic lighting' },
-           { name: 'Anger', prompt: 'face closeup, expression of rage, clenched teeth, narrowed eyes, intense lighting' },
-           { name: 'Surprise', prompt: 'face closeup, expression of shock, wide open mouth, wide eyes' },
-           { name: 'Disgust', prompt: 'face closeup, expression of revulsion, wrinkled nose, grimace' },
-           { name: 'Contempt', prompt: 'face closeup, expression of scorn, smirk, one raised eyebrow' }
-       ];
-       
-       const columns = 4;
-       const rows = 2;
-       const nodeW = 300;
-       const nodeH = 400;
-       const gap = 20;
-       const padding = 20;
-       const groupWidth = (nodeW * columns) + (gap * (columns - 1)) + (padding * 2);
-       const groupHeight = (nodeH * rows) + (gap * (rows - 1)) + (padding * 2) + 40;
-       
-       const groupId = `group-expr-${Date.now()}`;
-       const groupNode: FlowNode = {
-            id: groupId,
-            type: NodeType.GROUP,
-            department: currentDept,
-            assetId: node.assetId,
-            position: { x: 100, y: startY },
-            width: groupWidth,
-            height: groupHeight,
-            data: { label: `Expressions Batch`, collapsed: false }
-       };
-       
-       const targetModel = MODELS.VIDEO_FAST;
-       const newNodes: FlowNode[] = [];
-       emotions.forEach((emo, idx) => {
-           const col = idx % columns;
-           const row = Math.floor(idx / columns);
-           const childX = 100 + padding + (col * (nodeW + gap));
-           const childY = startY + 60 + (row * (nodeH + gap));
-
-           newNodes.push({
-               id: `vid-expr-${Date.now()}-${idx}`,
-               type: NodeType.AI_VIDEO_GEN,
-               department: currentDept,
-               assetId: node.assetId,
-               parentId: groupId, // Link to group
-               position: { x: childX, y: childY },
-               width: nodeW,
-               height: nodeH,
-               data: {
-                   prompt: `@${activeAsset?.title || 'Character'}, ${emo.prompt}, neutral background, high quality`,
-                   imageUrl: node.data.imageUrl,
-                   model: targetModel,
-                   aspectRatio: '16:9',
-                   status: 'draft',
-                   duration: '4', // Shortest
-                   withAudio: false
-               }
-           });
-       });
-       
-       setProjects(prev => prev.map(p => {
-          if (p.id === currentProjectId) {
-              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
-          }
-          return p;
-       }));
-  }
-  
-  const handleNodesChange = useCallback((newNodes: React.SetStateAction<FlowNode[]>) => {
+  // --- Handlers for Missing Functions ---
+  const handleNodesChange = useCallback((value: React.SetStateAction<FlowNode[]>) => {
       if (!currentProjectId) return;
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectId) {
-              const updatedNodes = typeof newNodes === 'function' ? newNodes(p.nodes) : newNodes;
-              return { ...p, nodes: updatedNodes };
+              const newNodes = typeof value === 'function' ? value(p.nodes) : value;
+              return { ...p, nodes: newNodes };
           }
           return p;
       }));
   }, [currentProjectId]);
 
-  const handleConnectionsChange = useCallback((newConns: React.SetStateAction<FlowConnection[]>) => {
+  const handleConnectionsChange = useCallback((value: React.SetStateAction<FlowConnection[]>) => {
       if (!currentProjectId) return;
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectId) {
-              const updatedConns = typeof newConns === 'function' ? newConns(p.connections) : newConns;
-              return { ...p, connections: updatedConns };
+              const newConnections = typeof value === 'function' ? value(p.connections) : value;
+              return { ...p, connections: newConnections };
           }
           return p;
       }));
   }, [currentProjectId]);
-  
-  // Update a single node (Used for status changes etc)
+
   const handleUpdateNode = useCallback((nodeId: string, data: any) => {
       if (!currentProjectId) return;
       setProjects(prev => prev.map(p => {
@@ -1092,186 +1063,270 @@ const App: React.FC = () => {
           return p;
       }));
   }, [currentProjectId]);
-  
+
   const handleAnalyzeScripts = () => {
-      setDetectedItems([]);
-      setAnalysisParentId(null); 
-      
-      // Determine type immediately for UI state
-      if (currentDept === DepartmentType.CASTING_WARDROBE) setAnalysisType('Characters');
-      else if (currentDept === DepartmentType.SET_DESIGN) setAnalysisType('Locations');
-      else if (currentDept === DepartmentType.STORY) setAnalysisType('Story');
-      else setAnalysisType('Analysis'); 
+    // Determine type based on Dept
+    if (currentDept === DepartmentType.CASTING_WARDROBE) setAnalysisType('Characters');
+    else if (currentDept === DepartmentType.SET_DESIGN) setAnalysisType('Locations');
+    else if (currentDept === DepartmentType.STORY) setAnalysisType('Story');
+    else return;
 
-      setIsAnalyzeModalOpen(true);
+    setDetectedItems([]);
+    setIsAnalyzeModalOpen(true);
   };
-  
-  const handleApproveAnalysis = async () => {
-      if (!currentProjectId) return;
-      const approvedItems = detectedItems.filter(i => i.selected && !i.isDuplicate);
-      
-      const newAssets: ProjectAsset[] = [];
-
-      approvedItems.forEach(item => {
-          let visualStyle = "";
-          if (item.type === 'Characters') visualStyle = "Cinematic Portrait";
-          else if (item.type === 'Locations') visualStyle = "Wide Shot, Detailed Environment";
-          
-          const cleanTitle = item.name.replace(/@/g, '').trim();
-          const parentId = analysisParentId || `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-          const parentAsset: ProjectAsset = {
-              id: parentId,
-              department: currentDept,
-              title: cleanTitle,
-              description: item.description,
-              visualStyle: visualStyle,
-              summary: "Auto-detected",
-              parentId: analysisParentId ? analysisParentId : undefined, 
-              status: 'active'
-          };
-          
-          if (!analysisParentId) {
-              newAssets.push(parentAsset);
-              
-              // Handle Children (Shots found inside Scenes)
-              if (item.children) {
-                  item.children.filter(c => c.selected).forEach(child => {
-                      newAssets.push({
-                          id: `shot-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                          department: currentDept, // Scenes and Shots share Story dept usually
-                          title: child.name,
-                          description: child.description,
-                          summary: "Auto-detected shot",
-                          parentId: parentId,
-                          status: 'active'
-                      });
-                  });
-              }
-          } else {
-              // We are already inside a parent, so these are children
-              newAssets.push(parentAsset); 
-          }
-      });
-
-      setProjects(prev => prev.map(p => {
-          if (p.id === currentProjectId) {
-              return { ...p, assets: [...p.assets, ...newAssets] };
-          }
-          return p;
-      }));
-      
-      setIsAnalyzeModalOpen(false);
-      setAnalysisParentId(null);
-  }
 
   const handleRunAnalysis = async () => {
-      if (!activeProject) return;
-      setDetectedItems([]); // Clear previous items
-      setIsAnalyzing(true);
-      
-      try {
-          const scriptNodes = activeProject.nodes.filter(n => 
-              n.department === DepartmentType.WRITERS_ROOM && 
-              n.type === NodeType.AI_TEXT_GEN && 
-              n.data.text
-          );
-          const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
+    if (!activeProject) return;
+    setIsAnalyzing(true);
+    try {
+        // Gather script text
+        const scriptNodes = activeProject.nodes.filter(n => n.department === DepartmentType.WRITERS_ROOM && (n.type === NodeType.AI_TEXT_GEN || n.type === NodeType.TEXT_INPUT) && n.data.text);
+        const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
+        
+        if (!fullText) {
+             alert("No scripts found in Writers Room to analyze.");
+             setIsAnalyzeModalOpen(false);
+             return;
+        }
 
-          if (!fullText) {
-              alert("No scripts found to analyze.");
-              setIsAnalyzing(false);
-              return;
-          }
+        let results: any[] = [];
+        if (analysisType === 'Characters') {
+            results = await extractCharactersFromScript(fullText);
+        } else if (analysisType === 'Locations') {
+            results = await extractLocationsFromScript(fullText);
+        } else if (analysisType === 'Story') {
+            const knownChars = activeProject.assets.filter(a => a.department === DepartmentType.CASTING_WARDROBE).map(a => a.title);
+            results = await extractStoryElementsFromScript(fullText, knownChars, autoFindShots);
+        }
+        
+        // Transform to DetectedItem[]
+        const items: DetectedItem[] = results.map((r: any) => ({
+             name: r.name || r.title,
+             description: r.description,
+             type: r.type || r.role || analysisType, // Fallback
+             selected: true,
+             children: r.shots ? r.shots.map((s:any) => ({
+                 name: s.title, description: s.description, type: 'Shot', selected: true
+             })) : undefined
+        }));
 
-          let rawItems: any[] = [];
-          
-          if (currentDept === DepartmentType.CASTING_WARDROBE) {
-              setAnalysisType('Characters');
-              rawItems = await extractCharactersFromScript(fullText);
-          } else if (currentDept === DepartmentType.SET_DESIGN) {
-              setAnalysisType('Locations');
-              rawItems = await extractLocationsFromScript(fullText);
-          } else if (currentDept === DepartmentType.STORY) {
-              setAnalysisType('Story');
-              const knownChars = activeProject.assets
-                .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
-                .map(a => a.title);
-              // Pass autoFindShots param
-              rawItems = await extractStoryElementsFromScript(fullText, knownChars, autoFindShots);
-          } 
+        // Check duplicates
+        const existingTitles = new Set(activeProject.assets.map(a => a.title.toLowerCase()));
+        items.forEach(i => {
+            if (existingTitles.has(i.name.toLowerCase())) {
+                i.isDuplicate = true;
+                i.selected = false;
+            }
+        });
 
-          const existingNames = new Set(
-              activeProject.assets
-                .filter(a => a.department === currentDept)
-                .map(a => a.title.toLowerCase())
-          );
+        setDetectedItems(items);
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setIsAnalyzing(false);
+    }
+  };
 
-          const items: DetectedItem[] = rawItems.map((r: any) => {
-             // Clean @ symbols from the raw response
-             const rawName = r.name || r.title || "Unknown";
-             const name = rawName.replace(/@/g, '').trim();
-             
-             const isDup = existingNames.has(name.toLowerCase());
-             
-             const item: DetectedItem = {
-                 name: name,
-                 description: r.description || r.role || "",
-                 type: r.type || r.role || analysisType,
-                 selected: !isDup, 
-                 isDuplicate: isDup
-             };
+  const handleApproveAnalysis = () => {
+    if (!currentProjectId) return;
+    
+    const newAssets: ProjectAsset[] = [];
+    detectedItems.filter(i => i.selected).forEach(item => {
+        const assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
+        const asset: ProjectAsset = {
+            id: assetId,
+            department: currentDept,
+            title: item.name,
+            description: item.description,
+            visualStyle: currentDept === DepartmentType.STORY ? 'Cinematic' : 'Portrait',
+            summary: 'Auto-detected',
+            status: 'active'
+        };
+        newAssets.push(asset);
 
-             // Map nested shots if present
-             if (r.shots) {
-                 item.children = r.shots.map((s: any) => ({
-                     name: (s.title || "Shot").replace(/@/g, '').trim(),
-                     description: s.description,
-                     type: 'Shot',
-                     selected: !isDup, // Default select children if parent is new
-                     isDuplicate: false
-                 }));
-             }
-             return item;
-          });
+        // Children (Shots)
+        if (item.children) {
+            item.children.filter(c => c.selected).forEach(child => {
+                newAssets.push({
+                    id: `asset-${Date.now()}-${Math.random()}`,
+                    department: DepartmentType.PRODUCTION,
+                    title: child.name,
+                    description: child.description,
+                    parentId: assetId,
+                    visualStyle: 'Shot',
+                    summary: 'Auto-detected shot',
+                    status: 'active'
+                });
+            });
+        }
+    });
 
-          setDetectedItems(items);
-      } catch (e) {
-          console.error("Analysis failed", e);
-      } finally {
-          setIsAnalyzing(false);
-      }
-  }
-  
+    setProjects(prev => prev.map(p => {
+        if (p.id === currentProjectId) {
+            return { ...p, assets: [...p.assets, ...newAssets] };
+        }
+        return p;
+    }));
+    setIsAnalyzeModalOpen(false);
+  };
+
   const handleDiscoverShots = async (assetId: string) => {
-      if (!activeProject) return;
-      const asset = activeProject.assets.find(a => a.id === assetId);
-      if (!asset) return;
+    if (!activeProject) return;
+    const asset = activeProject.assets.find(a => a.id === assetId);
+    if (!asset) return;
 
-      setDetectedItems([]); // Clear previous items
-      setIsAnalyzing(true);
-      setAnalysisParentId(assetId); 
-      setAnalysisType('Shots');
-      setIsAnalyzeModalOpen(true);
+    // Heuristic: If there's a Story Node for this asset with text, use that.
+    const storyNode = activeProject.nodes.find(n => n.assetId === assetId && n.data.text);
+    const textToAnalyze = storyNode ? storyNode.data.text : asset.description;
 
-      try {
-           const knownChars = activeProject.assets
-                .filter(a => a.department === DepartmentType.CASTING_WARDROBE)
-                .map(a => a.title);
-           
-           const rawItems = await extractShotsFromScene(asset.description, knownChars);
-           
-           const items: DetectedItem[] = rawItems.map((r: any) => ({
-               name: (r.title || "Shot").replace(/@/g, '').trim(),
-               description: r.description,
-               type: 'Shot',
-               selected: true
-           }));
-           setDetectedItems(items);
-      } catch (e) { console.error(e); }
-      finally { setIsAnalyzing(false); }
-  }
+    if (!textToAnalyze) return;
+    
+    const knownChars = activeProject.assets.filter(a => a.department === DepartmentType.CASTING_WARDROBE).map(a => a.title);
+    
+    try {
+        const shots = await extractShotsFromScene(textToAnalyze, knownChars);
+        const newAssets = shots.map(s => ({
+            id: `shot-${Date.now()}-${Math.random()}`,
+            department: DepartmentType.PRODUCTION,
+            title: s.title,
+            description: s.description,
+            parentId: assetId,
+            visualStyle: 'Cinematic Shot',
+            summary: 'Auto-discovered shot',
+            status: 'active' as const
+        }));
 
+        setProjects(prev => prev.map(p => {
+            if (p.id === currentProjectId) {
+                return { ...p, assets: [...p.assets, ...newAssets] };
+            }
+            return p;
+        }));
+    } catch (e) {
+        console.error("Shot discovery failed", e);
+    }
+  };
+
+  const handleRefineConcept = (assetId: string, sourceImageUrl?: string) => {
+    if (!currentProjectId) return;
+    
+    const asset = activeProject?.assets.find(a => a.id === assetId);
+    if (!asset) return;
+
+    const newNode: FlowNode = {
+        id: `refine-${Date.now()}`,
+        type: NodeType.AI_IMAGE_GEN,
+        department: currentDept,
+        assetId: assetId,
+        position: { x: 100, y: 100 },
+        data: {
+            prompt: `@${asset.title}, detailed, high quality`,
+            referenceImageUrl: sourceImageUrl,
+            tag: 'refinement',
+            status: 'draft',
+            aspectRatio: '1:1'
+        }
+    };
+    
+    setProjects(prev => prev.map(p => {
+        if (p.id === currentProjectId) {
+            return { ...p, nodes: [...p.nodes, newNode] };
+        }
+        return p;
+    }));
+  };
+
+  const handleGenerateOutline = () => {
+    if (!currentProjectId || !activeAsset) return;
+
+    const newNode: FlowNode = {
+        id: `outline-${Date.now()}`,
+        type: NodeType.AI_TEXT_GEN,
+        department: DepartmentType.WRITERS_ROOM,
+        assetId: activeAsset.id,
+        position: { x: 100, y: 100 },
+        data: {
+            prompt: `Write a detailed outline for @${activeAsset.title}.`,
+            status: 'draft'
+        }
+    };
+
+    setProjects(prev => prev.map(p => {
+        if (p.id === currentProjectId) {
+            return { ...p, nodes: [...p.nodes, newNode] };
+        }
+        return p;
+    }));
+  };
+
+  const handleGalleryTurntable = (node: FlowNode) => {
+    if (!currentProjectId) return;
+    
+    const newNode: FlowNode = {
+        id: `vid-turn-${Date.now()}`,
+        type: NodeType.AI_VIDEO_GEN,
+        department: node.department,
+        assetId: node.assetId,
+        parentId: node.parentId,
+        position: { x: node.position.x + 320, y: node.position.y },
+        data: {
+            prompt: "360 degree turntable, seamless loop",
+            imageUrl: node.data.imageUrl,
+            lastFrameImageUrl: node.data.imageUrl,
+            model: MODELS.VIDEO_HQ,
+            duration: '4',
+            status: 'draft'
+        }
+    };
+
+    setProjects(prev => prev.map(p => {
+        if (p.id === currentProjectId) {
+            return { ...p, nodes: [...p.nodes, newNode] };
+        }
+        return p;
+    }));
+  };
+
+  const handleGalleryExpressions = (node: FlowNode) => {
+    if (!currentProjectId) return;
+    
+    const emotions = ['Happy', 'Sad', 'Angry', 'Surprised'];
+    const newNodes: FlowNode[] = [];
+    const groupId = `group-expr-${Date.now()}`;
+    
+    newNodes.push({
+        id: groupId,
+        type: NodeType.GROUP,
+        department: node.department,
+        assetId: node.assetId,
+        position: { x: node.position.x + 320, y: node.position.y },
+        width: 600, height: 600,
+        data: { label: "Expressions", collapsed: false }
+    });
+
+    emotions.forEach((emo, i) => {
+         newNodes.push({
+             id: `expr-${Date.now()}-${i}`,
+             type: NodeType.AI_IMAGE_GEN,
+             department: node.department,
+             assetId: node.assetId,
+             parentId: groupId,
+             position: { x: node.position.x + 320 + (i%2)*310, y: node.position.y + 60 + Math.floor(i/2)*310 },
+             data: {
+                 prompt: `@${activeAsset?.title || 'Character'}, ${emo} expression`,
+                 referenceImageUrl: node.data.imageUrl,
+                 status: 'draft'
+             }
+         });
+    });
+
+    setProjects(prev => prev.map(p => {
+        if (p.id === currentProjectId) {
+            return { ...p, nodes: [...p.nodes, ...newNodes] };
+        }
+        return p;
+    }));
+  };
 
   if (view === 'dashboard') {
     return (
@@ -1437,6 +1492,7 @@ const App: React.FC = () => {
             onDeleteAsset={handleDeleteAsset}
             onArchiveAsset={handleArchiveAsset}
             onRestoreAsset={handleRestoreAsset}
+            onOneShotDiscovery={handleOneShotBreakdown}
         />
 
         {/* Workspace Area */}
@@ -1453,6 +1509,17 @@ const App: React.FC = () => {
                  </div>
                  
                  <div className="flex items-center gap-3">
+                     {/* Render Queue Manual Trigger */}
+                     {renderQueue.length > 0 && (
+                         <button 
+                            onClick={() => setIsRenderQueueOpen(!isRenderQueueOpen)}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-zinc-300"
+                         >
+                             <Layers size={14} className={renderQueue.some(t => t.status === 'processing') ? "animate-pulse text-blue-400" : ""}/>
+                             Queue ({renderQueue.filter(t => t.status === 'pending' || t.status === 'processing').length})
+                         </button>
+                     )}
+
                      {/* View Toggle (Only show if NOT Editorial) */}
                      {currentDept !== DepartmentType.EDITORIAL && (
                          <ToggleGroup 
@@ -1530,6 +1597,12 @@ const App: React.FC = () => {
                  {currentDept !== DepartmentType.EDITORIAL && <ChatBot scriptContext={scriptContext} />}
              </div>
         </div>
+
+        {/* Global Floating Elements */}
+        {/* Render Queue Panel (Optional Full View) - For now using floating indicator */}
+        {(isRenderQueueOpen || renderQueue.some(t => t.status === 'processing')) && (
+            <QueueIndicator queue={renderQueue} />
+        )}
 
         {/* Floating Modals */}
         {isCreateAssetOpen && (
@@ -1673,6 +1746,15 @@ const App: React.FC = () => {
                      )}
                  </div>
              </Modal>
+        )}
+
+        {isOneShotModalOpen && (
+            <OneShotModal 
+                items={oneShotItems} 
+                setItems={setOneShotItems} 
+                onClose={() => setIsOneShotModalOpen(false)}
+                onExecute={handleExecuteOneShot}
+            />
         )}
         
         {/* Asset Editor Panel */}

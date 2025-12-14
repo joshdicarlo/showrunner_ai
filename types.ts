@@ -1,5 +1,4 @@
 
-
 export enum DepartmentType {
   WRITERS_ROOM = "Writers Room",
   CASTING_WARDROBE = "Casting & Wardrobe",
@@ -129,4 +128,37 @@ export interface GeminiConfig {
 export interface DriveConfig {
     clientId: string;
     scope: string;
+}
+
+// --- Render Queue Types ---
+export interface RenderTask {
+    id: string;
+    type: 'image' | 'video';
+    prompt: string;
+    assetId: string;
+    status: 'pending' | 'processing' | 'completed' | 'failed';
+    result?: string;
+    error?: string;
+    config?: {
+        model?: string;
+        aspectRatio?: string;
+        count?: number;
+        autoApprove?: boolean;
+        autoAssemble?: boolean;
+        sequenceId?: string; // For auto-assemble targeting
+    };
+    onComplete?: (result: string, task: RenderTask) => void;
+}
+
+export interface OneShotItem {
+    id: string;
+    type: 'Character' | 'Location' | 'Scene' | 'Shot';
+    name: string;
+    description: string;
+    parentId?: string; // For Shots belonging to Scenes
+    selected: boolean;
+    autoGenerate: boolean;
+    autoApprove: boolean;
+    isExisting?: boolean; // If matching asset found
+    children?: OneShotItem[];
 }

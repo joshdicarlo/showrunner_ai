@@ -408,6 +408,92 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
 }
 
 /**
+ * ONE SHOT BREAKDOWN: Extracts Everything
+ */
+export const extractOneShotBreakdown = async (scriptText: string): Promise<{ characters: CharacterProfile[], locations: LocationProfile[], scenes: StoryElement[] }> => {
+    const ai = createAI();
+    try {
+        const prompt = `You are a breakdown artist. Analyze the script and extract Characters, Locations, and Scenes with their shots in one pass.
+        
+        Requirements:
+        1. Extract MAIN Characters (Name, Description, Role).
+        2. Extract Locations (Name, Description, Type INT/EXT).
+        3. Extract Scenes. For each scene:
+           - Title (No @ symbols).
+           - Description (Use @Name for characters).
+           - Shots: List of shots (Title: "Shot 1: Type", Description).
+        
+        Input Script:
+        "${scriptText.slice(0, 200000)}"
+        `;
+
+        const response = await retryWithBackoff(async () => {
+            return await ai.models.generateContent({
+                model: MODELS.TEXT_FAST,
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            characters: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        name: { type: Type.STRING },
+                                        description: { type: Type.STRING },
+                                        role: { type: Type.STRING }
+                                    }
+                                }
+                            },
+                            locations: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        name: { type: Type.STRING },
+                                        description: { type: Type.STRING },
+                                        type: { type: Type.STRING }
+                                    }
+                                }
+                            },
+                            scenes: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        title: { type: Type.STRING },
+                                        description: { type: Type.STRING },
+                                        type: { type: Type.STRING },
+                                        shots: {
+                                            type: Type.ARRAY,
+                                            items: {
+                                                type: Type.OBJECT,
+                                                properties: {
+                                                    title: { type: Type.STRING },
+                                                    description: { type: Type.STRING },
+                                                    type: { type: Type.STRING }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
+
+        return JSON.parse(response.text || "{}");
+    } catch (e) {
+        console.error("One Shot Extraction Error", e);
+        return { characters: [], locations: [], scenes: [] };
+    }
+}
+
+/**
  * Extract Shots from a Scene
  */
 export const extractShotsFromScene = async (sceneText: string, knownCharacters?: string[]): Promise<StoryElement[]> => {

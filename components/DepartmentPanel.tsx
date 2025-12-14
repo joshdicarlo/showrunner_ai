@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { DepartmentType, ProjectAsset, FlowNode } from '../types';
 import { DEPARTMENTS } from '../constants';
-import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard, Shirt, Trash2, Archive, RotateCcw, Scissors } from 'lucide-react';
+import { Plus, ChevronRight, ChevronDown, User, MapPin, FileText, Box, Layout, Wand2, Video, Clapperboard, Shirt, Trash2, Archive, RotateCcw, Scissors, Zap } from 'lucide-react';
 
 interface DepartmentPanelProps {
   department: DepartmentType;
@@ -17,6 +17,7 @@ interface DepartmentPanelProps {
   onDeleteAsset?: (assetId: string) => void;
   onArchiveAsset?: (assetId: string) => void;
   onRestoreAsset?: (assetId: string) => void;
+  onOneShotDiscovery?: () => void; // New Prop
 }
 
 export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({ 
@@ -31,7 +32,8 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
     assetThumbnails = {},
     onDeleteAsset,
     onArchiveAsset,
-    onRestoreAsset
+    onRestoreAsset,
+    onOneShotDiscovery
 }) => {
   const [expandedAssets, setExpandedAssets] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
@@ -326,6 +328,17 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
                         title="Analyze scripts to auto-generate assets"
                     >
                         <Wand2 size={14} /> {analyzeLabel}
+                    </button>
+                )}
+
+                {/* Editorial: One Shot Feature */}
+                {department === DepartmentType.EDITORIAL && onOneShotDiscovery && (
+                    <button 
+                        onClick={onOneShotDiscovery}
+                        className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-900/50 to-blue-900/50 hover:from-purple-800/50 hover:to-blue-800/50 text-white border border-blue-500/30 text-xs font-medium py-2 rounded-lg transition-all"
+                        title="Discover characters, scenes, and shots in one pass"
+                    >
+                        <Zap size={14} className="text-yellow-400"/> Discover One Shot
                     </button>
                 )}
             </div>
