@@ -16,6 +16,7 @@ import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
+import { TEMPLATES } from './data/templates';
 
 type View = 'dashboard' | 'project';
 
@@ -182,68 +183,9 @@ const App: React.FC = () => {
       });
   }, []);
 
-  // Mock initial data load
+  // Mock initial data load - Load Templates
   useEffect(() => {
-      const demoAssetId = 'asset-1';
-      const demoProject: Project = {
-          id: 'demo-1',
-          title: 'The Galactic Courier',
-          summary: 'A sci-fi adventure about a courier delivering a package to the wrong dimension.',
-          type: 'Feature',
-          assets: [
-             {
-                 id: demoAssetId,
-                 department: DepartmentType.CASTING_WARDROBE,
-                 title: 'Zax',
-                 description: 'A cynical robot courier with a rusted chassis and a heart of gold. He often malfunctions at inconvenient times but always delivers the package.',
-                 summary: 'A cynical robot courier with a rusted chassis.',
-                 status: 'active'
-             }
-          ],
-          nodes: [
-             // Writers Room Sequence Group
-             {
-                 id: 'seq-group',
-                 type: NodeType.GROUP,
-                 department: DepartmentType.WRITERS_ROOM,
-                 position: { x: 50, y: 50 },
-                 width: 850,
-                 height: 550,
-                 data: { label: "Sequence 1", collapsed: false }
-             },
-             // Beat Sheet
-             { 
-                 id: 'n-beat', 
-                 type: NodeType.AI_TEXT_GEN, 
-                 department: DepartmentType.WRITERS_ROOM,
-                 parentId: 'seq-group',
-                 position: {x: 80, y: 120}, 
-                 data: { 
-                     prompt: 'Write a beat sheet for a chase scene in an asteroid field.', 
-                     text: `1. **The Signal**: @Zax and his copilot **R-7** receive a distress call from the rebel leader **Kira**.\n2. **The Ambush**: The warlord **Vorg** intercepts the transmission and launches his fleet.\n3. **The Maneuver**: @Zax flies into the asteroid field while **R-7** calculates the odds.\n4. **The Crash**: They are hit by **Vorg**'s cannon but **Kira** pulls them from the wreckage just in time.`,
-                     status: 'approved' 
-                 },
-                 width: 350, height: 400
-             },
-             // Script
-             { 
-                 id: 'n-script', 
-                 type: NodeType.AI_TEXT_GEN, 
-                 department: DepartmentType.WRITERS_ROOM,
-                 parentId: 'seq-group',
-                 position: {x: 480, y: 120}, 
-                 data: { 
-                     prompt: 'Convert the beat sheet into a script scene.', 
-                     text: `INT. COCKPIT - DAY\n\n@ZAX struggles with the controls. His small drone companion, R-7, beeps frantically attached to the dashboard.\n\n@ZAX\nQuiet, R-7! I know the odds!\n\nOn the com-link, KIRA's voice crackles through, urgent and commanding.\n\nKIRA (V.O.)\nVorg is right behind you, Zax! Dive into the nebula!\n\nEXT. ASTEROID FIELD - CONTINUOUS\n\nThe courier ship weaves through the debris, narrowly dodging VORG'S massive flagship plasma blasts.`,
-                     status: 'review' 
-                 },
-                 width: 350, height: 400
-             }
-          ],
-          connections: [],
-          updatedAt: new Date()
-      };
-      setProjects([demoProject]);
+      setProjects(TEMPLATES);
   }, []);
 
   const activeProject = projects.find(p => p.id === currentProjectId);
@@ -952,30 +894,40 @@ const App: React.FC = () => {
                        item.type === 'Location' ? DepartmentType.SET_DESIGN :
                        item.type === 'Scene' ? DepartmentType.STORY : DepartmentType.PRODUCTION;
           
-          // Only create new asset if not existing
           let assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
-          if (item.isExisting) {
-              // Find existing ID logic omitted for brevity, would need lookup
-              // For now, if existing, we skip creation but might still gen content if force enabled
-              return; 
-          }
-
-          const asset: ProjectAsset = {
-              id: assetId,
-              department: dept,
-              title: item.name,
-              description: item.description,
-              visualStyle: item.type === 'Character' ? 'Cinematic Portrait' : 'Wide Shot',
-              summary: 'Auto-detected',
-              parentId: parentAssetId,
-              status: 'active'
-          };
           
-          if (item.type === 'Scene') {
-              asset.timelineData = { clips: [], duration: 0 };
+          if (item.isExisting) {
+               // Find existing asset to attach tasks to
+               const existingAsset = projectsRef.current
+                  .find(p => p.id === currentProjectIdRef.current)?.assets
+                  .find(a => a.title.toLowerCase() === item.name.toLowerCase());
+                
+               if (existingAsset) {
+                   assetId = existingAsset.id;
+               } else {
+                   // Fallback logic or skip? Should not happen if map was correct.
+                   // We'll proceed as new if not found, or maybe return to be safe?
+                   // Just allow creation as fallback.
+               }
+          } else {
+               // Create New Asset
+               const asset: ProjectAsset = {
+                  id: assetId,
+                  department: dept,
+                  title: item.name,
+                  description: item.description,
+                  visualStyle: item.type === 'Character' ? 'Cinematic Portrait' : 'Wide Shot',
+                  summary: 'Auto-detected',
+                  parentId: parentAssetId,
+                  status: 'active'
+              };
+              
+              if (item.type === 'Scene') {
+                  asset.timelineData = { clips: [], duration: 0 };
+              }
+    
+              newAssets.push(asset);
           }
-
-          newAssets.push(asset);
 
           // Queue Generation if requested specificially for this item
           if (item.autoGenerate) {
@@ -1621,7 +1573,7 @@ const App: React.FC = () => {
                         </div>
                         <TextArea value={newAssetDesc} onChange={(e) => setNewAssetDesc(e.target.value)} placeholder="Describe visual appearance, personality, role..." />
                     </div>
-                    <div className="flex justify-end gap-2 pt-4">
+                    <div className="flex-1 flex justify-end gap-2 pt-4">
                         <Button variant="ghost" onClick={() => setIsCreateAssetOpen(false)}>Cancel</Button>
                         <Button onClick={handleCreateAsset} disabled={!newAssetTitle}>Create</Button>
                     </div>
@@ -1653,97 +1605,54 @@ const App: React.FC = () => {
         {isAnalyzeModalOpen && (
              <Modal title={`Analyze for ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)} maxWidth="max-w-2xl">
                  <div className="flex flex-col h-[60vh]">
-                     {!isAnalyzing && detectedItems.length === 0 && (
-                         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-8">
-                             <Wand2 size={48} className="text-purple-500 opacity-50"/>
-                             <div className="space-y-2">
-                                 <h3 className="text-lg font-bold text-white">Scan Script for {analysisType}</h3>
-                                 <p className="text-sm text-zinc-400 max-w-sm mx-auto">
-                                     We will analyze all generated scripts and notes to automatically identify {analysisType.toLowerCase()}.
-                                 </p>
-                             </div>
-                             
-                             {/* Auto-Find Shots Checkbox (Only for Story) */}
-                             {analysisType === 'Story' && (
-                                 <div className="flex items-center gap-2 bg-zinc-900/50 p-3 rounded border border-zinc-800">
-                                     <input 
-                                        type="checkbox" 
-                                        checked={autoFindShots} 
-                                        onChange={(e) => setAutoFindShots(e.target.checked)} 
-                                        id="autofind"
-                                        className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-blue-500 focus:ring-blue-500"
-                                     />
-                                     <label htmlFor="autofind" className="text-sm text-zinc-300 font-medium">Auto-discover Shots for each Scene</label>
-                                 </div>
-                             )}
-
-                             <Button onClick={handleRunAnalysis} size="lg">Start Analysis</Button>
-                         </div>
-                     )}
-
-                     {isAnalyzing && (
-                         <div className="flex-1 flex flex-col items-center justify-center gap-4">
-                             <Loader2 size={32} className="animate-spin text-blue-500"/>
-                             <p className="text-zinc-400 animate-pulse">Reading scripts...</p>
-                         </div>
-                     )}
-
-                     {detectedItems.length > 0 && (
-                         <>
-                             <div className="flex-1 overflow-y-auto border border-zinc-800 rounded-lg bg-zinc-900/50 p-2 space-y-2 mb-4">
-                                 {detectedItems.map((item, idx) => (
-                                     <div key={idx}>
-                                         <div className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${item.selected ? 'bg-blue-900/20 border-blue-500/50' : 'bg-zinc-900 border-zinc-800 opacity-50'}`}>
-                                             <input 
-                                                type="checkbox" 
-                                                checked={item.selected} 
-                                                onChange={(e) => {
-                                                    const newItems = [...detectedItems];
-                                                    newItems[idx].selected = e.target.checked;
-                                                    setDetectedItems(newItems);
-                                                }}
-                                                className="mt-1"
-                                             />
-                                             <div className="flex-1 min-w-0">
-                                                 <div className="flex items-center justify-between">
-                                                     <span className="font-bold text-sm text-white">{item.name}</span>
-                                                     {item.isDuplicate && <span className="text-[10px] text-orange-400 font-mono">Existing</span>}
-                                                 </div>
-                                                 <p className="text-xs text-zinc-400 mt-1 line-clamp-2">{item.description}</p>
-                                             </div>
-                                         </div>
-                                         
-                                         {/* Nested Children (Shots) */}
-                                         {item.children && item.children.length > 0 && (
-                                             <div className="ml-8 mt-1 space-y-1 border-l-2 border-zinc-800 pl-2">
-                                                 {item.children.map((child, cIdx) => (
-                                                     <div key={cIdx} className={`flex items-center gap-2 p-2 rounded text-xs ${child.selected ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 opacity-50'}`}>
-                                                         <input 
-                                                            type="checkbox"
-                                                            checked={child.selected}
-                                                            onChange={(e) => {
-                                                                const newItems = [...detectedItems];
-                                                                if(newItems[idx].children) {
-                                                                    newItems[idx].children![cIdx].selected = e.target.checked;
-                                                                    setDetectedItems(newItems);
-                                                                }
-                                                            }}
-                                                         />
-                                                         <span className="font-mono text-blue-400">{child.name}</span>
-                                                         <span className="truncate opacity-50">{child.description}</span>
-                                                     </div>
-                                                 ))}
-                                             </div>
-                                         )}
-                                     </div>
-                                 ))}
-                             </div>
-                             <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800">
-                                 <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
-                                 <Button onClick={handleApproveAnalysis}>Import Selected</Button>
-                             </div>
-                         </>
-                     )}
+                     <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                        {detectedItems.length === 0 ? (
+                            <div className="h-full flex flex-col items-center justify-center text-zinc-500 gap-4">
+                                <p>Analyze scripts in the Writers Room to automatically detect {analysisType}.</p>
+                                <Button onClick={handleRunAnalysis} disabled={isAnalyzing}>
+                                    {isAnalyzing ? "Analyzing..." : "Start Analysis"}
+                                </Button>
+                            </div>
+                        ) : (
+                            <div>
+                                <div className="flex items-center justify-between mb-2 px-2">
+                                    <span className="text-xs font-bold text-zinc-500 uppercase">{detectedItems.length} Items Detected</span>
+                                </div>
+                                {detectedItems.map((item, idx) => (
+                                    <div key={idx} className={`flex items-start gap-3 p-3 rounded border ${item.isDuplicate ? 'bg-yellow-900/10 border-yellow-900/30' : 'bg-zinc-900 border-zinc-800'}`}>
+                                        <input 
+                                            type="checkbox" 
+                                            checked={item.selected} 
+                                            onChange={(e) => {
+                                                const newItems = [...detectedItems];
+                                                newItems[idx].selected = e.target.checked;
+                                                setDetectedItems(newItems);
+                                            }}
+                                            className="mt-1"
+                                        />
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-bold text-sm text-zinc-200">{item.name}</span>
+                                                {item.isDuplicate && <span className="text-[9px] bg-yellow-900 text-yellow-500 px-1.5 rounded">Existing</span>}
+                                            </div>
+                                            <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{item.description}</p>
+                                            {item.children && (
+                                                <div className="mt-2 pl-2 border-l border-zinc-700">
+                                                    <span className="text-[10px] text-zinc-500">{item.children.length} Shots Detected</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                     </div>
+                     <div className="p-4 border-t border-zinc-800 flex justify-end gap-2 bg-zinc-900">
+                         <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
+                         <Button onClick={handleApproveAnalysis} disabled={detectedItems.filter(i => i.selected).length === 0}>
+                             Import Selected
+                         </Button>
+                     </div>
                  </div>
              </Modal>
         )}
@@ -1754,6 +1663,8 @@ const App: React.FC = () => {
                 setItems={setOneShotItems} 
                 onClose={() => setIsOneShotModalOpen(false)}
                 onExecute={handleExecuteOneShot}
+                onDiscover={handleOneShotBreakdown}
+                isLoading={isAnalyzing}
             />
         )}
         

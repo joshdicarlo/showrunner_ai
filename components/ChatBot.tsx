@@ -87,10 +87,8 @@ export const ChatBot: React.FC<ChatBotProps> = ({ scriptContext }) => {
                         )}
                         {messages.map((msg, i) => (
                             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] p-2 rounded-lg text-xs overflow-hidden ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300'}`}>
-                                    <ReactMarkdown 
-                                        className="markdown-preview [&>p]:mb-1 [&>ul]:list-disc [&>ul]:pl-4 [&>ol]:list-decimal [&>ol]:pl-4"
-                                    >
+                                <div className={`max-w-[85%] p-2 rounded-lg text-xs overflow-hidden ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300'} markdown-preview [&>p]:mb-1 [&>ul]:list-disc [&>ul]:pl-4 [&>ol]:list-decimal [&>ol]:pl-4`}>
+                                    <ReactMarkdown>
                                         {msg.text}
                                     </ReactMarkdown>
                                 </div>

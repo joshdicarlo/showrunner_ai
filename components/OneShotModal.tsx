@@ -1,17 +1,18 @@
-
 import React, { useState, useMemo } from 'react';
 import { Modal, Button, Select } from './UI';
 import { OneShotItem } from '../types';
-import { Wand2, Check, User, MapPin, Layout, Clapperboard, Plus, ChevronRight, ChevronDown, CheckCircle, Circle, Play, Layers } from 'lucide-react';
+import { Wand2, Check, User, MapPin, Layout, Clapperboard, Plus, ChevronRight, ChevronDown, CheckCircle, Circle, Play, Layers, Loader2, Search } from 'lucide-react';
 
 interface OneShotModalProps {
     items: OneShotItem[];
     setItems: React.Dispatch<React.SetStateAction<OneShotItem[]>>;
     onClose: () => void;
     onExecute: (config: { count: number, autoAssemble: boolean }) => void;
+    onDiscover: () => void;
+    isLoading: boolean;
 }
 
-export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onClose, onExecute }) => {
+export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onClose, onExecute, onDiscover, isLoading }) => {
     const [genCount, setGenCount] = useState(1);
     const [autoAssemble, setAutoAssemble] = useState(true);
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -20,7 +21,7 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
     React.useEffect(() => {
         const sceneIds = items.filter(i => i.type === 'Scene').map(i => i.id);
         setExpandedIds(new Set(sceneIds));
-    }, []);
+    }, [items]); 
 
     const toggleExpand = (id: string) => {
         setExpandedIds(prev => {
@@ -134,9 +135,9 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                         {/* Auto Generate Toggle */}
                         <button 
                             onClick={() => updateItem(item.id, { autoGenerate: !item.autoGenerate })}
-                            disabled={!item.selected || item.isExisting}
+                            disabled={!item.selected}
                             className={`p-1.5 rounded flex items-center gap-1.5 border transition-all text-[10px] w-24 justify-center
-                                ${!item.selected || item.isExisting ? 'opacity-20 cursor-not-allowed border-transparent' : 
+                                ${!item.selected ? 'opacity-20 cursor-not-allowed border-transparent' : 
                                   item.autoGenerate ? 'bg-blue-900/30 text-blue-300 border-blue-800 shadow-[0_0_10px_rgba(59,130,246,0.2)]' : 'bg-zinc-900 text-zinc-500 border-zinc-700 hover:border-zinc-500'}
                             `}
                             title="Auto-Generate Image"
@@ -213,30 +214,37 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                     </div>
                 </div>
 
-                {/* Tree Content */}
+                {/* Content Area */}
                 <div className="flex-1 overflow-y-auto bg-zinc-900/50">
-                    {castItems.length > 0 && (
+                    {isLoading ? (
+                        <div className="flex flex-col items-center justify-center h-full gap-4">
+                             <Loader2 size={48} className="animate-spin text-blue-500" />
+                             <p className="text-zinc-400 animate-pulse">Analyzing script content...</p>
+                        </div>
+                    ) : items.length > 0 ? (
                         <>
-                            {renderSectionHeader('Cast Members', 'Character')}
-                            {castItems.map(item => renderRow(item))}
-                        </>
-                    )}
-                    
-                    {locationItems.length > 0 && (
-                        <>
-                            {renderSectionHeader('Set Locations', 'Location')}
-                            {locationItems.map(item => renderRow(item))}
-                        </>
-                    )}
+                            {castItems.length > 0 && (
+                                <>
+                                    {renderSectionHeader('Cast Members', 'Character')}
+                                    {castItems.map(item => renderRow(item))}
+                                </>
+                            )}
+                            
+                            {locationItems.length > 0 && (
+                                <>
+                                    {renderSectionHeader('Set Locations', 'Location')}
+                                    {locationItems.map(item => renderRow(item))}
+                                </>
+                            )}
 
-                    {sceneItems.length > 0 && (
-                        <>
-                            {renderSectionHeader('Scenes & Shots', 'Scene')}
-                            {sceneItems.map(item => renderRow(item))}
+                            {sceneItems.length > 0 && (
+                                <>
+                                    {renderSectionHeader('Scenes & Shots', 'Scene')}
+                                    {sceneItems.map(item => renderRow(item))}
+                                </>
+                            )}
                         </>
-                    )}
-                    
-                    {items.length === 0 && (
+                    ) : (
                         <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-2">
                             <Wand2 size={32} className="opacity-20"/>
                             <p>No items discovered. Check your script content.</p>
@@ -247,7 +255,10 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                 {/* Footer */}
                 <div className="p-4 border-t border-zinc-800 bg-zinc-900 flex justify-end gap-2 shrink-0">
                     <Button variant="ghost" onClick={onClose}>Cancel</Button>
-                    <Button onClick={() => onExecute({ count: genCount, autoAssemble })}>
+                    <Button variant="secondary" onClick={onDiscover} disabled={isLoading} icon={Search}>
+                         Discover
+                    </Button>
+                    <Button onClick={() => onExecute({ count: genCount, autoAssemble })} disabled={isLoading || items.length === 0}>
                         <Play size={16} className="fill-current"/> Execute One Shot
                     </Button>
                 </div>

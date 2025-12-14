@@ -264,11 +264,19 @@ export const extractCharactersFromScript = async (scriptText: string): Promise<C
     const ai = createAI();
     try {
         const prompt = `Analyze the following script/story text and extract a list of main characters.
-        Ignore minor background characters with no lines or significant presence.
-        For each character, provide:
-        1. Name
-        2. Description (Physical appearance, age, vibe, personality key traits)
-        3. Role (e.g., Protagonist, Antagonist, Supporting, Mentor)
+        Ignore minor background characters.
+
+        IMPORTANT: The 'description' field MUST be a production-ready Generative Image Prompt.
+        Do not use abstract personality traits like "brave" or "kind" unless paired with a visual indicator.
+        
+        Required Attributes for Description (Must be explicit):
+        1. Gender
+        2. Age (Numerical or clear range)
+        3. Entity Type (e.g. human, robot, creature, alien)
+        4. Body/Build/Weight (e.g. slim, muscular, heavy, frail)
+        5. Defining Physical Traits (skin, hair, facial features, materials)
+        
+        Format Example: "Male 40s Human, heavy build, weathered face with a scar, wearing tattered space flight suit."
 
         Input Text:
         "${scriptText.slice(0, 200000)}" 
@@ -286,7 +294,7 @@ export const extractCharactersFromScript = async (scriptText: string): Promise<C
                             type: Type.OBJECT,
                             properties: {
                                 name: { type: Type.STRING },
-                                description: { type: Type.STRING },
+                                description: { type: Type.STRING, description: "Generative prompt: Gender, Age, Entity, Body, Traits" },
                                 role: { type: Type.STRING }
                             }
                         }
@@ -311,6 +319,7 @@ export const extractLocationsFromScript = async (scriptText: string): Promise<Lo
     try {
         const prompt = `Analyze the following script/story text and extract a list of unique locations/sets.
         Merge similar locations (e.g. "Kitchen" and "John's Kitchen" if they are the same).
+        The description must be a visual generative prompt (Lighting, Architecture, Atmosphere, Era).
         
         Input Text:
         "${scriptText.slice(0, 200000)}" 
@@ -357,7 +366,13 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
         2. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them using the format @CharacterName (e.g. "@Zax walks in") in the description.
         3. Identify the type: "Scene", "Sequence", or "Plot Point".
         4. The Title MUST NOT contain '@' symbols (e.g. use "Zax enters", NOT "@Zax enters").
-        ${includeShots ? '5. For each Scene, also identify a list of "Shots". Shot Titles MUST use a sequential number, e.g. "Shot 1: Wide Establish", "Shot 2: Close Up". Do not use a literal # symbol in the title.' : ''}
+        ${includeShots ? `5. For each Scene, also identify a list of "Shots". 
+           Shot Descriptions MUST be production-ready generative prompts including:
+           - Shot Type (Wide, Close-up)
+           - Lens/Focal Length (e.g. 35mm, 85mm)
+           - Aperture (e.g. f/2.8)
+           - Camera Motion (Static, Dolly, Pan)
+           - Concrete Action using @CharacterName.` : ''}
 
         Input Text:
         "${scriptText.slice(0, 200000)}" 
@@ -376,7 +391,7 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
                     type: Type.OBJECT,
                     properties: {
                         title: { type: Type.STRING, description: "Must start with Shot X (where X is a number)" },
-                        description: { type: Type.STRING },
+                        description: { type: Type.STRING, description: "Generative prompt: Shot type, Lens, Motion, Action" },
                         type: { type: Type.STRING }
                     }
                 }
@@ -415,13 +430,21 @@ export const extractOneShotBreakdown = async (scriptText: string): Promise<{ cha
     try {
         const prompt = `You are a breakdown artist. Analyze the script and extract Characters, Locations, and Scenes with their shots in one pass.
         
-        Requirements:
-        1. Extract MAIN Characters (Name, Description, Role).
-        2. Extract Locations (Name, Description, Type INT/EXT).
-        3. Extract Scenes. For each scene:
-           - Title (No @ symbols).
-           - Description (Use @Name for characters).
-           - Shots: List of shots (Title: "Shot 1: Type", Description).
+        REQUIREMENTS:
+        
+        1. CHARACTERS: 
+           - Description MUST be a Generative Image Prompt.
+           - Include explicitly: Gender, Age, Entity Type (Human/Robot/Alien), Body Build/Weight, Defining Traits.
+           - NO abstract personality words.
+           
+        2. LOCATIONS:
+           - Description MUST be a visual prompt (Architecture, Lighting, Era).
+           
+        3. SCENES & SHOTS:
+           - Scene Description: Detailed action using @CharacterName.
+           - Shot Description: PRODUCTION-READY Generative Prompt.
+             - Must include: Shot Type (Wide/CU), Lens (35mm/85mm), Aperture (f/stop), Camera Motion (Dolly/Static).
+             - Must include: Concrete physical action using @CharacterName.
         
         Input Script:
         "${scriptText.slice(0, 200000)}"
@@ -442,7 +465,7 @@ export const extractOneShotBreakdown = async (scriptText: string): Promise<{ cha
                                     type: Type.OBJECT,
                                     properties: {
                                         name: { type: Type.STRING },
-                                        description: { type: Type.STRING },
+                                        description: { type: Type.STRING, description: "Generative Prompt: Gender, Age, Entity, Build, Traits" },
                                         role: { type: Type.STRING }
                                     }
                                 }
@@ -472,7 +495,7 @@ export const extractOneShotBreakdown = async (scriptText: string): Promise<{ cha
                                                 type: Type.OBJECT,
                                                 properties: {
                                                     title: { type: Type.STRING },
-                                                    description: { type: Type.STRING },
+                                                    description: { type: Type.STRING, description: "Prompt: Shot type, Lens, Aperture, Motion, Action" },
                                                     type: { type: Type.STRING }
                                                 }
                                             }
@@ -501,11 +524,17 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
     try {
         const prompt = `Act as a Cinematographer. Break down the following scene description into a shot list.
         
-        Detailed Requirements:
-        1. For each shot, provide a Title MUST start with the sequential number (e.g., "Shot 1: Wide Establish"). DO NOT use "Shot #:" literal. Use "Shot 1:", "Shot 2:", etc.
-        2. The Title MUST NOT contain '@' symbols (e.g. use "Zax's Revenge", NOT "@Zax's Revenge").
-        3. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them in the description using the format @CharacterName (e.g. "@Zax looks up").
-        4. Type should be "Shot".
+        Detailed Requirements for 'description':
+        1. It must be a production-ready Generative Video Prompt.
+        2. MANDATORY Attributes to include:
+           - Shot Type (e.g. Wide Shot, Medium Shot, Extreme Close-up)
+           - Lens / Focal Length (e.g. 35mm, 50mm, 85mm)
+           - Aperture / f-stop (e.g. f/2.8, f/11)
+           - Camera Motion (e.g. Static, Dolly In, Pan Right, Handheld)
+        3. Describe concrete on-screen physical action.
+        4. If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST reference them using @CharacterName.
+        
+        Title Format: "Shot 1:", "Shot 2:", etc. (No @ in title).
 
         Input Scene:
         "${sceneText}"
@@ -523,7 +552,7 @@ export const extractShotsFromScene = async (sceneText: string, knownCharacters?:
                             type: Type.OBJECT,
                             properties: {
                                 title: { type: Type.STRING },
-                                description: { type: Type.STRING },
+                                description: { type: Type.STRING, description: "Shot Type, Lens, Aperture, Motion, Action" },
                                 type: { type: Type.STRING }
                             }
                         }

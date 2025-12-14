@@ -110,7 +110,7 @@ export const createRenderQueue = (
         subscribe: (l: Listener) => {
             listeners.push(l);
             l([...queue]);
-            return () => listeners = listeners.filter(x => x !== l);
+            return () => { listeners = listeners.filter(x => x !== l); };
         },
         getQueue: () => queue,
         clearCompleted: () => {
