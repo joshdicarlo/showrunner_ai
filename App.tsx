@@ -892,7 +892,7 @@ const App: React.FC = () => {
       const processItem = (item: OneShotItem, parentAssetId?: string) => {
           const dept = item.type === 'Character' ? DepartmentType.CASTING_WARDROBE : 
                        item.type === 'Location' ? DepartmentType.SET_DESIGN :
-                       item.type === 'Scene' ? DepartmentType.STORY : DepartmentType.PRODUCTION;
+                       (item.type === 'Scene' || item.type === 'Shot') ? DepartmentType.STORY : DepartmentType.PRODUCTION;
           
           let assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
           
@@ -916,7 +916,7 @@ const App: React.FC = () => {
                   department: dept,
                   title: item.name,
                   description: item.description,
-                  visualStyle: item.type === 'Character' ? 'Cinematic Portrait' : 'Wide Shot',
+                  visualStyle: item.type === 'Character' ? 'Cinematic' : 'Wide Shot',
                   summary: 'Auto-detected',
                   parentId: parentAssetId,
                   status: 'active'
@@ -1090,7 +1090,7 @@ const App: React.FC = () => {
             department: currentDept,
             title: item.name,
             description: item.description,
-            visualStyle: currentDept === DepartmentType.STORY ? 'Cinematic' : 'Portrait',
+            visualStyle: 'Cinematic',
             summary: 'Auto-detected',
             status: 'active'
         };
