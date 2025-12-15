@@ -2,14 +2,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ProjectAsset, DepartmentType, ProjectSettings } from '../types';
 import { Input, TextArea, Button, Select } from './UI';
-import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace, Settings, Eye, EyeOff, ChevronDown, Frame, XCircle } from 'lucide-react';
+import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace, Settings, Eye, EyeOff, ChevronDown, Frame, XCircle, Code as CodeIcon } from 'lucide-react';
 import { generateSummary } from '../services/geminiService';
+import { StyleSelector } from './StyleSelector';
 
 interface AssetEditorPanelProps {
     asset: ProjectAsset;
     projectAssets?: ProjectAsset[];
     onUpdate: (updatedAsset: ProjectAsset) => void;
-    onGenerateConcepts: (count: number) => void;
+    onGenerateConcepts: (count: number, styleId?: string) => void;
     onGenerateOutline: () => void;
     approvedImages: string[];
     onNavigateToAsset?: (assetId: string) => void;
@@ -17,7 +18,7 @@ interface AssetEditorPanelProps {
     assetThumbnails?: Record<string, string>;
     refinedImages?: string[];
     projectSettings?: ProjectSettings; 
-    onRemoveRef?: (imageUrl: string) => void; // New prop
+    onRemoveRef?: (imageUrl: string) => void; 
 }
 
 export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({ 
@@ -27,7 +28,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     onGenerateConcepts, 
     onGenerateOutline, 
     approvedImages, 
-    onNavigateToAsset,
+    onNavigateToAsset, 
     onGenerateRefSheet,
     assetThumbnails = {},
     refinedImages = [],
@@ -54,11 +55,28 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     // Sync local state when asset changes
     useEffect(() => {
         setTitle(asset.title);
-        setDescription(asset.description);
+        // Auto-format check: if description is single line YAML-like, format it
+        let desc = asset.description || '';
+        
+        // Detect simplified shot keys
+        const hasShotKeys = desc.includes('Action:') || desc.includes('Camera:') || desc.includes('Lighting:');
+        
+        if ((asset.department === DepartmentType.PRODUCTION || hasShotKeys) && !desc.includes('\n')) {
+             const keys = ['Action:', 'Environment_Context:', 'Camera:', 'Lighting:', 'Audio_Cues:', 'Dialogue:', 'Set:'];
+             let formatted = desc;
+             keys.forEach(key => {
+                 // Look for Key that is NOT at start of line
+                 const regex = new RegExp(`(?<!^)\\s+${key}`, 'g');
+                 formatted = formatted.replace(regex, `\n${key}`);
+             });
+             desc = formatted;
+        }
+        
+        setDescription(desc);
         setStyleId(asset.styleId || "");
         setOverrideHidden(asset.overrideHiddenPrompt || false);
         setHiddenPrompt(asset.hiddenPrompt || "");
-    }, [asset.id]);
+    }, [asset.id, asset.description, asset.department]);
 
     useEffect(() => {
         const handleClickOutside = () => {
@@ -73,7 +91,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     const referencedCharacters = useMemo(() => {
         if (!projectAssets || !description) return [];
         // Match @Name using regex
-        const matches = description.match(/@([a-zA-Z0-9_]+)/g);
+        const matches = description.match(/@([a-zA-Z0-9_\-]+)/g);
         if (!matches) return [];
         
         const uniqueNames: string[] = Array.from(new Set(matches.map(m => m.substring(1))));
@@ -99,10 +117,9 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
         onUpdate({ ...asset, description: newDesc });
     };
 
-    const handleStyleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        const newStyleId = e.target.value;
-        setStyleId(newStyleId);
-        onUpdate({ ...asset, styleId: newStyleId });
+    const handleStyleChange = (id: string) => {
+        setStyleId(id);
+        onUpdate({ ...asset, styleId: id });
     };
 
     const toggleOverrideHidden = () => {
@@ -174,18 +191,13 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                 {/* Visual Style Section (One Line) */}
                 <div className="flex items-center justify-between">
                     <label className="text-xs uppercase font-bold text-zinc-500">Visual Style</label>
-                    <div className="relative group">
-                        <select 
-                            value={styleId} 
-                            onChange={handleStyleChange} 
-                            className="appearance-none bg-zinc-950 border border-zinc-700 rounded px-2 py-1 pr-6 text-[10px] font-mono text-zinc-300 focus:outline-none focus:border-blue-500 cursor-pointer hover:bg-zinc-900 w-32 text-right"
-                        >
-                            <option value="">PROJECT DEFAULT</option>
-                            {projectSettings?.styles.map(s => (
-                                <option key={s.id} value={s.id}>@{s.value.toUpperCase()}</option>
-                            ))}
-                        </select>
-                        <ChevronDown size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"/>
+                    <div className="relative group w-32">
+                        <StyleSelector 
+                            selectedId={styleId} 
+                            onChange={handleStyleChange}
+                            projectSettings={projectSettings}
+                            className="w-full justify-between"
+                        />
                     </div>
                 </div>
 
@@ -195,7 +207,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                     <TextArea 
                         value={description} 
                         onChange={handleChangeDesc} 
-                        className="h-48 text-sm leading-relaxed bg-zinc-950 border-zinc-800" 
+                        className="h-64 text-xs leading-relaxed bg-zinc-950 border-zinc-800 font-mono whitespace-pre-wrap" 
                     />
                     <p className="text-[10px] text-zinc-600">
                         Use <strong>@{asset.title}</strong> to inject this description elsewhere.
@@ -347,7 +359,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                         <option value="4">4</option>
                     </Select>
                     <Button 
-                        onClick={() => onGenerateConcepts(conceptCount)} 
+                        onClick={() => onGenerateConcepts(conceptCount, styleId)} 
                         onContextMenu={handleBtnContextMenu}
                         className="flex-1"
                         size="sm"
@@ -370,7 +382,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                     </div>
                     
                     <button 
-                        onClick={() => { onGenerateConcepts(conceptCount); setBtnContextMenu(null); }}
+                        onClick={() => { onGenerateConcepts(conceptCount, styleId); setBtnContextMenu(null); }}
                         className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-200 flex items-center gap-2"
                     >
                         <ImageIcon size={12} /> Generate Concepts

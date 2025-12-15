@@ -9,24 +9,7 @@ import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS, VIDEO_MODELS_OPTIONS, VIDE
 import * as GeminiService from '../services/geminiService';
 import * as FileService from '../services/fileService';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
-
-interface NodeItemProps {
-  node: FlowNode;
-  isSelected: boolean;
-  onSelect: (e: React.MouseEvent, id: string) => void;
-  onDelete: (id: string) => void;
-  onUpdate: (id: string, data: any) => void;
-  onDragStart: (e: React.MouseEvent, id: string) => void;
-  onContextMenu?: (e: React.MouseEvent, id: string) => void;
-  activeAsset?: ProjectAsset;
-  isThumbnail?: boolean;
-  isDragOver?: boolean; 
-  projectAssets?: ProjectAsset[];
-  assetThumbnails?: Record<string, string>;
-  refinedImagesMap?: Record<string, string[]>;
-  approvedImagesMap?: Record<string, string[]>;
-  projectSettings?: ProjectSettings;
-}
+import { StyleSelector } from './StyleSelector';
 
 interface Suggestion {
     id: string;
@@ -37,150 +20,23 @@ interface Suggestion {
     iconClass: string;
 }
 
-// --- Style Selector Component (Portal-based) ---
-const StyleSelector: React.FC<{
-    selectedId?: string;
-    onChange: (id: string) => void;
+interface NodeItemProps {
+    node: FlowNode;
+    isSelected: boolean;
+    onSelect: (e: React.MouseEvent, id: string) => void;
+    onDelete: (id: string) => void;
+    onUpdate: (id: string, data: any) => void;
+    onDragStart: (e: React.MouseEvent, id: string) => void;
+    onContextMenu?: (e: React.MouseEvent, id: string) => void;
+    activeAsset?: ProjectAsset;
+    isThumbnail?: boolean;
+    isDragOver?: boolean;
+    projectAssets?: ProjectAsset[];
+    assetThumbnails?: Record<string, string>;
+    refinedImagesMap?: Record<string, string[]>;
+    approvedImagesMap?: Record<string, string[]>;
     projectSettings?: ProjectSettings;
-}> = ({ selectedId, onChange, projectSettings }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [filter, setFilter] = useState('');
-    const [highlightIndex, setHighlightIndex] = useState(0);
-    const [coords, setCoords] = useState({ top: 0, left: 0, minWidth: 0 });
-    const buttonRef = useRef<HTMLButtonElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
-    const listRef = useRef<HTMLDivElement>(null);
-
-    // Prepare Options
-    const options = useMemo(() => {
-        const all = [
-            { id: "", label: "Default Style", isSystem: true },
-            { id: "none", label: "No Style", isSystem: true },
-            ...(projectSettings?.styles || [])
-        ];
-        return all.filter(opt => opt.label.toLowerCase().includes(filter.toLowerCase()));
-    }, [projectSettings?.styles, filter]);
-
-    const getLabel = (id?: string) => {
-        if (!id) return "Default Style";
-        if (id === 'none') return "No Style";
-        return projectSettings?.styles.find(s => s.id === id)?.label || "Unknown Style";
-    };
-
-    const handleOpen = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (buttonRef.current) {
-            const rect = buttonRef.current.getBoundingClientRect();
-            setCoords({
-                top: rect.bottom + window.scrollY + 4,
-                left: rect.left + window.scrollX,
-                minWidth: Math.max(rect.width, 200)
-            });
-        }
-        setFilter('');
-        setHighlightIndex(0);
-        setIsOpen(!isOpen);
-    };
-
-    const handleSelect = (id: string) => {
-        onChange(id);
-        setIsOpen(false);
-    };
-
-    // Auto-focus input on open
-    useEffect(() => {
-        if (isOpen && inputRef.current) {
-            inputRef.current.focus();
-        }
-    }, [isOpen]);
-
-    // Close on outside click
-    useEffect(() => {
-        if (!isOpen) return;
-        const handleClick = (e: MouseEvent) => {
-            if (buttonRef.current && buttonRef.current.contains(e.target as Node)) return;
-            if (listRef.current && listRef.current.contains(e.target as Node)) return;
-            setIsOpen(false);
-        };
-        window.addEventListener('mousedown', handleClick);
-        return () => window.removeEventListener('mousedown', handleClick);
-    }, [isOpen]);
-
-    // Keyboard Nav
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (!isOpen) return;
-        
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            setHighlightIndex(prev => (prev + 1) % options.length);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setHighlightIndex(prev => (prev - 1 + options.length) % options.length);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (options[highlightIndex]) {
-                handleSelect(options[highlightIndex].id);
-            }
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            setIsOpen(false);
-        }
-    };
-
-    return (
-        <>
-            <button 
-                ref={buttonRef}
-                onClick={handleOpen}
-                className="text-[10px] font-bold text-zinc-400 hover:text-white flex items-center gap-1 transition-colors px-1 py-0.5 -ml-1 rounded hover:bg-zinc-800"
-                title="Select Visual Style"
-            >
-                <Palette size={10} />
-                {getLabel(selectedId)}
-                <ChevronDown size={10} className={`transform transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {isOpen && createPortal(
-                <div 
-                    ref={listRef}
-                    className="fixed z-[9999] bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-75"
-                    style={{ top: coords.top, left: coords.left, minWidth: coords.minWidth, width: '220px' }}
-                >
-                    <div className="p-2 border-b border-zinc-800 flex items-center gap-2">
-                        <Search size={12} className="text-zinc-500" />
-                        <input
-                            ref={inputRef}
-                            value={filter}
-                            onChange={e => { setFilter(e.target.value); setHighlightIndex(0); }}
-                            onKeyDown={handleKeyDown}
-                            placeholder="Filter styles..."
-                            className="bg-transparent text-xs text-white placeholder-zinc-600 focus:outline-none w-full"
-                        />
-                    </div>
-                    <div className="max-h-60 overflow-y-auto py-1">
-                        {options.map((opt, idx) => (
-                            <button
-                                key={opt.id}
-                                onClick={() => handleSelect(opt.id)}
-                                onMouseEnter={() => setHighlightIndex(idx)}
-                                className={`w-full text-left px-3 py-2 text-xs flex items-center gap-2 ${
-                                    idx === highlightIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'
-                                } ${selectedId === opt.id ? 'font-bold' : ''}`}
-                            >
-                                <span className={`w-1.5 h-1.5 rounded-full ${selectedId === opt.id ? 'bg-white' : 'bg-transparent'}`} />
-                                {opt.label}
-                            </button>
-                        ))}
-                        {options.length === 0 && (
-                            <div className="px-3 py-2 text-xs text-zinc-500 italic text-center">No styles found</div>
-                        )}
-                    </div>
-                </div>,
-                document.body
-            )}
-        </>
-    );
-};
+}
 
 // --- Highlighted Input Component ---
 const HighlightedInput: React.FC<{
@@ -284,8 +140,8 @@ const HighlightedInput: React.FC<{
     // --- Auto Complete Logic ---
     const getActiveToken = (text: string, cursor: number) => {
         const textBeforeCursor = text.slice(0, cursor);
-        // Include ':' in the token match for styles (e.g. @style:cinematic)
-        const match = textBeforeCursor.match(/@([\w\.:]*)$/);
+        // FIXED: Regex now includes hyphens to support names like R-7
+        const match = textBeforeCursor.match(/@([\w\.:\-]*)$/);
         return match ? match[1] : null;
     };
 
@@ -334,9 +190,8 @@ const HighlightedInput: React.FC<{
             }
             
             if (suggestions.length > 0) {
-                // Sort? Maybe prioritize exact starts
                 suggestions.sort((a, b) => a.label.localeCompare(b.label));
-                setFilteredSuggestions(suggestions.slice(0, 15)); // Increased limit
+                setFilteredSuggestions(suggestions.slice(0, 15)); 
                 setShowSuggestions(true);
                 setSelectedIndex(0);
                 return;
@@ -507,8 +362,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   const [suggestion, setSuggestion] = useState('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // --- Handlers ---
-
+  // ... (Standard Handlers from existing file) ...
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isExpanded) return;
     const target = e.target as HTMLElement;
@@ -838,6 +692,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const renderContent = (expanded = false) => {
+    // ... (This function uses NodeItemProps, handled above in types and imports)
     switch (node.type) {
       case NodeType.GROUP:
           return (
@@ -1218,7 +1073,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   };
 
   const getHeaderColor = () => {
-      // ... (existing)
       if (node.type === NodeType.GROUP) return "bg-zinc-800 border-zinc-700 text-zinc-400";
       if (node.data.status === 'approved') return "bg-green-900/40 border-green-800 text-green-200";
       if (node.data.status === 'review') return "bg-yellow-900/40 border-yellow-800 text-yellow-200";
@@ -1235,7 +1089,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const getBorderColor = () => {
-      // ... (existing)
       if (isDragOver) return "ring-2 ring-blue-400 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.5)]";
       if (isSelected) return "ring-2 ring-blue-500 border-transparent";
       if (node.type === NodeType.GROUP) return "border-zinc-700 border-dashed";
@@ -1246,7 +1099,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const getTitle = () => {
-      // ... (existing)
       if (node.type === NodeType.GROUP) return node.data.label || "Group";
       switch(node.type) {
           case NodeType.TEXT_INPUT: return "Script / Note";

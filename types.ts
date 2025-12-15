@@ -1,5 +1,4 @@
 
-
 export enum DepartmentType {
   WRITERS_ROOM = "Writers Room",
   CASTING_WARDROBE = "Casting & Wardrobe",
@@ -185,6 +184,7 @@ export interface OneShotItem {
     type: 'Character' | 'Location' | 'Scene' | 'Shot';
     name: string;
     description: string;
+    summary?: string; // AI generated summary for header
     parentId?: string; // For Shots belonging to Scenes
     selected: boolean;
     autoGenerate: boolean;

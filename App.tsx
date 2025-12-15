@@ -25,6 +25,7 @@ type View = 'dashboard' | 'project';
 interface DetectedItem {
     name: string;
     description: string;
+    summary?: string; // Added summary field
     type: string;
     selected: boolean;
     isDuplicate?: boolean;
@@ -228,7 +229,7 @@ const App: React.FC = () => {
   const activeAsset = activeProject?.assets.find(a => a.id === currentAssetId);
   const activeDeptConfig = DEPARTMENTS.find(d => d.id === currentDept);
 
-  // --- Editorial Sequence Resolution ---
+  // ... (Editorial State and Script Context memos remain the same) ...
   const editorialState = useMemo(() => {
       if (!activeAsset || currentDept !== DepartmentType.EDITORIAL) return { sequence: null, filterId: null };
       
@@ -242,9 +243,6 @@ const App: React.FC = () => {
       return { sequence: activeAsset, filterId: null };
   }, [activeAsset, currentDept, activeProject?.assets]);
 
-
-  // --- Derived State: Script Context for Chat ---
-  // Aggregates all text from Writers Room nodes to give context to the ChatBot
   const scriptContext = useMemo(() => {
       if (!activeProject) return "";
       const scriptNodes = activeProject.nodes.filter(n => 
@@ -257,8 +255,7 @@ const App: React.FC = () => {
       ).join('\n\n');
   }, [activeProject?.nodes]);
 
-  // --- Effective Thumbnails ---
-  // Memoized map of AssetID -> ImageURL (from Latest Approved Node OR Asset Prop)
+  // ... (Thumbnails and Image Map memos remain the same) ...
   const assetThumbnails = useMemo(() => {
       if (!activeProject) return {};
       const map: Record<string, string> = {};
@@ -285,8 +282,6 @@ const App: React.FC = () => {
       return map;
   }, [activeProject?.nodes, activeProject?.assets]);
   
-  // --- Refined Images Map ---
-  // Memoized map of AssetID -> List of Approved Refinement Image URLs
   const refinedImagesMap = useMemo(() => {
       if (!activeProject) return {};
       const map: Record<string, string[]> = {};
@@ -299,7 +294,6 @@ const App: React.FC = () => {
       return map;
   }, [activeProject?.nodes, activeProject?.assets]);
 
-  // --- Approved Images Map (All approved, used as fallback for reference) ---
   const approvedImagesMap = useMemo(() => {
       if (!activeProject) return {};
       const map: Record<string, string[]> = {};
@@ -313,7 +307,7 @@ const App: React.FC = () => {
   }, [activeProject?.nodes, activeProject?.assets]);
 
 
-  // --- Drive Handlers ---
+  // ... (Drive Handlers remain the same) ...
   const handleConnectDrive = async () => {
       try {
           await GoogleDriveService.signIn();
@@ -355,7 +349,7 @@ const App: React.FC = () => {
   }, [activeProject?.assets, isDriveConnected, syncToDrive]);
 
 
-  // --- Project Handlers ---
+  // ... (Project Handlers remain the same) ...
   const resetProjectModal = () => {
       setNewProjectTitle('');
       setCreationMode('blank');
@@ -710,8 +704,8 @@ const App: React.FC = () => {
   };
 
 
-  // --- Generation Workflows ---
-  const handleGenerateConcepts = (count: number) => {
+  // ... (Generation Workflows remain the same) ...
+  const handleGenerateConcepts = (count: number, styleId?: string) => {
     if (!activeAsset || !currentProjectId || !activeProject) return;
     
     // 1. Determine Bounding Box
@@ -781,7 +775,8 @@ const App: React.FC = () => {
                 prompt: defaultPrompt,
                 aspectRatio: defaultRatio,
                 status: 'generating',
-                tag: 'concept' 
+                tag: 'concept',
+                styleId: styleId // Apply selected style
             }
         });
     }
@@ -897,7 +892,7 @@ const App: React.FC = () => {
           
           // Map to internal Item structure - Default auto-gen off
           rawData.characters.forEach((c: any) => newItems.push({ 
-              id: `char-${Math.random()}`, type: 'Character', name: c.name, description: c.description, selected: true, autoGenerate: true, autoApprove: false 
+              id: `char-${Math.random()}`, type: 'Character', name: c.name, description: c.description, summary: c.summary, selected: true, autoGenerate: true, autoApprove: false 
           }));
           rawData.locations.forEach((l: any) => newItems.push({ 
               id: `loc-${Math.random()}`, type: 'Location', name: l.name, description: l.description, selected: true, autoGenerate: true, autoApprove: false 
@@ -968,7 +963,7 @@ const App: React.FC = () => {
                   title: item.name,
                   description: item.description,
                   visualStyle: item.type === 'Character' ? 'Cinematic' : 'Wide Shot',
-                  summary: 'Auto-detected',
+                  summary: item.summary || 'Auto-detected', // Use extracted summary
                   parentId: parentAssetId,
                   status: 'active'
               };
@@ -1031,7 +1026,7 @@ const App: React.FC = () => {
       }
   }
 
-  // --- Handlers for Missing Functions ---
+  // ... (Rest of the handlers remain the same) ...
   const handleNodesChange = useCallback((value: React.SetStateAction<FlowNode[]>) => {
       if (!currentProjectId) return;
       setProjects(prev => prev.map(p => {
@@ -1106,6 +1101,7 @@ const App: React.FC = () => {
         const items: DetectedItem[] = results.map((r: any) => ({
              name: r.name || r.title,
              description: r.description,
+             summary: r.summary, // Captured summary
              type: r.type || r.role || analysisType, // Fallback
              selected: true,
              children: r.shots ? r.shots.map((s:any) => ({
@@ -1142,7 +1138,7 @@ const App: React.FC = () => {
             title: item.name,
             description: item.description,
             visualStyle: 'Cinematic',
-            summary: 'Auto-detected',
+            summary: item.summary || 'Auto-detected', // Use detected summary
             status: 'active'
         };
         newAssets.push(asset);
@@ -1625,16 +1621,16 @@ const App: React.FC = () => {
         <div className="flex-1 flex flex-col relative min-w-0">
              {/* Sub-Header */}
              <div className="h-14 border-b border-border bg-surface flex items-center justify-between px-6 shrink-0 z-20">
-                 <div className="flex items-center gap-4 min-w-0">
-                     <h2 className="font-bold text-zinc-100 truncate">{activeAsset ? activeAsset.title : "General"}</h2>
+                 <div className="flex items-center gap-4 min-w-0 flex-1">
+                     <h2 className="font-bold text-zinc-100 truncate shrink-0">{activeAsset ? activeAsset.title : "General"}</h2>
                      {activeAsset && (
-                         <span className="text-xs text-zinc-500 bg-zinc-900 px-2 py-1 rounded border border-zinc-800 max-w-[200px] truncate" title={activeAsset.summary}>
+                         <span className="text-xs text-zinc-500 bg-zinc-900 px-2 py-1 rounded border border-zinc-800 truncate min-w-0 flex-1" title={activeAsset.summary}>
                              {activeAsset.summary || "No summary"}
                          </span>
                      )}
                  </div>
                  
-                 <div className="flex items-center gap-3">
+                 <div className="flex items-center gap-3 shrink-0 ml-4">
                      {/* Render Queue Manual Trigger */}
                      {renderQueue.length > 0 && (
                          <button 

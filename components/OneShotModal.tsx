@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { Modal, Button, Select } from './UI';
 import { OneShotItem } from '../types';
@@ -40,7 +41,6 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                 return list.map(item => {
                     if (item.id === id) {
                         const updated = { ...item, ...updates };
-                        // If deselecting parent, handle logic if needed
                         return updated;
                     }
                     if (item.children) {
@@ -125,7 +125,9 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                                 <span className={`text-sm font-medium truncate ${item.selected ? 'text-zinc-200' : 'text-zinc-500'}`}>{item.name}</span>
                                 {item.isExisting && <span className="text-[9px] bg-zinc-800 text-zinc-500 px-1.5 rounded border border-zinc-700">Existing</span>}
                             </div>
-                            <div className="text-[10px] text-zinc-500 truncate max-w-[300px]">{item.description}</div>
+                            <div className="text-[10px] text-zinc-500 truncate max-w-[300px]">
+                                {item.summary || item.description}
+                            </div>
                         </div>
                     </div>
 

@@ -104,17 +104,22 @@ export const resolvePrompt = (
                 for (const child of children) {
                     const compoundKey = `@${asset.title}.${child.title}`;
                     const safeKey = compoundKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const compoundRegex = new RegExp(`(^|\\s)${safeKey}\\b`, 'gi');
+                    
+                    // Allow match if at end of string ($) or followed by non-word char (excluding common punctuation used in names if any)
+                    const compoundRegex = new RegExp(`(^|\\s)${safeKey}(?![a-zA-Z0-9_])`, 'gi');
 
                     if (compoundRegex.test(resolved)) {
                         matchedAssets.add(asset);
                         matchedAssets.add(child);
 
-                        let replacement = asset.description;
+                        let replacement = "";
+                        
                         if (child.department === DepartmentType.CASTING_WARDROBE && asset.department === DepartmentType.CASTING_WARDROBE) {
-                             replacement += `, wearing ${child.description}`;
+                             // Casting Logic: Character + Outfit
+                             replacement = `${asset.title} (${asset.description}), wearing ${child.title} (${child.description})`;
                         } else {
-                             replacement += `. ${child.description}`;
+                             // General Logic (Sequence + Shot): Use Child Description Only
+                             replacement = child.description; 
                         }
                         
                         const safeReplacement = replacement.replace(/\$/g, '$$$$');
@@ -130,12 +135,20 @@ export const resolvePrompt = (
 
                 // Standard Syntax (@Asset)
                 const safeTitle = asset.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const standardRegex = new RegExp(`(^|\\s)@${safeTitle}\\b`, 'gi');
+                
+                // Use negative lookahead for alphanumeric to act as boundary, supporting hyphens in names correctly
+                // e.g. @R-7 should match, but @R-70 should not match @R-7
+                const standardRegex = new RegExp(`(^|\\s)@${safeTitle}(?![a-zA-Z0-9_])`, 'gi');
 
                 if (standardRegex.test(resolved)) {
                     matchedAssets.add(asset);
 
                     let replacement = asset.description;
+                    
+                    // Fix: Ensure Character formatting includes Name and Parens
+                    if (asset.department === DepartmentType.CASTING_WARDROBE) {
+                        replacement = `${asset.title} (${asset.description})`;
+                    }
                     
                     const safeReplacement = replacement.replace(/\$/g, '$$$$');
                     const before = resolved;
@@ -159,12 +172,21 @@ export const resolvePrompt = (
                  parentAsset = projectAssets.find(p => p.id === activeAsset.parentId);
                  if (parentAsset) {
                      parentDesc = parentAsset.description;
+                     if (parentAsset.department === DepartmentType.CASTING_WARDROBE) {
+                         parentDesc = `${parentAsset.title} (${parentAsset.description})`;
+                     }
                  }
              }
 
              let replacement = activeAsset.description;
+             // Fix: Format Active Character
+             if (activeAsset.department === DepartmentType.CASTING_WARDROBE) {
+                 replacement = `${activeAsset.title} (${activeAsset.description})`;
+             }
+
              if (parentAsset && activeAsset.department === DepartmentType.CASTING_WARDROBE) {
-                 replacement = `${parentAsset.description}, wearing ${activeAsset.description}`;
+                 // Casting Context: Parent is Character, Active is Outfit
+                 replacement = `${parentAsset.title} (${parentAsset.description}), wearing ${activeAsset.title} (${activeAsset.description})`;
              }
 
              const safeReplacement = replacement.replace(/\$/g, '$$$$');
