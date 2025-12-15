@@ -163,7 +163,8 @@ export interface RenderTask {
     type: 'image' | 'video';
     prompt: string;
     assetId: string;
-    status: 'pending' | 'processing' | 'completed' | 'failed';
+    // Added 'waiting' status for dependency management
+    status: 'pending' | 'processing' | 'completed' | 'failed' | 'waiting';
     result?: string;
     error?: string;
     config?: {
@@ -176,6 +177,12 @@ export interface RenderTask {
         styleId?: string;
     };
     submittedPrompt?: string; // The resolved prompt used for generation
+    
+    // Batch & Dependency Fields
+    batchId?: string; // Group ID
+    batchLabel?: string; // Human readable group label
+    waitingOnBatchId?: string; // Dependency ID
+    
     onComplete?: (result: string, task: RenderTask) => void;
 }
 

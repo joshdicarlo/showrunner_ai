@@ -108,7 +108,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
     defaultStyleId: 'style-cinematic',
     styles: DEFAULT_STYLES,
     assetConfigs: {
-        [DepartmentType.CASTING_WARDROBE]: { hiddenPrompt: "full body shot, neutral background, consistent lighting" },
+        [DepartmentType.CASTING_WARDROBE]: { hiddenPrompt: "framing: wide angle, full-body" },
         [DepartmentType.SET_DESIGN]: { hiddenPrompt: "wide shot, establishing shot, detailed environment, architectural visualization" },
         [DepartmentType.PRODUCTION]: { hiddenPrompt: "" }
     }

@@ -16,7 +16,7 @@ interface AIStudioWindow {
 const SHOT_PROMPT_TEMPLATE = `
 ### SHOT PROMPT TEMPLATE (MANDATORY STRUCTURE)
 
-Action: [What is happening? Rule: The FIRST mention of ANY character in this shot must use @Name. Subsequent mentions of the same character must use just Name.]
+Action: [What is happening? Rule: You MUST use the @Character syntax for the FIRST mention of ANY known character in this specific shot. Subsequent mentions in the same shot must use just the Name.]
 Environment_Context: [Where are they? Example: At dawn, with floating islands in the background.]
 Camera: [Shot type, angle, movement, style. Example: Aerial shot, cinematic style, 35mm.]
 Lighting: [Mood, time of day, atmosphere. Example: Dramatic lighting, epic mood, ethereal lights.]
@@ -26,11 +26,12 @@ Set: [The primary @Set reference. Example: @Mist_Forest_Set]
 
 IMPORTANT SYNTAX RULES:
 1. KEYS (e.g. Action) must NEVER contain '@'.
-2. CHARACTERS: 
+2. CHARACTERS (STRICT ENFORCEMENT): 
    - Scan the scene for ALL characters present.
    - For EACH character, find their FIRST occurrence in any field (Action, Dialogue, etc).
-   - Prefix ONLY that FIRST occurrence with '@'.
-   - Do NOT use '@' for any subsequent mentions of that same character.
+   - You MUST prefix that FIRST occurrence with '@' (e.g., "@Zax").
+   - Do NOT use '@' for any subsequent mentions of that same character in the same shot.
+   - Failure to use '@' on the first mention will break the visualization pipeline.
 `;
 
 const CHARACTER_PROMPT_TEMPLATE = `
@@ -562,368 +563,195 @@ export const extractOneShotBreakdown = async (scriptText: string): Promise<{ cha
 }
 
 /**
- * Extract Shots from a Scene
+ * Image Generation (Imagen / Gemini)
  */
-export const extractShotsFromScene = async (sceneText: string, knownCharacters?: string[]): Promise<StoryElement[]> => {
+export const generateImage = async (
+    prompt: string,
+    aspectRatio: string = "16:9",
+    model: string = MODELS.IMAGE_GEN,
+    referenceImages: string[] = []
+): Promise<string> => {
     const ai = createAI();
     try {
-        const prompt = `Act as a Cinematographer. Break down the following scene description into a shot list.
-        
-        Detailed Requirements for 'description':
-        1. It MUST use the following MANDATORY YAML structure exactly:
-        
-        ${SHOT_PROMPT_TEMPLATE}
-
-        2. Best Practices:
-           - Specificity: Use detailed adjectives (e.g. "massive, rusted cargo ship").
-           - Framing: Describe only elements visible within the frame.
-           - Positive Language: Favor "include" instructions.
-           - Length Constraint: Aim for 100–150 words total.
-        
-        3. Character Reference Rules:
-           - If you identify characters from this list: [${knownCharacters?.join(', ')}], you MUST use @CharacterName syntax.
-           - CRITICAL: For EACH character present, prefix their name with '@' ONLY for their FIRST mention in the shot description.
-           - CRITICAL: For subsequent mentions of the same character in that shot, use just "CharacterName" (no @).
-           - CRITICAL: NEVER use @CharacterName in the YAML KEYS (left side). Only in values.
-        
-        Title Format: "Shot 1:", "Shot 2:", etc. (No @ in title).
-
-        Input Scene:
-        "${sceneText}"
-        `;
-
-        const response = await retryWithBackoff(async () => {
-            return await ai.models.generateContent({
-                model: MODELS.TEXT_FAST,
-                contents: prompt,
+        if (model.includes('imagen')) {
+             const response = await ai.models.generateImages({
+                model,
+                prompt,
                 config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.ARRAY,
-                        items: {
-                            type: Type.OBJECT,
-                            properties: {
-                                title: { type: Type.STRING },
-                                description: { type: Type.STRING, description: "Structured YAML Prompt" },
-                                type: { type: Type.STRING }
-                            }
-                        }
-                    }
+                    numberOfImages: 1,
+                    aspectRatio: aspectRatio,
+                    outputMimeType: 'image/jpeg'
                 }
             });
-        });
+            const b64 = response.generatedImages?.[0]?.image?.imageBytes;
+            return b64 ? `data:image/jpeg;base64,${b64}` : "";
+        } else {
+            // Gemini Image Gen
+            const parts: any[] = [];
+            referenceImages.forEach(img => {
+                const match = img.match(/^data:(.+);base64,(.+)$/);
+                if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+            });
+            parts.push({ text: prompt });
 
-        return JSON.parse(response.text || "[]");
+            const response = await ai.models.generateContent({
+                model,
+                contents: { parts },
+                config: {
+                    imageConfig: {
+                         aspectRatio: aspectRatio,
+                         imageSize: model.includes('pro') ? "2K" : "1K"
+                     }
+                }
+            });
+            
+            // Extract from parts
+            if (response.candidates?.[0]?.content?.parts) {
+                for (const part of response.candidates[0].content.parts) {
+                    if (part.inlineData) {
+                        return `data:image/png;base64,${part.inlineData.data}`;
+                    }
+                }
+            }
+            return "";
+        }
     } catch (e) {
-        console.error("Shot Extraction Error", e);
-        return [];
+        console.error("Image Gen Error", e);
+        throw e;
     }
 }
 
-
 /**
- * Image Generation (Supports Gemini 3 Pro, Flash, and Imagen)
+ * Image Editing (Nano Banana)
  */
-export const generateImage = async (
-  prompt: string,
-  aspectRatio: string = "16:9",
-  model: string = MODELS.IMAGE_GEN,
-  referenceImages?: string[] // Optional Array of Base64 or URL
-): Promise<string> => {
-  
-  const win = window as unknown as AIStudioWindow;
-  
-  // Initial API Key Check
-  if (win.aistudio) {
-     const hasKey = await win.aistudio.hasSelectedApiKey();
-     if (!hasKey) {
-         await win.aistudio.openSelectKey();
-     }
-  }
+export const editImage = async (imageBase64: string, prompt: string): Promise<string> => {
+    const ai = createAI();
+    try {
+        const match = imageBase64.match(/^data:(.+);base64,(.+)$/);
+        if (!match) throw new Error("Invalid Image Data");
 
-  const makeRequest = async () => {
-      const ai = createAI();
-      
-      // IMAGEN 4 Routing
-      if (model.includes('imagen')) {
-           // Imagen doesn't support 'referenceImages' in the same way as Gemini multimodal
-           // So we ignore it here or could implement a different endpoint if available.
-           const response = await ai.models.generateImages({
-                model: model,
-                prompt: prompt,
-                config: {
-                    numberOfImages: 1,
-                    outputMimeType: 'image/jpeg',
-                    aspectRatio: aspectRatio,
-                }
-           });
-           const base64EncodeString = response.generatedImages?.[0]?.image?.imageBytes;
-           if (base64EncodeString) {
-               return `data:image/jpeg;base64,${base64EncodeString}`;
-           }
-           throw new Error("No image generated from Imagen");
-      } 
-      
-      // GEMINI Routing
-      else {
-          // Construct config based on model capabilities
-          const imageConfig: any = {
-              aspectRatio: aspectRatio,
-          };
-          
-          const config: any = {
-              imageConfig: imageConfig
-          };
-
-          // Only add imageSize for the Pro model (Nano Banana does not support it)
-          if (model === 'gemini-3-pro-image-preview') {
-              imageConfig.imageSize = "1K";
-          }
-          
-          // Force IMAGE modality for Flash Image to prevent chatty responses
-          if (model === 'gemini-2.5-flash-image') {
-              config.responseModalities = [Modality.IMAGE];
-          }
-
-          // Build Parts
-          const parts: any[] = [];
-          
-          // Add Reference Images if provided (and valid)
-          if (referenceImages && referenceImages.length > 0) {
-              referenceImages.forEach(img => {
-                  const cleanBase64 = img.includes(',') ? img.split(',')[1] : img;
-                  // Detect MIME or default to png
-                  let mimeType = "image/png";
-                  if (img.startsWith("data:image/jpeg")) mimeType = "image/jpeg";
-                  if (img.startsWith("data:image/webp")) mimeType = "image/webp";
-
-                  parts.push({
-                      inlineData: {
-                          mimeType: mimeType,
-                          data: cleanBase64
-                      }
-                  });
-              });
-          }
-
-          parts.push({ text: prompt });
-
-          const response = await ai.models.generateContent({
-            model: model,
+        const response = await ai.models.generateContent({
+            model: MODELS.IMAGE_EDIT,
             contents: {
-              parts: parts
-            },
-            config: config
-          });
-
-          const responseParts = response.candidates?.[0]?.content?.parts;
-          if (responseParts) {
-              for (const part of responseParts) {
-                  if (part.inlineData && part.inlineData.data) {
-                       return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-                  }
-              }
-              
-              // Fallback: Look for refusal text to provide better error info
-              const textPart = responseParts.find(p => p.text);
-              if (textPart?.text) {
-                  // Clean up error message for UI
-                  let msg = textPart.text;
-                  if (msg.length < 200 && (msg.toLowerCase().includes("here is") || msg.toLowerCase().includes("updated image"))) {
-                       msg = `Model generated text instead of image: "${msg}". Retrying...`;
-                  }
-                  throw new Error(`Generation Error: ${msg}`);
-              }
-          }
-          throw new Error("No image generated from Gemini (Empty response)");
-      }
-  };
-
-  try {
-    return await makeRequest();
-  } catch (e: any) {
-    console.error("Image Gen Error", e);
-    // Retry on Permission Denied (403) or Not Found (404) by prompting for key
-    if ((e.status === 403 || e.status === 404 || e.message?.includes('PERMISSION_DENIED')) && win.aistudio) {
-        console.log("Permission denied. Re-prompting for API Key...");
-        await win.aistudio.openSelectKey();
-        return await makeRequest();
+                parts: [
+                    { inlineData: { mimeType: match[1], data: match[2] } },
+                    { text: prompt }
+                ]
+            }
+        });
+        
+        if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) {
+                    return `data:image/png;base64,${part.inlineData.data}`;
+                }
+            }
+        }
+        return "";
+    } catch (e) {
+        console.error("Image Edit Error", e);
+        throw e;
     }
-    throw e;
-  }
-};
+}
 
 /**
- * Image Editing (Nano Banana / Gemini 2.5 Flash Image)
- */
-export const editImage = async (
-  imageBase64: string,
-  prompt: string
-): Promise<string> => {
-  const ai = createAI();
-  // Strip header if present for the API call
-  const cleanBase64 = imageBase64.split(",")[1] || imageBase64;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: MODELS.IMAGE_EDIT, // Nano Banana
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              data: cleanBase64,
-              mimeType: "image/png", // Assuming PNG/JPEG compatibility
-            },
-          },
-          {
-            text: prompt,
-          },
-        ],
-      },
-      config: {
-        responseModalities: [Modality.IMAGE],
-      },
-    });
-
-    const part = response.candidates?.[0]?.content?.parts?.[0];
-    if (part && part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
-    }
-    throw new Error("No edited image returned");
-  } catch (e) {
-    console.error("Image Edit Error", e);
-    throw e;
-  }
-};
-
-/**
- * Video Generation (Veo 3.1)
+ * Video Generation (Veo)
  */
 export const generateVideo = async (
-  prompt: string,
-  aspectRatio: "16:9" | "9:16" = "16:9",
-  imageInput?: string, // Start Frame
-  model: string = MODELS.VIDEO_FAST,
-  duration?: string | number,
-  withAudio?: boolean,
-  lastFrameInput?: string, // End Frame (optional)
-  onProgress?: (msg: string) => void
+    prompt: string,
+    aspectRatio: "16:9" | "9:16",
+    imageBase64: string | undefined,
+    model: string,
+    duration: string = "5",
+    withAudio: boolean = false,
+    lastFrameImageBase64?: string,
+    onProgress?: (msg: string) => void
 ): Promise<string> => {
+    const ai = createAI();
     
-  const win = window as unknown as AIStudioWindow;
-  if (win.aistudio) {
-     const hasKey = await win.aistudio.hasSelectedApiKey();
-     if (!hasKey) {
-         await win.aistudio.openSelectKey();
-     }
-  }
+    const req: any = {
+        model,
+        prompt,
+        config: {
+            numberOfVideos: 1,
+            resolution: '720p',
+            aspectRatio
+        }
+    };
 
-  const makeRequest = async () => {
-      const ai = createAI(); 
-      let operation;
-
-      // Determine Resolution based on Duration rules
-      // Veo typically requires 8s for 1080p, otherwise 720p is safer for shorter clips
-      let resolution = '1080p';
-      const durationVal = duration ? (typeof duration === 'string' ? parseInt(duration) : duration) : undefined;
-      
-      if (durationVal && durationVal < 8) {
-          resolution = '720p';
-      }
-      
-      const commonConfig: any = {
-          numberOfVideos: 1,
-          resolution: resolution,
-          aspectRatio: aspectRatio
-      };
-
-      // Map prompt/config based on user input for duration/audio
-      if (duration) {
-          commonConfig.durationSeconds = durationVal;
-      }
-      
-      // Handle Last Frame (Seamless loop capability)
-      if (lastFrameInput) {
-          const cleanLast = lastFrameInput.split(",")[1] || lastFrameInput;
-          commonConfig.lastFrame = {
-              imageBytes: cleanLast,
-              mimeType: 'image/png'
-          };
-      }
-
-      if (imageInput) {
-          const cleanBase64 = imageInput.split(",")[1] || imageInput;
-          operation = await ai.models.generateVideos({
-              model: model,
-              prompt: prompt || "Animate this image",
-              image: {
-                  imageBytes: cleanBase64,
-                  mimeType: 'image/png' 
-              },
-              config: commonConfig
-          });
-      } else {
-          operation = await ai.models.generateVideos({
-              model: model,
-              prompt: prompt,
-              config: commonConfig
-          });
-      }
-      
-      if (onProgress) onProgress("Generation started...");
-
-      // Polling
-      let attempts = 0;
-      while (!operation.done) {
-          await new Promise((resolve) => setTimeout(resolve, 5000));
-          operation = await ai.operations.getVideosOperation({ operation });
-          
-          attempts++;
-          if (onProgress) {
-             // Check metadata if available, otherwise just count dots
-             const dots = ".".repeat((attempts % 4) + 1);
-             const status = operation.metadata?.state || "PROCESSING";
-             onProgress(`${status}${dots}`);
-          }
-      }
-      
-      if (onProgress) onProgress("Finalizing...");
-
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (!downloadLink) throw new Error("No video URI returned");
-
-      // Fetch actual bytes
-      const res = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-      const blob = await res.blob();
-      return URL.createObjectURL(blob);
-  };
-
-  try {
-      return await makeRequest();
-  } catch (e: any) {
-    console.error("Video Gen Error", e);
-    if ((e.status === 403 || e.status === 404 || e.message?.includes('PERMISSION_DENIED')) && win.aistudio) {
-        console.log("Permission denied. Re-prompting for API Key...");
-        await win.aistudio.openSelectKey();
-        return await makeRequest();
+    if (imageBase64) {
+        const match = imageBase64.match(/^data:(.+);base64,(.+)$/);
+        if (match) req.image = { mimeType: match[1], imageBytes: match[2] };
     }
-    throw e;
-  }
-};
+    
+    if (lastFrameImageBase64) {
+        const match = lastFrameImageBase64.match(/^data:(.+);base64,(.+)$/);
+        if (match) req.config.lastFrame = { mimeType: match[1], imageBytes: match[2] };
+    }
+
+    try {
+        if (onProgress) onProgress("Submitting...");
+        let operation = await ai.models.generateVideos(req);
+        
+        if (onProgress) onProgress("Processing...");
+        while (!operation.done) {
+            await new Promise(r => setTimeout(r, 5000));
+            operation = await ai.operations.getVideosOperation({ operation });
+        }
+        
+        const video = operation.response?.generatedVideos?.[0]?.video;
+        if (video?.uri) {
+            return `${video.uri}&key=${process.env.API_KEY}`;
+        }
+        return "";
+    } catch (e) {
+        console.error("Video Gen Error", e);
+        throw e;
+    }
+}
 
 /**
- * Chat Bot Helper
+ * Chat Bot Message
  */
-export const sendChatMessage = async (history: {role: string, parts: {text: string}[]}[], newMessage: string) => {
+export const sendChatMessage = async (history: {role: string, parts: {text: string}[]}[], message: string): Promise<string> => {
     const ai = createAI();
     const chat = ai.chats.create({
-        model: MODELS.TEXT_PRO,
-        history: history,
-        config: {
-            systemInstruction: CHAT_SYSTEM_INSTRUCTION
-        }
+        model: MODELS.TEXT_FAST,
+        config: { systemInstruction: CHAT_SYSTEM_INSTRUCTION },
+        history
     });
+    const result = await chat.sendMessage({ message });
+    return result.text || "";
+}
+
+/**
+ * Shot Discovery from Text
+ */
+export const extractShotsFromScene = async (text: string, knownCharacters: string[] = []): Promise<any[]> => {
+    const ai = createAI();
+    const prompt = `Analyze the scene and break it down into shots.
+    Characters: ${knownCharacters.join(', ')}
     
-    const result = await chat.sendMessage({ message: newMessage });
-    return result.text;
+    Input: "${text.slice(0, 50000)}"`;
+    
+    const response = await retryWithBackoff(async () => {
+        return await ai.models.generateContent({
+            model: MODELS.TEXT_FAST,
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            title: { type: Type.STRING },
+                            description: { type: Type.STRING }
+                        }
+                    }
+                }
+            }
+        });
+    });
+    return JSON.parse(response.text || "[]");
 }

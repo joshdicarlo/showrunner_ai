@@ -8,6 +8,7 @@ import { AssetEditorPanel } from './components/AssetEditorPanel';
 import { ChatBot } from './components/ChatBot';
 import { EditorTimeline } from './components/EditorTimeline';
 import { SettingsModal } from './components/SettingsModal';
+import { RenderQueuePanel } from './components/RenderQueuePanel';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
@@ -93,6 +94,9 @@ const App: React.FC = () => {
   const currentProjectIdRef = useRef(currentProjectId);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
+
+  // Derived state for Active Project
+  const activeProject = projects.find(p => p.id === currentProjectId);
 
   // --- Render Queue Setup ---
   // Task Executor logic
@@ -207,6 +211,37 @@ const App: React.FC = () => {
       return queueService.subscribe((q) => setRenderQueue(q));
   }, [queueService]);
 
+  // Effect: Dependency Management for Batches
+  // Watches the queue. If a batch is 'waiting', check if its dependency is done.
+  useEffect(() => {
+      if (renderQueue.length > 0) {
+          const waitingTasks = renderQueue.filter(t => t.status === 'waiting' && t.waitingOnBatchId);
+          if (waitingTasks.length === 0) return;
+
+          // Group by waiting batch ID to process once per batch
+          const batchesToCheck = new Set(waitingTasks.map(t => t.batchId));
+          
+          batchesToCheck.forEach(batchId => {
+              const sampleTask = waitingTasks.find(t => t.batchId === batchId);
+              if (!sampleTask || !sampleTask.waitingOnBatchId) return;
+
+              const dependencyId = sampleTask.waitingOnBatchId;
+              const depTasks = renderQueue.filter(t => t.batchId === dependencyId);
+              
+              // If no tasks found for dependency, assume it's done or invalid (edge case).
+              // Or check if all tasks in dependency batch are finished (completed or failed).
+              // We ignore 'failed' to let flow continue, or user can retry manually.
+              const isDependencyActive = depTasks.some(t => t.status === 'pending' || t.status === 'processing' || t.status === 'waiting');
+              
+              if (!isDependencyActive && depTasks.length > 0) {
+                  // Dependency finished. Wake up this batch.
+                  console.log(`[Queue] Dependency ${dependencyId} finished. Waking up batch ${batchId}.`);
+                  queueService.updateBatchStatus(batchId!, 'pending');
+              }
+          });
+      }
+  }, [renderQueue, queueService]);
+
 
   // Initialize Google Drive API
   useEffect(() => {
@@ -225,7 +260,6 @@ const App: React.FC = () => {
       setProjects(initTemplates);
   }, []);
 
-  const activeProject = projects.find(p => p.id === currentProjectId);
   const activeAsset = activeProject?.assets.find(a => a.id === currentAssetId);
   const activeDeptConfig = DEPARTMENTS.find(d => d.id === currentDept);
 
@@ -708,16 +742,14 @@ const App: React.FC = () => {
   const handleGenerateConcepts = (count: number, styleId?: string) => {
     if (!activeAsset || !currentProjectId || !activeProject) return;
     
-    // 1. Determine Bounding Box
+    // Determine Bounding Box logic (omitted for brevity, assume smart placement)
     const contextNodes = activeProject.nodes.filter(n => 
         n.department === currentDept && 
         n.assetId === activeAsset.id &&
         n.data.status !== 'archived'
     );
     let maxY = 0;
-    if (contextNodes.length > 0) {
-        maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
-    }
+    if (contextNodes.length > 0) maxY = Math.max(...contextNodes.map(n => n.position.y + (n.height || 400)));
     const startY = maxY > 0 ? maxY + 100 : 100;
     const startX = 100;
     const nodeWidth = 300;
@@ -742,6 +774,10 @@ const App: React.FC = () => {
             collapsed: false
         }
     };
+
+    // Create Batch Metadata
+    const batchId = `batch-concepts-${Date.now()}`;
+    const batchLabel = `Concepts: ${activeAsset.title}`;
 
     const newNodes: FlowNode[] = [];
     
@@ -776,12 +812,26 @@ const App: React.FC = () => {
                 aspectRatio: defaultRatio,
                 status: 'generating',
                 tag: 'concept',
-                styleId: styleId // Apply selected style
+                styleId: styleId 
             }
         });
+        
+        // Add to Queue
+        queueService.add({
+            id: `task-${Date.now()}-${i}`,
+            type: 'image',
+            prompt: defaultPrompt,
+            assetId: activeAsset.id,
+            status: 'pending',
+            config: {
+                styleId: styleId,
+                aspectRatio: defaultRatio,
+                model: MODELS.IMAGE_GEN
+            },
+            batchId,
+            batchLabel
+        });
     }
-
-    const allNewIds = [groupId, ...newNodes.map(n => n.id)];
 
     setProjects(prev => prev.map(p => {
         if (p.id === currentProjectId) {
@@ -790,7 +840,8 @@ const App: React.FC = () => {
         return p;
     }));
 
-    setFocusNodeIds(allNewIds);
+    setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
+    setIsRenderQueueOpen(true);
   };
   
   const handleGalleryGenerate = (prompt: string, count: number, model: string, aspectRatio: string) => {
@@ -830,6 +881,9 @@ const App: React.FC = () => {
         }
       };
 
+      const batchId = `batch-gallery-${Date.now()}`;
+      const batchLabel = `Gallery Batch: ${prompt.substring(0, 20)}...`;
+
       const newNodes: FlowNode[] = [];
       for (let i = 0; i < count; i++) {
           const childX = startX + padding + (i * (nodeWidth + gap));
@@ -853,21 +907,36 @@ const App: React.FC = () => {
                   withAudio: false
               }
           });
+
+          // Add to Queue
+          queueService.add({
+              id: `task-${Date.now()}-${i}`,
+              type: model.includes('veo') ? 'video' : 'image',
+              prompt: prompt,
+              assetId: currentAssetId || 'root', 
+              status: 'pending',
+              config: {
+                  model,
+                  aspectRatio
+              },
+              batchId,
+              batchLabel
+          });
       }
       
-      const allNewIds = [groupId, ...newNodes.map(n => n.id)];
-
       setProjects(prev => prev.map(p => {
         if (p.id === currentProjectId) {
              return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
         }
         return p;
       }));
-      setFocusNodeIds(allNewIds);
+      setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
+      setIsRenderQueueOpen(true);
   }
 
   // --- One Shot Discovery (Editorial) ---
   const handleOneShotBreakdown = async () => {
+      // ... (Existing logic same)
       if (!activeProject) return;
       setOneShotItems([]);
       setIsOneShotModalOpen(true);
@@ -933,7 +1002,12 @@ const App: React.FC = () => {
 
       const itemsToProcess = oneShotItems.filter(i => i.selected);
       const newAssets: ProjectAsset[] = [];
-      const tasksToQueue: RenderTask[] = [];
+      const primaryTasks: RenderTask[] = []; // Characters
+      const secondaryTasks: RenderTask[] = []; // Scenes/Shots
+
+      // Batch IDs
+      const charBatchId = `batch-char-${Date.now()}`;
+      const shotBatchId = `batch-shot-${Date.now()}`;
 
       // Recursive function to process tree (scenes -> shots)
       const processItem = (item: OneShotItem, parentAssetId?: string) => {
@@ -951,11 +1025,7 @@ const App: React.FC = () => {
                 
                if (existingAsset) {
                    assetId = existingAsset.id;
-               } else {
-                   // Fallback logic or skip? Should not happen if map was correct.
-                   // We'll proceed as new if not found, or maybe return to be safe?
-                   // Just allow creation as fallback.
-               }
+               } 
           } else {
                // Create New Asset
                const asset: ProjectAsset = {
@@ -987,11 +1057,12 @@ const App: React.FC = () => {
               }
 
               for (let i = 0; i < config.count; i++) {
-                  tasksToQueue.push({
-                      id: `task-${Date.now()}-${i}`,
+                  const task: RenderTask = {
+                      id: `task-${Date.now()}-${i}-${Math.random()}`,
                       type: 'image',
                       prompt: prompt,
                       assetId: assetId,
+                      // Default Status will be overwritten below based on type
                       status: 'pending',
                       config: {
                           count: config.count,
@@ -999,7 +1070,20 @@ const App: React.FC = () => {
                           autoAssemble: config.autoAssemble,
                           sequenceId: parentAssetId // For shots, parent is the sequence
                       }
-                  });
+                  };
+                  
+                  if (item.type === 'Character') {
+                      task.batchId = charBatchId;
+                      task.batchLabel = "One Shot: Cast Generation";
+                      task.status = 'pending';
+                      primaryTasks.push(task);
+                  } else {
+                      task.batchId = shotBatchId;
+                      task.batchLabel = "One Shot: Shot Production";
+                      task.status = 'waiting'; // Wait for chars
+                      task.waitingOnBatchId = charBatchId;
+                      secondaryTasks.push(task);
+                  }
               }
           }
 
@@ -1011,7 +1095,7 @@ const App: React.FC = () => {
 
       itemsToProcess.forEach(item => processItem(item));
 
-      // Update State with new Assets
+      // Update State with new Assets immediately so references exist
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectIdRef.current) {
               return { ...p, assets: [...p.assets, ...newAssets] };
@@ -1019,10 +1103,21 @@ const App: React.FC = () => {
           return p;
       }));
 
-      // Start Queue
-      tasksToQueue.forEach(t => queueService.add(t));
+      // Queue Logic: Add all tasks. Primary will start, Secondary will wait.
+      // If no characters, Secondary don't need to wait.
+      if (primaryTasks.length > 0) {
+          primaryTasks.forEach(t => queueService.add(t));
+          secondaryTasks.forEach(t => queueService.add(t)); // Added as waiting
+      } else {
+          // No characters, just run everything immediately
+          secondaryTasks.forEach(t => {
+              t.status = 'pending'; 
+              t.waitingOnBatchId = undefined;
+              queueService.add(t);
+          });
+      }
       
-      if (tasksToQueue.length > 0) {
+      if (primaryTasks.length > 0 || secondaryTasks.length > 0) {
           setIsRenderQueueOpen(true); // Auto show queue
       }
   }
@@ -1255,6 +1350,10 @@ const App: React.FC = () => {
           data: { label: `Refined Character Sheet`, collapsed: false }
       };
 
+      // Batch Meta
+      const batchId = `batch-refine-${Date.now()}`;
+      const batchLabel = `Refinement: ${asset.title}`;
+
       const newNodes: FlowNode[] = [];
       prompts.forEach((p, i) => {
           const col = i % columns;
@@ -1280,6 +1379,21 @@ const App: React.FC = () => {
                   referenceImageUrl: sourceImageUrl 
               }
           });
+
+          // Add to Queue
+          queueService.add({
+              id: `task-${Date.now()}-${i}`,
+              type: 'image',
+              prompt: p,
+              assetId: assetId,
+              status: 'pending',
+              config: {
+                  model: MODELS.IMAGE_GEN,
+                  aspectRatio: "1:1"
+              },
+              batchId,
+              batchLabel
+          });
       });
 
       setProjects(prev => prev.map(p => {
@@ -1289,6 +1403,7 @@ const App: React.FC = () => {
           return p;
       }));
       setFocusNodeIds([groupId]);
+      setIsRenderQueueOpen(true);
   }
 
   const handleGenerateOutline = () => {
@@ -1405,6 +1520,9 @@ const App: React.FC = () => {
        
        const targetModel = MODELS.VIDEO_FAST;
        const newNodes: FlowNode[] = [];
+       const batchId = `batch-expr-${Date.now()}`;
+       const batchLabel = `Expressions: ${activeAsset?.title || 'Character'}`;
+
        emotions.forEach((emo, idx) => {
            const col = idx % columns;
            const row = Math.floor(idx / columns);
@@ -1430,6 +1548,18 @@ const App: React.FC = () => {
                    withAudio: false
                }
            });
+
+           // Add to queue
+           queueService.add({
+                id: `task-${Date.now()}-${idx}`,
+                type: 'video',
+                prompt: `@${activeAsset?.title || 'Character'}, ${emo.prompt}, neutral background, high quality`,
+                assetId: node.assetId || 'root',
+                status: 'pending',
+                config: { model: targetModel, aspectRatio: '16:9' },
+                batchId,
+                batchLabel
+           });
        });
        
        setProjects(prev => prev.map(p => {
@@ -1439,6 +1569,7 @@ const App: React.FC = () => {
           return p;
        }));
        setFocusNodeIds([groupId]);
+       setIsRenderQueueOpen(true);
   }
 
   // --- Remove Ref Handler ---
@@ -1636,7 +1767,7 @@ const App: React.FC = () => {
                      {renderQueue.length > 0 && (
                          <button 
                             onClick={() => setIsRenderQueueOpen(!isRenderQueueOpen)}
-                            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-zinc-300"
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs font-bold text-zinc-300 transition-colors"
                          >
                              <Layers size={14} className={renderQueue.some(t => t.status === 'processing') ? "animate-pulse text-blue-400" : ""}/>
                              Queue ({renderQueue.filter(t => t.status === 'pending' || t.status === 'processing').length})
@@ -1724,8 +1855,18 @@ const App: React.FC = () => {
         </div>
 
         {/* Global Floating Elements */}
-        {/* Render Queue Panel (Optional Full View) - For now using floating indicator */}
-        {(isRenderQueueOpen || renderQueue.some(t => t.status === 'processing')) && (
+        
+        {/* Render Queue Panel (Detailed View) */}
+        {isRenderQueueOpen && (
+            <RenderQueuePanel 
+                queue={renderQueue} 
+                assets={activeProject?.assets || []}
+                onClose={() => setIsRenderQueueOpen(false)}
+            />
+        )}
+
+        {/* Render Queue Indicator (Passive View - only if panel closed) */}
+        {!isRenderQueueOpen && renderQueue.some(t => t.status === 'processing') && (
             <QueueIndicator queue={renderQueue} />
         )}
 
