@@ -25,7 +25,7 @@ type View = 'dashboard' | 'project';
 interface DetectedItem {
     name: string;
     description: string;
-    summary?: string; // Added summary field
+    summary?: string;
     type: string;
     selected: boolean;
     isDuplicate?: boolean;
@@ -877,12 +877,13 @@ const App: React.FC = () => {
           const scriptNodes = activeProject.nodes.filter(n => 
               n.department === DepartmentType.WRITERS_ROOM && 
               n.type === NodeType.AI_TEXT_GEN && 
+              n.data.status === 'approved' && // Fix: Only use APPROVED scripts
               n.data.text
           );
           const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
           
           if (!fullText) {
-              alert("No scripts to analyze");
+              alert("No approved scripts found to analyze. Please mark a script as 'Approved' in the Writers Room.");
               setIsOneShotModalOpen(false);
               return;
           }

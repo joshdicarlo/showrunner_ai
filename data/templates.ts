@@ -17,6 +17,14 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            description: 'A cynical robot courier with a rusted chassis and a heart of gold. He often malfunctions at inconvenient times but always delivers the package.',
            summary: 'A cynical robot courier with a rusted chassis.',
            status: 'active'
+       },
+       {
+           id: 'asset-orbit',
+           department: DepartmentType.CASTING_WARDROBE,
+           title: 'Orbit',
+           description: 'A small, spherical hovering drone with antigrav stabilizers and a single large optic lens. It communicates through expressive chirps and holographic projections.',
+           summary: 'A small, spherical hovering drone.',
+           status: 'active'
        }
     ],
     nodes: [
@@ -40,7 +48,7 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            data: { 
                prompt: 'Write a beat sheet for a chase scene in an asteroid field.', 
                text: `1. **The Signal**: @Zax and his copilot **Orbit** receive a distress call from the rebel leader **Kira**.\n2. **The Ambush**: The warlord **Vorg** intercepts the transmission and launches his fleet.\n3. **The Maneuver**: @Zax flies into the asteroid field while **Orbit** calculates the odds.\n4. **The Crash**: They are hit by **Vorg**'s cannon but **Kira** pulls them from the wreckage just in time.`,
-               status: 'approved' 
+               status: 'review' 
            },
            width: 350, height: 400
        },
@@ -164,7 +172,7 @@ Zax manages a breathless grin.
 You always know how to make an entrance.
 
 **CUT TO BLACK.**`,
-               status: 'review' 
+               status: 'approved' 
            },
            width: 350, height: 400
        }
