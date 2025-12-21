@@ -13,7 +13,7 @@ import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAss
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
 import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus } from 'lucide-react';
-import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage } from './services/geminiService';
+import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage, generateVideo } from './services/geminiService';
 import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
 import { OneShotModal } from './components/OneShotModal';
@@ -88,6 +88,7 @@ const App: React.FC = () => {
 
   // Render Queue State
   const [renderQueue, setRenderQueue] = useState<RenderTask[]>([]);
+  const [queuePaused, setQueuePaused] = useState(false);
   
   // Ref for accessing current state in async queue callbacks
   const projectsRef = useRef(projects);
@@ -116,29 +117,45 @@ const App: React.FC = () => {
       // Store the resolved prompt in the task for debug visibility later
       task.submittedPrompt = resolved;
 
-      // Calculate approvedImagesMap on the fly for the worker
-      const approvedMap: Record<string, string[]> = {};
-      activeProj?.assets.forEach(a => {
-          const images = activeProj.nodes
-            .filter(n => n.assetId === a.id && n.data.status === 'approved' && n.data.imageUrl)
-            .map(n => n.data.imageUrl!);
-          if (images.length > 0) approvedMap[a.id] = images;
-      });
-
-      const refImages = resolveReferenceImages(
-          task.prompt, 
-          activeProj?.assets, 
-          asset, 
-          {}, 
-          approvedMap, 
-          {}, // assetThumbnails
-          matchedAssets
-      );
-
       if (task.type === 'image') {
+          // Calculate approvedImagesMap on the fly for the worker
+          const approvedMap: Record<string, string[]> = {};
+          activeProj?.assets.forEach(a => {
+              const images = activeProj.nodes
+                .filter(n => n.assetId === a.id && n.data.status === 'approved' && n.data.imageUrl)
+                .map(n => n.data.imageUrl!);
+              if (images.length > 0) approvedMap[a.id] = images;
+          });
+
+          const refImages = resolveReferenceImages(
+              task.prompt, 
+              activeProj?.assets, 
+              asset, 
+              {}, 
+              approvedMap, 
+              {}, // assetThumbnails
+              matchedAssets
+          );
           return await generateImage(resolved, task.config?.aspectRatio || "16:9", task.config?.model, refImages);
-      } 
-      // Video support later
+      } else if (task.type === 'video') {
+          // Video Generation Logic
+          const startImage = task.startImage; 
+          const duration = "5"; // Default
+          // Veo logic: If using start frame, prioritize it.
+          // Note: Video prompts shouldn't have too many image references if a start frame is used in current API logic
+          return await generateVideo(
+              resolved,
+              task.config?.aspectRatio as any || "16:9",
+              startImage,
+              task.config?.model || MODELS.VIDEO_FAST,
+              duration,
+              false,
+              undefined,
+              (msg, percent) => {
+                  queueService.updateTaskProgress(task.id, percent);
+              }
+          );
+      }
       return "";
   };
 
@@ -148,44 +165,69 @@ const App: React.FC = () => {
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectIdRef.current) {
               const asset = p.assets.find(a => a.id === task.assetId);
-              if (!asset) return p;
+              if (!asset && !task.config?.targetNodeId) return p;
 
-              // 1. Create Node
+              // 1. UPDATE EXISTING NODE (If targetNodeId exists)
+              if (task.config?.targetNodeId) {
+                  return {
+                      ...p,
+                      nodes: p.nodes.map(n => {
+                          if (n.id === task.config!.targetNodeId) {
+                              // Found the target node, update it with result
+                              return {
+                                  ...n,
+                                  data: {
+                                      ...n.data,
+                                      // Update relevant fields
+                                      imageUrl: task.type === 'image' ? result : (n.data.imageUrl || task.startImage), // Keep start image for video if present
+                                      videoUrl: task.type === 'video' ? result : undefined,
+                                      status: task.config?.autoApprove ? 'approved' : 'review',
+                                      submittedPrompt: task.submittedPrompt
+                                  }
+                              };
+                          }
+                          return n;
+                      })
+                  };
+              }
+
+              // 2. CREATE NEW NODE (Fallback or for tasks without placeholder like Timeline replace)
               const newNode: FlowNode = {
                   id: `gen-node-${Date.now()}-${Math.random()}`,
-                  type: NodeType.AI_IMAGE_GEN,
-                  department: asset.department,
-                  assetId: asset.id,
-                  parentId: undefined, // Could group if needed
-                  position: { x: 100, y: 100 }, // Default, canvas will auto-place later if needed
+                  type: task.type === 'video' ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
+                  department: asset ? asset.department : DepartmentType.WRITERS_ROOM,
+                  assetId: asset?.id,
+                  parentId: undefined, 
+                  position: { x: 100, y: 100 }, 
                   data: {
-                      imageUrl: result,
+                      imageUrl: task.type === 'image' ? result : task.startImage, 
+                      videoUrl: task.type === 'video' ? result : undefined,
                       prompt: task.prompt,
                       status: task.config?.autoApprove ? 'approved' : 'review',
                       model: task.config?.model,
                       aspectRatio: task.config?.aspectRatio,
                       styleId: task.config?.styleId,
-                      submittedPrompt: task.submittedPrompt // Store resolved prompt
+                      submittedPrompt: task.submittedPrompt
                   }
               };
 
               let updatedAssets = p.assets;
               
-              // 2. Auto Assemble (If Shot and Target Sequence provided)
-              if (task.config?.autoAssemble && task.config?.sequenceId && task.config?.autoApprove) {
+              // 3. Auto Assemble (One Shot Workflow)
+              if (task.config?.autoAssemble && task.config?.sequenceId && task.config?.autoApprove && asset) {
                   const seqAsset = p.assets.find(a => a.id === task.config?.sequenceId);
                   if (seqAsset) {
                       const newClip: TimelineClip = {
                           id: `clip-${Date.now()}-${Math.random()}`,
-                          sourceNodeId: newNode.id,
+                          sourceNodeId: task.config?.targetNodeId || newNode.id, // Use updated existing node ID or new node ID
                           mediaUrl: result,
-                          mediaType: 'image',
+                          mediaType: task.type,
                           start: seqAsset.timelineData ? seqAsset.timelineData.duration : 0,
-                          duration: 4, // Default duration for image
+                          duration: 4, // Default duration
                           offset: 0,
                           track: 0,
                           label: asset.title,
-                          thumbnail: result
+                          thumbnail: task.type === 'image' ? result : task.startImage
                       };
                       
                       const newTimelineData = {
@@ -197,7 +239,31 @@ const App: React.FC = () => {
                   }
               }
 
-              return { ...p, assets: updatedAssets, nodes: [...p.nodes, newNode] };
+              // 4. Timeline Clip Replacement (Video Workflow)
+              if (task.config?.replaceClipId) {
+                  updatedAssets = updatedAssets.map(a => {
+                      if (a.timelineData) {
+                          const updatedClips = a.timelineData.clips.map(c => {
+                              if (c.id === task.config!.replaceClipId) {
+                                  return {
+                                      ...c,
+                                      mediaUrl: result,
+                                      mediaType: 'video' as const,
+                                      sourceNodeId: task.config?.targetNodeId || newNode.id
+                                  };
+                              }
+                              return c;
+                          });
+                          return { ...a, timelineData: { ...a.timelineData, clips: updatedClips }};
+                      }
+                      return a;
+                  });
+              }
+
+              // Only append newNode if we didn't update an existing one
+              const finalNodes = task.config?.targetNodeId ? p.nodes : [...p.nodes, newNode];
+
+              return { ...p, assets: updatedAssets, nodes: finalNodes };
           }
           return p;
       }));
@@ -208,34 +274,25 @@ const App: React.FC = () => {
   
   // Sync queue state
   useEffect(() => {
-      return queueService.subscribe((q) => setRenderQueue(q));
+      return queueService.subscribe((q) => {
+          setRenderQueue(q);
+          setQueuePaused(queueService.isPaused());
+      });
   }, [queueService]);
 
   // Effect: Dependency Management for Batches
-  // Watches the queue. If a batch is 'waiting', check if its dependency is done.
   useEffect(() => {
       if (renderQueue.length > 0) {
           const waitingTasks = renderQueue.filter(t => t.status === 'waiting' && t.waitingOnBatchId);
           if (waitingTasks.length === 0) return;
-
-          // Group by waiting batch ID to process once per batch
           const batchesToCheck = new Set(waitingTasks.map(t => t.batchId));
-          
           batchesToCheck.forEach(batchId => {
               const sampleTask = waitingTasks.find(t => t.batchId === batchId);
               if (!sampleTask || !sampleTask.waitingOnBatchId) return;
-
               const dependencyId = sampleTask.waitingOnBatchId;
               const depTasks = renderQueue.filter(t => t.batchId === dependencyId);
-              
-              // If no tasks found for dependency, assume it's done or invalid (edge case).
-              // Or check if all tasks in dependency batch are finished (completed or failed).
-              // We ignore 'failed' to let flow continue, or user can retry manually.
               const isDependencyActive = depTasks.some(t => t.status === 'pending' || t.status === 'processing' || t.status === 'waiting');
-              
               if (!isDependencyActive && depTasks.length > 0) {
-                  // Dependency finished. Wake up this batch.
-                  console.log(`[Queue] Dependency ${dependencyId} finished. Waking up batch ${batchId}.`);
                   queueService.updateBatchStatus(batchId!, 'pending');
               }
           });
@@ -780,6 +837,7 @@ const App: React.FC = () => {
     const batchLabel = `Concepts: ${activeAsset.title}`;
 
     const newNodes: FlowNode[] = [];
+    const tasks: RenderTask[] = [];
     
     let defaultPrompt = `@${activeAsset.title}`;
     if (activeAsset.parentId && currentDept === DepartmentType.CASTING_WARDROBE) {
@@ -797,9 +855,10 @@ const App: React.FC = () => {
     for (let i = 0; i < count; i++) {
         const childX = startX + padding + (i * (nodeWidth + gap));
         const childY = startY + 60;
+        const nodeId = `gen-${Date.now()}-${i}`;
 
         newNodes.push({
-            id: `gen-${Date.now()}-${i}`,
+            id: nodeId,
             type: NodeType.AI_IMAGE_GEN,
             department: currentDept,
             assetId: activeAsset.id,
@@ -816,8 +875,8 @@ const App: React.FC = () => {
             }
         });
         
-        // Add to Queue
-        queueService.add({
+        // Add to Queue with targetNodeId
+        tasks.push({
             id: `task-${Date.now()}-${i}`,
             type: 'image',
             prompt: defaultPrompt,
@@ -826,7 +885,8 @@ const App: React.FC = () => {
             config: {
                 styleId: styleId,
                 aspectRatio: defaultRatio,
-                model: MODELS.IMAGE_GEN
+                model: MODELS.IMAGE_GEN,
+                targetNodeId: nodeId // LINK TO VISUAL NODE
             },
             batchId,
             batchLabel
@@ -839,6 +899,8 @@ const App: React.FC = () => {
         }
         return p;
     }));
+
+    tasks.forEach(t => queueService.add(t)); // Add tasks after nodes exist
 
     setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
     setIsRenderQueueOpen(true);
@@ -885,12 +947,15 @@ const App: React.FC = () => {
       const batchLabel = `Gallery Batch: ${prompt.substring(0, 20)}...`;
 
       const newNodes: FlowNode[] = [];
+      const tasks: RenderTask[] = [];
+
       for (let i = 0; i < count; i++) {
           const childX = startX + padding + (i * (nodeWidth + gap));
           const childY = startY + 60;
+          const nodeId = `gal-gen-${Date.now()}-${i}`;
 
           newNodes.push({
-              id: `gal-gen-${Date.now()}-${i}`,
+              id: nodeId,
               type: model.includes('veo') ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
               department: currentDept,
               assetId: currentAssetId || undefined,
@@ -908,8 +973,8 @@ const App: React.FC = () => {
               }
           });
 
-          // Add to Queue
-          queueService.add({
+          // Add to Queue with targetNodeId
+          tasks.push({
               id: `task-${Date.now()}-${i}`,
               type: model.includes('veo') ? 'video' : 'image',
               prompt: prompt,
@@ -917,7 +982,8 @@ const App: React.FC = () => {
               status: 'pending',
               config: {
                   model,
-                  aspectRatio
+                  aspectRatio,
+                  targetNodeId: nodeId
               },
               batchId,
               batchLabel
@@ -930,7 +996,92 @@ const App: React.FC = () => {
         }
         return p;
       }));
+      
+      tasks.forEach(t => queueService.add(t));
+
       setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
+      setIsRenderQueueOpen(true);
+  }
+
+  // New: Handle Video Gen from Image Node
+  const handleGenerateVideoFromNode = (node: FlowNode, model: string) => {
+      if (!currentProjectId || !activeProject) return;
+      if (!node.data.imageUrl && !node.data.videoUrl) return;
+
+      const batchId = `batch-video-${Date.now()}`;
+      const batchLabel = `Video from: ${node.data.prompt?.substring(0,20) || 'Image'}`;
+      const nodeId = `gen-node-${Date.now()}`;
+      
+      const newVideoNode: FlowNode = {
+          id: nodeId,
+          type: NodeType.AI_VIDEO_GEN,
+          department: currentDept,
+          assetId: node.assetId,
+          parentId: node.parentId, // keep in same group if grouped
+          position: { x: node.position.x + 50, y: node.position.y + 50 },
+          width: 300,
+          height: 400,
+          data: {
+              imageUrl: node.data.imageUrl, // Start frame thumbnail
+              prompt: node.data.prompt || "Video from image",
+              status: 'generating',
+              model: model,
+              aspectRatio: node.data.aspectRatio || '16:9'
+          }
+      };
+
+      setProjects(prev => prev.map(p => {
+          if (p.id === currentProjectId) {
+              return { ...p, nodes: [...p.nodes, newVideoNode] };
+          }
+          return p;
+      }));
+
+      // Queue it with targetNodeId
+      queueService.add({
+          id: `task-vid-${Date.now()}`,
+          type: 'video',
+          prompt: node.data.prompt || "Video",
+          assetId: node.assetId || 'root',
+          status: 'pending',
+          startImage: node.data.imageUrl, // Important!
+          config: {
+              model,
+              aspectRatio: node.data.aspectRatio,
+              targetNodeId: nodeId
+          },
+          batchId,
+          batchLabel
+      });
+      setIsRenderQueueOpen(true);
+  }
+
+  // New: Handle Video Gen from Timeline
+  const handleGenerateVideoForClip = (clipId: string, sourceNodeId: string, replace: boolean, model: string) => {
+      if (!currentProjectId || !activeProject) return;
+      
+      const sourceNode = activeProject.nodes.find(n => n.id === sourceNodeId);
+      if (!sourceNode || (!sourceNode.data.imageUrl && !sourceNode.data.videoUrl)) return;
+
+      const batchId = `batch-clip-vid-${Date.now()}`;
+      const batchLabel = `Timeline Video: ${sourceNode.data.prompt?.substring(0, 20) || 'Clip'}`;
+
+      // Queue directly - on success it creates a node and optionally updates timeline
+      queueService.add({
+          id: `task-clip-vid-${Date.now()}`,
+          type: 'video',
+          prompt: sourceNode.data.prompt || "Timeline Video",
+          assetId: sourceNode.assetId || 'root',
+          status: 'pending',
+          startImage: sourceNode.data.imageUrl,
+          config: {
+              model,
+              aspectRatio: sourceNode.data.aspectRatio,
+              replaceClipId: replace ? clipId : undefined // Metadata for replacement
+          },
+          batchId,
+          batchLabel
+      });
       setIsRenderQueueOpen(true);
   }
 
@@ -1309,7 +1460,7 @@ const App: React.FC = () => {
 
       const contextNodes = activeProject.nodes.filter(n => 
           n.department === currentDept && 
-          n.assetId === assetId &&
+          n.assetId === assetId && 
           n.data.status !== 'archived'
       );
       let maxY = 0;
@@ -1355,14 +1506,17 @@ const App: React.FC = () => {
       const batchLabel = `Refinement: ${asset.title}`;
 
       const newNodes: FlowNode[] = [];
+      const tasks: RenderTask[] = [];
+
       prompts.forEach((p, i) => {
           const col = i % columns;
           const row = Math.floor(i / columns);
           const childX = startX + padding + (col * (nodeWidth + gap));
           const childY = startY + 60 + (row * (nodeHeight + gap));
+          const nodeId = `ref-gen-${Date.now()}-${i}`;
 
           newNodes.push({
-              id: `ref-gen-${Date.now()}-${i}`,
+              id: nodeId,
               type: NodeType.AI_IMAGE_GEN,
               department: currentDept,
               assetId: assetId,
@@ -1380,8 +1534,8 @@ const App: React.FC = () => {
               }
           });
 
-          // Add to Queue
-          queueService.add({
+          // Add to Queue with targetNodeId
+          tasks.push({
               id: `task-${Date.now()}-${i}`,
               type: 'image',
               prompt: p,
@@ -1389,7 +1543,8 @@ const App: React.FC = () => {
               status: 'pending',
               config: {
                   model: MODELS.IMAGE_GEN,
-                  aspectRatio: "1:1"
+                  aspectRatio: "1:1",
+                  targetNodeId: nodeId
               },
               batchId,
               batchLabel
@@ -1402,6 +1557,9 @@ const App: React.FC = () => {
           }
           return p;
       }));
+      
+      tasks.forEach(t => queueService.add(t));
+
       setFocusNodeIds([groupId]);
       setIsRenderQueueOpen(true);
   }
@@ -1445,9 +1603,10 @@ const App: React.FC = () => {
 
       const model = MODELS.VIDEO_HQ;
       const supportsLastFrame = VIDEO_MODEL_CAPABILITIES[model]?.supportsLastFrame || false;
+      const nodeId = `vid-turntable-${Date.now()}`;
 
       const newNode: FlowNode = {
-           id: `vid-turntable-${Date.now()}`,
+           id: nodeId,
            type: NodeType.AI_VIDEO_GEN,
            department: currentDept,
            assetId: node.assetId,
@@ -1461,8 +1620,8 @@ const App: React.FC = () => {
                lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
                model: model,
                aspectRatio: '16:9',
-               status: 'draft',
-               duration: '8', // Prefer long for turntable
+               status: 'generating', // Was draft, now generating
+               duration: '8',
                withAudio: false
            }
       };
@@ -1473,7 +1632,24 @@ const App: React.FC = () => {
           }
           return p;
       }));
+
+      // Queue it
+      queueService.add({
+          id: `task-turntable-${Date.now()}`,
+          type: 'video',
+          prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
+          assetId: node.assetId || 'root',
+          status: 'pending',
+          startImage: node.data.imageUrl,
+          config: {
+              model: model,
+              aspectRatio: '16:9',
+              targetNodeId: nodeId
+          }
+      });
+
       setFocusNodeIds([newNode.id]);
+      setIsRenderQueueOpen(true);
   }
 
   const handleGalleryExpressions = (node: FlowNode) => {
@@ -1520,6 +1696,7 @@ const App: React.FC = () => {
        
        const targetModel = MODELS.VIDEO_FAST;
        const newNodes: FlowNode[] = [];
+       const tasks: RenderTask[] = [];
        const batchId = `batch-expr-${Date.now()}`;
        const batchLabel = `Expressions: ${activeAsset?.title || 'Character'}`;
 
@@ -1528,9 +1705,10 @@ const App: React.FC = () => {
            const row = Math.floor(idx / columns);
            const childX = 100 + padding + (col * (nodeW + gap));
            const childY = startY + 60 + (row * (nodeH + gap));
+           const nodeId = `vid-expr-${Date.now()}-${idx}`;
 
            newNodes.push({
-               id: `vid-expr-${Date.now()}-${idx}`,
+               id: nodeId,
                type: NodeType.AI_VIDEO_GEN,
                department: currentDept,
                assetId: node.assetId,
@@ -1543,20 +1721,24 @@ const App: React.FC = () => {
                    imageUrl: node.data.imageUrl,
                    model: targetModel,
                    aspectRatio: '16:9',
-                   status: 'draft',
+                   status: 'generating',
                    duration: '4', // Shortest
                    withAudio: false
                }
            });
 
-           // Add to queue
-           queueService.add({
+           // Add to queue with targetNodeId
+           tasks.push({
                 id: `task-${Date.now()}-${idx}`,
                 type: 'video',
                 prompt: `@${activeAsset?.title || 'Character'}, ${emo.prompt}, neutral background, high quality`,
                 assetId: node.assetId || 'root',
                 status: 'pending',
-                config: { model: targetModel, aspectRatio: '16:9' },
+                config: { 
+                    model: targetModel, 
+                    aspectRatio: '16:9',
+                    targetNodeId: nodeId
+                },
                 batchId,
                 batchLabel
            });
@@ -1567,7 +1749,10 @@ const App: React.FC = () => {
               return { ...p, nodes: [...p.nodes, groupNode, ...newNodes] };
           }
           return p;
-       }));
+      }));
+       
+       tasks.forEach(t => queueService.add(t));
+
        setFocusNodeIds([groupId]);
        setIsRenderQueueOpen(true);
   }
@@ -1771,6 +1956,7 @@ const App: React.FC = () => {
                          >
                              <Layers size={14} className={renderQueue.some(t => t.status === 'processing') ? "animate-pulse text-blue-400" : ""}/>
                              Queue ({renderQueue.filter(t => t.status === 'pending' || t.status === 'processing').length})
+                             {queuePaused && <span className="text-[9px] bg-yellow-900/50 text-yellow-500 px-1 rounded">PAUSED</span>}
                          </button>
                      )}
 
@@ -1809,6 +1995,7 @@ const App: React.FC = () => {
                              projectNodes={activeProject?.nodes || []}
                              onUpdateAsset={handleUpdateAsset}
                              onUpdateNode={handleUpdateNode}
+                             onGenerateVideoForClip={handleGenerateVideoForClip} // Pass new handler
                          />
                      ) : (
                          <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-4">
@@ -1834,6 +2021,7 @@ const App: React.FC = () => {
                             refinedImagesMap={refinedImagesMap}
                             approvedImagesMap={approvedImagesMap} // New Prop
                             projectSettings={activeProject?.settings}
+                            onGenerateVideo={handleGenerateVideoFromNode} // Pass new handler
                          />
                      ) : (
                         <GalleryView 
@@ -1862,6 +2050,10 @@ const App: React.FC = () => {
                 queue={renderQueue} 
                 assets={activeProject?.assets || []}
                 onClose={() => setIsRenderQueueOpen(false)}
+                onPauseQueue={queueService.pause}
+                onResumeQueue={queueService.resume}
+                onStopTask={queueService.stopTask}
+                isPaused={queuePaused}
             />
         )}
 

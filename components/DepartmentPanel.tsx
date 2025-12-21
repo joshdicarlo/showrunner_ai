@@ -338,7 +338,7 @@ export const DepartmentPanel: React.FC<DepartmentPanelProps> = ({
                         className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-purple-900/50 to-blue-900/50 hover:from-purple-800/50 hover:to-blue-800/50 text-white border border-blue-500/30 text-xs font-medium py-2 rounded-lg transition-all"
                         title="Discover characters, scenes, and shots in one pass"
                     >
-                        <Zap size={14} className="text-yellow-400"/> Discover One Shot
+                        <Zap size={14} className="text-yellow-400"/> Discover
                     </button>
                 )}
             </div>

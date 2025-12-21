@@ -163,8 +163,9 @@ export interface RenderTask {
     type: 'image' | 'video';
     prompt: string;
     assetId: string;
-    // Added 'waiting' status for dependency management
-    status: 'pending' | 'processing' | 'completed' | 'failed' | 'waiting';
+    // Added 'waiting' status for dependency management, 'stopped' for user cancellation
+    status: 'pending' | 'processing' | 'completed' | 'failed' | 'waiting' | 'stopped';
+    progress?: number; // 0-100
     result?: string;
     error?: string;
     config?: {
@@ -175,8 +176,11 @@ export interface RenderTask {
         autoAssemble?: boolean;
         sequenceId?: string; // For auto-assemble targeting
         styleId?: string;
+        replaceClipId?: string; // For "Generate Video and Replace"
+        targetNodeId?: string; // ID of the existing node to update (avoids duplicates)
     };
     submittedPrompt?: string; // The resolved prompt used for generation
+    startImage?: string; // Start frame for video
     
     // Batch & Dependency Fields
     batchId?: string; // Group ID

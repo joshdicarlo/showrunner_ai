@@ -1,26 +1,31 @@
 
 import React, { useState, useMemo } from 'react';
 import { RenderTask, ProjectAsset } from '../types';
-import { X, CheckCircle, AlertCircle, Loader2, Clock, CheckSquare, Square, Terminal, Layers, ChevronDown, ChevronRight, Lock, Play } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, Loader2, Clock, CheckSquare, Square, Terminal, Layers, ChevronDown, ChevronRight, Lock, Play, Pause, StopCircle } from 'lucide-react';
 
 interface RenderQueuePanelProps {
     queue: RenderTask[];
     assets: ProjectAsset[];
     onClose: () => void;
+    onPauseQueue: () => void;
+    onResumeQueue: () => void;
+    onStopTask: (taskId: string) => void;
+    isPaused: boolean;
 }
 
 interface BatchGroup {
     id: string;
     label: string;
     tasks: RenderTask[];
-    status: 'processing' | 'pending' | 'waiting' | 'completed' | 'failed';
+    status: 'processing' | 'pending' | 'waiting' | 'completed' | 'failed' | 'stopped';
     completedCount: number;
     totalCount: number;
     dependencyId?: string;
     dependencyLabel?: string;
+    progress: number; // Aggregate progress
 }
 
-export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, assets, onClose }) => {
+export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, assets, onClose, onPauseQueue, onResumeQueue, onStopTask, isPaused }) => {
     const [showCompleted, setShowCompleted] = useState(false);
     const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
 
@@ -47,10 +52,20 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
             const processing = tasks.some(t => t.status === 'processing');
             const pending = tasks.some(t => t.status === 'pending');
             const waiting = tasks.some(t => t.status === 'waiting');
+            const stopped = tasks.every(t => t.status === 'stopped');
             
-            // Determine aggregate status
+            // Calculate progress for batch
+            // Completed = 100%, Processing = t.progress or 0, Pending/Waiting = 0
+            const totalProgress = tasks.reduce((acc, t) => {
+                if (t.status === 'completed') return acc + 100;
+                if (t.status === 'processing') return acc + (t.progress || 0);
+                return acc;
+            }, 0);
+            const aggregateProgress = tasks.length > 0 ? totalProgress / tasks.length : 0;
+
             let status: BatchGroup['status'] = 'completed';
-            if (failedCount === tasks.length) status = 'failed';
+            if (stopped) status = 'stopped';
+            else if (failedCount === tasks.length) status = 'failed';
             else if (processing) status = 'processing';
             else if (pending) status = 'pending';
             else if (waiting) status = 'waiting';
@@ -70,26 +85,33 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
                 completedCount,
                 totalCount: tasks.length,
                 dependencyId: tasks[0].waitingOnBatchId,
-                dependencyLabel
+                dependencyLabel,
+                progress: aggregateProgress
             });
         });
 
-        // Add Standalone as generic batch if exists
+        // Add Standalone
         if (standaloneTasks.length > 0) {
              const completedCount = standaloneTasks.filter(t => t.status === 'completed').length;
+             const totalProgress = standaloneTasks.reduce((acc, t) => {
+                if (t.status === 'completed') return acc + 100;
+                if (t.status === 'processing') return acc + (t.progress || 0);
+                return acc;
+            }, 0);
+             const aggregateProgress = standaloneTasks.length > 0 ? totalProgress / standaloneTasks.length : 0;
+
              result.push({
                  id: 'standalone',
                  label: "Individual Tasks",
                  tasks: standaloneTasks,
                  status: standaloneTasks.some(t => t.status === 'processing') ? 'processing' : 'pending',
                  completedCount,
-                 totalCount: standaloneTasks.length
+                 totalCount: standaloneTasks.length,
+                 progress: aggregateProgress
              });
         }
 
-        // Filter out fully completed if checkbox off
         return result.filter(b => showCompleted || b.status !== 'completed').sort((a, b) => {
-            // Priority: Processing > Pending > Waiting > Completed
             const score = (s: string) => {
                 if (s === 'processing') return 0;
                 if (s === 'pending') return 1;
@@ -115,8 +137,14 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
             case 'waiting': return <Lock size={16} className="text-orange-400" />;
             case 'completed': return <CheckCircle size={16} className="text-green-500" />;
             case 'failed': return <AlertCircle size={16} className="text-red-500" />;
+            case 'stopped': return <StopCircle size={16} className="text-zinc-500" />;
             default: return <Clock size={16} className="text-zinc-500" />;
         }
+    };
+
+    const handleStopBatch = (e: React.MouseEvent, tasks: RenderTask[]) => {
+        e.stopPropagation();
+        tasks.forEach(t => onStopTask(t.id));
     };
 
     return (
@@ -132,11 +160,20 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
                             <Layers className="text-blue-500" size={18} />
                             Render Queue
                         </h3>
-                        <div className="text-xs text-zinc-500 mt-1">
-                            {queue.filter(t => t.status === 'processing').length} active tasks • {queue.filter(t => t.status === 'waiting').length} waiting
+                        <div className="text-xs text-zinc-500 mt-1 flex items-center gap-2">
+                            {queue.filter(t => t.status === 'processing').length} active • {queue.filter(t => t.status === 'pending').length} pending
+                            {isPaused && <span className="text-yellow-500 font-bold bg-yellow-900/30 px-1.5 rounded text-[10px]">PAUSED</span>}
                         </div>
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3">
+                        {/* Global Controls */}
+                        <div className="flex bg-zinc-800 rounded p-0.5">
+                            <button onClick={onResumeQueue} className={`p-1.5 rounded ${!isPaused ? 'bg-zinc-600 text-white' : 'text-zinc-400 hover:text-white'}`} title="Resume Queue"><Play size={14}/></button>
+                            <button onClick={onPauseQueue} className={`p-1.5 rounded ${isPaused ? 'bg-zinc-600 text-white' : 'text-zinc-400 hover:text-white'}`} title="Pause Queue"><Pause size={14}/></button>
+                        </div>
+                        
+                        <div className="w-[1px] h-6 bg-zinc-800"/>
+
                         <label className="flex items-center gap-2 text-[10px] text-zinc-500 hover:text-zinc-300 cursor-pointer">
                             <input 
                                 type="checkbox" 
@@ -144,7 +181,7 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
                                 onChange={e => setShowCompleted(e.target.checked)} 
                                 className="rounded bg-zinc-800 border-zinc-700"
                             />
-                            Show Completed
+                            Show All
                         </label>
                         <button onClick={onClose} className="p-2 hover:bg-zinc-800 rounded-full transition-colors text-zinc-500 hover:text-white">
                             <X size={18} />
@@ -163,7 +200,6 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
 
                     {batches.map(batch => {
                         const isExpanded = expandedBatches.has(batch.id);
-                        const progressPercent = (batch.completedCount / batch.totalCount) * 100;
                         
                         return (
                             <div key={batch.id} className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -182,9 +218,20 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
                                                 {renderStatusIcon(batch.status)}
                                                 <span className="text-xs font-bold text-zinc-200 truncate">{batch.label}</span>
                                             </div>
-                                            <span className="text-[10px] font-mono text-zinc-500">
-                                                {batch.completedCount}/{batch.totalCount}
-                                            </span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-mono text-zinc-500">
+                                                    {batch.completedCount}/{batch.totalCount}
+                                                </span>
+                                                {(batch.status === 'processing' || batch.status === 'pending' || batch.status === 'waiting') && (
+                                                    <button 
+                                                        onClick={(e) => handleStopBatch(e, batch.tasks)}
+                                                        className="p-1 hover:bg-red-900/50 text-zinc-600 hover:text-red-400 rounded"
+                                                        title="Stop Batch"
+                                                    >
+                                                        <StopCircle size={12}/>
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                         
                                         {/* Progress Bar */}
@@ -192,10 +239,11 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
                                             <div 
                                                 className={`h-full transition-all duration-500 ${
                                                     batch.status === 'failed' ? 'bg-red-500' :
+                                                    batch.status === 'stopped' ? 'bg-zinc-500' :
                                                     batch.status === 'waiting' ? 'bg-orange-500/50' : 
                                                     batch.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'
                                                 }`}
-                                                style={{ width: `${progressPercent}%` }}
+                                                style={{ width: `${batch.progress}%` }}
                                             />
                                         </div>
 
@@ -215,22 +263,30 @@ export const RenderQueuePanel: React.FC<RenderQueuePanelProps> = ({ queue, asset
                                         {batch.tasks.map(task => {
                                             const asset = assets.find(a => a.id === task.assetId);
                                             return (
-                                                <div key={task.id} className="flex items-center gap-3 px-3 py-2 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30">
+                                                <div key={task.id} className="flex items-center gap-3 px-3 py-2 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30 group">
                                                     <div className="w-4 shrink-0 flex justify-center">
                                                         {task.status === 'processing' && <Loader2 size={12} className="animate-spin text-blue-400" />}
                                                         {task.status === 'completed' && <div className="w-1.5 h-1.5 rounded-full bg-green-500" />}
                                                         {task.status === 'failed' && <div className="w-1.5 h-1.5 rounded-full bg-red-500" />}
+                                                        {task.status === 'stopped' && <div className="w-1.5 h-1.5 rounded-full bg-zinc-500" />}
                                                         {(task.status === 'pending' || task.status === 'waiting') && <div className="w-1.5 h-1.5 rounded-full bg-zinc-700" />}
                                                     </div>
                                                     <div className="flex-1 min-w-0">
                                                         <div className="flex justify-between items-center">
                                                             <span className="text-[10px] text-zinc-300 truncate font-medium">{asset?.title || "Unknown Asset"}</span>
-                                                            <span className={`text-[9px] uppercase ${
-                                                                task.status === 'failed' ? 'text-red-400' : 
-                                                                task.status === 'processing' ? 'text-blue-400' : 'text-zinc-600'
-                                                            }`}>
-                                                                {task.status}
-                                                            </span>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className={`text-[9px] uppercase ${
+                                                                    task.status === 'failed' ? 'text-red-400' : 
+                                                                    task.status === 'processing' ? 'text-blue-400' : 'text-zinc-600'
+                                                                }`}>
+                                                                    {task.status} {task.status === 'processing' && task.progress ? `(${Math.round(task.progress)}%)` : ''}
+                                                                </span>
+                                                                {(task.status === 'pending' || task.status === 'processing') && (
+                                                                    <button onClick={() => onStopTask(task.id)} className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400">
+                                                                        <StopCircle size={10} />
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                         <div className="text-[9px] text-zinc-500 truncate font-mono opacity-70">
                                                             {task.prompt}

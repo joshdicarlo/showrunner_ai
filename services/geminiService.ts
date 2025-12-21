@@ -87,14 +87,20 @@ const retryWithBackoff = async <T>(fn: () => Promise<T>, retries = 3, initialDel
         try {
             return await fn();
         } catch (error: any) {
-            const isRateLimit = error.status === 429 || 
-                                error.code === 429 || 
-                                error.status === 'RESOURCE_EXHAUSTED' ||
-                                (error.message && error.message.includes('429')) ||
-                                (error.message && error.message.includes('quota'));
+            // Enhanced error checking for various error structures
+            const status = error.status || error.code || error?.error?.code || error?.error?.status;
+            const message = error.message || error?.error?.message || '';
+            
+            const isRateLimit = status === 429 || 
+                                status === 'RESOURCE_EXHAUSTED' ||
+                                (typeof message === 'string' && (
+                                    message.includes('429') ||
+                                    message.includes('quota') ||
+                                    message.includes('RESOURCE_EXHAUSTED')
+                                ));
             
             if (isRateLimit && i < retries - 1) {
-                console.warn(`Rate limit hit. Retrying in ${currentDelay}ms...`);
+                console.warn(`Rate limit hit (Attempt ${i + 1}/${retries}). Retrying in ${currentDelay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, currentDelay));
                 currentDelay *= 2;
                 continue;
@@ -115,14 +121,16 @@ export const generateCreativeText = async (
 ): Promise<string> => {
   const ai = createAI();
   try {
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        systemInstruction,
-      },
+    return await retryWithBackoff(async () => {
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction,
+          },
+        });
+        return response.text || "No text generated.";
     });
-    return response.text || "No text generated.";
   } catch (e) {
     console.error("Text Gen Error", e);
     throw e;
@@ -162,6 +170,7 @@ export const generateTextCompletion = async (currentText: string): Promise<strin
         
         Completion:`;
 
+        // No retry for autocomplete to keep it snappy, if it fails, it fails silently
         const response = await ai.models.generateContent({
             model: MODELS.TEXT_FAST, 
             contents: prompt,
@@ -573,48 +582,50 @@ export const generateImage = async (
 ): Promise<string> => {
     const ai = createAI();
     try {
-        if (model.includes('imagen')) {
-             const response = await ai.models.generateImages({
-                model,
-                prompt,
-                config: {
-                    numberOfImages: 1,
-                    aspectRatio: aspectRatio,
-                    outputMimeType: 'image/jpeg'
-                }
-            });
-            const b64 = response.generatedImages?.[0]?.image?.imageBytes;
-            return b64 ? `data:image/jpeg;base64,${b64}` : "";
-        } else {
-            // Gemini Image Gen
-            const parts: any[] = [];
-            referenceImages.forEach(img => {
-                const match = img.match(/^data:(.+);base64,(.+)$/);
-                if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
-            });
-            parts.push({ text: prompt });
+        return await retryWithBackoff(async () => {
+            if (model.includes('imagen')) {
+                 const response = await ai.models.generateImages({
+                    model,
+                    prompt,
+                    config: {
+                        numberOfImages: 1,
+                        aspectRatio: aspectRatio,
+                        outputMimeType: 'image/jpeg'
+                    }
+                });
+                const b64 = response.generatedImages?.[0]?.image?.imageBytes;
+                return b64 ? `data:image/jpeg;base64,${b64}` : "";
+            } else {
+                // Gemini Image Gen
+                const parts: any[] = [];
+                referenceImages.forEach(img => {
+                    const match = img.match(/^data:(.+);base64,(.+)$/);
+                    if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+                });
+                parts.push({ text: prompt });
 
-            const response = await ai.models.generateContent({
-                model,
-                contents: { parts },
-                config: {
-                    imageConfig: {
-                         aspectRatio: aspectRatio,
-                         imageSize: model.includes('pro') ? "2K" : "1K"
-                     }
-                }
-            });
-            
-            // Extract from parts
-            if (response.candidates?.[0]?.content?.parts) {
-                for (const part of response.candidates[0].content.parts) {
-                    if (part.inlineData) {
-                        return `data:image/png;base64,${part.inlineData.data}`;
+                const response = await ai.models.generateContent({
+                    model,
+                    contents: { parts },
+                    config: {
+                        imageConfig: {
+                             aspectRatio: aspectRatio,
+                             imageSize: model.includes('pro') ? "2K" : "1K"
+                         }
+                    }
+                });
+                
+                // Extract from parts
+                if (response.candidates?.[0]?.content?.parts) {
+                    for (const part of response.candidates[0].content.parts) {
+                        if (part.inlineData) {
+                            return `data:image/png;base64,${part.inlineData.data}`;
+                        }
                     }
                 }
+                return "";
             }
-            return "";
-        }
+        });
     } catch (e) {
         console.error("Image Gen Error", e);
         throw e;
@@ -630,24 +641,26 @@ export const editImage = async (imageBase64: string, prompt: string): Promise<st
         const match = imageBase64.match(/^data:(.+);base64,(.+)$/);
         if (!match) throw new Error("Invalid Image Data");
 
-        const response = await ai.models.generateContent({
-            model: MODELS.IMAGE_EDIT,
-            contents: {
-                parts: [
-                    { inlineData: { mimeType: match[1], data: match[2] } },
-                    { text: prompt }
-                ]
-            }
-        });
-        
-        if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.inlineData) {
-                    return `data:image/png;base64,${part.inlineData.data}`;
+        return await retryWithBackoff(async () => {
+            const response = await ai.models.generateContent({
+                model: MODELS.IMAGE_EDIT,
+                contents: {
+                    parts: [
+                        { inlineData: { mimeType: match[1], data: match[2] } },
+                        { text: prompt }
+                    ]
+                }
+            });
+            
+            if (response.candidates?.[0]?.content?.parts) {
+                for (const part of response.candidates[0].content.parts) {
+                    if (part.inlineData) {
+                        return `data:image/png;base64,${part.inlineData.data}`;
+                    }
                 }
             }
-        }
-        return "";
+            return "";
+        });
     } catch (e) {
         console.error("Image Edit Error", e);
         throw e;
@@ -665,7 +678,7 @@ export const generateVideo = async (
     duration: string = "5",
     withAudio: boolean = false,
     lastFrameImageBase64?: string,
-    onProgress?: (msg: string) => void
+    onProgress?: (msg: string, percent: number) => void
 ): Promise<string> => {
     const ai = createAI();
     
@@ -690,18 +703,35 @@ export const generateVideo = async (
     }
 
     try {
-        if (onProgress) onProgress("Submitting...");
-        let operation = await ai.models.generateVideos(req);
+        if (onProgress) onProgress("Submitting...", 5);
+        let operation: any;
         
-        if (onProgress) onProgress("Processing...");
+        // Wrap the submission part with retry logic
+        await retryWithBackoff(async () => {
+            operation = await ai.models.generateVideos(req);
+        });
+        
+        if (onProgress) onProgress("Processing...", 10);
+        let checks = 0;
+        
+        // Polling logic typically doesn't rate limit in the same way, but fetching the operation could.
+        // We wrap the polling operation call too just in case.
         while (!operation.done) {
-            await new Promise(r => setTimeout(r, 5000));
-            operation = await ai.operations.getVideosOperation({ operation });
+            await new Promise(r => setTimeout(r, 5000)); // Poll every 5s
+            checks++;
+            const percent = Math.min(10 + (checks * 5), 95); 
+            if (onProgress) onProgress("Processing...", percent);
+            
+            await retryWithBackoff(async () => {
+                operation = await ai.operations.getVideosOperation({ operation });
+            });
         }
         
+        if (onProgress) onProgress("Finalizing...", 100);
         const video = operation.response?.generatedVideos?.[0]?.video;
         if (video?.uri) {
-            return `${video.uri}&key=${process.env.API_KEY}`;
+            const separator = video.uri.includes('?') ? '&' : '?';
+            return `${video.uri}${separator}key=${process.env.API_KEY}`;
         }
         return "";
     } catch (e) {
@@ -720,7 +750,11 @@ export const sendChatMessage = async (history: {role: string, parts: {text: stri
         config: { systemInstruction: CHAT_SYSTEM_INSTRUCTION },
         history
     });
-    const result = await chat.sendMessage({ message });
+    
+    // Wrap message sending
+    const result = await retryWithBackoff(async () => {
+        return await chat.sendMessage({ message });
+    });
     return result.text || "";
 }
 
