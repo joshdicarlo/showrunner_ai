@@ -77,7 +77,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
     const requestRef = useRef<number | undefined>(undefined);
     const startTimeRef = useRef<number>(0);
     const lastTimeRef = useRef<number>(0);
-    const videoRefs = useRef<Record<string, HTMLVideoElement>>({});
+    const videoPlayerRef = useRef<HTMLVideoElement>(null);
     
     // Layout Refs for Sync Scroll
     const headerRef = useRef<HTMLDivElement>(null);
@@ -129,7 +129,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                 items.push({
                     node,
                     asset,
-                    type: node.type === NodeType.AI_VIDEO_GEN ? 'video' : 'image'
+                    type: (node.type === NodeType.AI_VIDEO_GEN || node.data.videoUrl) ? 'video' : 'image'
                 });
             });
         });
@@ -346,7 +346,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
             candidates.sort((a, b) => b.id.localeCompare(a.id)); 
             const selected = candidates[0]; 
             if (selected) {
-                const isVideo = selected.type === NodeType.AI_VIDEO_GEN;
+                const isVideo = selected.type === NodeType.AI_VIDEO_GEN || !!selected.data.videoUrl;
                 const url = isVideo ? selected.data.videoUrl! : selected.data.imageUrl!;
                 const duration = isVideo && selected.data.duration ? parseFloat(selected.data.duration) : 5;
                 newClips.push({
@@ -438,7 +438,9 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         const item = JSON.parse(data) as typeof binItems[0];
         if (contentRef.current) {
             const rect = contentRef.current.getBoundingClientRect(); const x = e.clientX - rect.left + scrollLeft; const dropTime = Math.max(0, x / scale);
-            const isVideo = item.type === 'video'; const url = isVideo ? item.node.data.videoUrl! : item.node.data.imageUrl!; const duration = isVideo && item.node.data.duration ? parseFloat(item.node.data.duration) : 5;
+            const isVideo = item.type === 'video' || !!item.node.data.videoUrl; 
+            const url = isVideo ? item.node.data.videoUrl! : item.node.data.imageUrl!; 
+            const duration = isVideo && item.node.data.duration ? parseFloat(item.node.data.duration) : 5;
             const newClip: TimelineClip = { id: `clip-${Date.now()}-${Math.random()}`, sourceNodeId: item.node.id, mediaUrl: url, mediaType: isVideo ? 'video' : 'image', start: dropTime, duration, offset: 0, track: trackId, label: item.asset.title, thumbnail: item.node.data.imageUrl };
             saveToHistory([...clips, newClip]);
         }
@@ -452,7 +454,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         if (versionFlyout) {
             const clip = clips.find(c => c.id === versionFlyout.clipId);
             if (clip) {
-                const isVideo = node.type === NodeType.AI_VIDEO_GEN;
+                const isVideo = node.type === NodeType.AI_VIDEO_GEN || !!node.data.videoUrl;
                 const newClip: TimelineClip = {
                     ...clip,
                     sourceNodeId: node.id,
@@ -468,7 +470,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
 
     const showVersions = (clipId: string, assetId: string, anchorX: number, anchorY: number) => {
         const versions = projectNodes.filter(n => n.assetId === assetId && (n.data.imageUrl || n.data.videoUrl));
-        // Sort by date desc
         versions.sort((a, b) => b.id.localeCompare(a.id));
         setVersionFlyout({ clipId, versions });
         setContextMenu({ x: anchorX, y: anchorY });
@@ -478,7 +479,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
         if (contextMenu && contextMenu.clipId && onGenerateVideoForClip) {
             const clip = clips.find(c => c.id === contextMenu.clipId);
             if (clip) {
-                const model = instant ? MODELS.VIDEO_FAST : MODELS.VIDEO_HQ;
+                const model = MODELS.VIDEO_LUMA; 
                 onGenerateVideoForClip(clip.id, clip.sourceNodeId, replace, model);
             }
         }
@@ -486,12 +487,40 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
     }
 
     const totalDuration = Math.max(60, ...clips.map(c => c.start + c.duration + 10));
-    const activeClip = useMemo(() => { const visible = clips.filter(c => currentTime >= c.start && currentTime < c.start + c.duration && (c.track === 0 || c.track === 1)); return visible.sort((a, b) => b.track - a.track)[0]; }, [clips, currentTime]);
+    
+    const activeClip = useMemo(() => { 
+        const visible = clips.filter(c => currentTime >= c.start && currentTime < c.start + c.duration && (c.track === 0 || c.track === 1)); 
+        return visible.sort((a, b) => b.track - a.track)[0]; 
+    }, [clips, currentTime]);
+
+    // --- Video Scrubbing & Sync Effect ---
+    useEffect(() => {
+        const video = videoPlayerRef.current;
+        if (!video || !activeClip || activeClip.mediaType !== 'video') return;
+
+        const clipLocalTime = (currentTime - activeClip.start) + (activeClip.offset || 0);
+
+        if (!isPlaying) {
+            video.pause();
+            // Sync currentTime for scrubbing. Using a threshold to avoid jitter.
+            if (Math.abs(video.currentTime - clipLocalTime) > 0.03) {
+                video.currentTime = clipLocalTime;
+            }
+        } else {
+            // When playing, ensure the video is actually playing
+            if (video.paused) {
+                video.play().catch(e => console.warn("Video playback blocked", e));
+            }
+            // Sync time if drift is significant (e.g. over 0.25s)
+            if (Math.abs(video.currentTime - clipLocalTime) > 0.25) {
+                video.currentTime = clipLocalTime;
+            }
+        }
+    }, [currentTime, isPlaying, activeClip]);
 
     return (
         <div className="w-full h-full flex flex-col bg-zinc-950 text-white font-sans overflow-hidden" onClick={() => { setContextMenu(null); setEditingTrackId(null); setVersionFlyout(null); }}>
             
-            {/* ... (Top Section - Bin & Player - Unchanged) ... */}
             <div className="flex-1 flex min-h-0 border-b border-zinc-800">
                 {/* BIN */}
                 <div className="w-80 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
@@ -513,7 +542,9 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                     {item.node.data.status === 'approved' && <CheckCircle size={14} className="text-green-500 fill-black" />}
                                     {item.node.data.status === 'review' && <AlertCircle size={14} className="text-yellow-500 fill-black" />}
                                 </div>
-                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/50 p-1 rounded"><Layers size={12}/></div>
+                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/50 p-1 rounded">
+                                    {item.type === 'video' ? <Video size={12}/> : <Layers size={12}/>}
+                                </div>
                             </div>
                         ))}
                     </div>
@@ -527,7 +558,14 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                     <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-zinc-950">
                         {activeClip ? (
                             activeClip.mediaType === 'video' ? (
-                                <video src={activeClip.mediaUrl} className="max-w-full max-h-full shadow-2xl" />
+                                <video 
+                                    ref={videoPlayerRef}
+                                    key={activeClip.mediaUrl} 
+                                    src={activeClip.mediaUrl} 
+                                    muted 
+                                    playsInline 
+                                    className="max-w-full max-h-full shadow-2xl" 
+                                />
                             ) : (
                                 <img src={activeClip.mediaUrl} className="max-w-full max-h-full shadow-2xl" />
                             )
@@ -551,7 +589,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                         </button>
                         <div className="flex items-center gap-2 border-l border-zinc-700 pl-4 ml-2">
                             <button onClick={() => stepFrame(1)} className="text-zinc-400 hover:text-white p-1" title="Next Frame"><ChevronRight size={16} strokeWidth={3}/></button>
-                            <button onClick={() => stepToCut('next')} className="text-zinc-400 hover:text-white p-1" title="Next Cut"><StepForward size={16}/></button>
+                            <button onClick={() => stepToCut('next')} className="text-zinc-400 hover:text-white p-1" title="Next Cut"><SkipForward size={16}/></button>
                         </div>
                     </div>
                 </div>
@@ -559,7 +597,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
 
             {/* Bottom Section: Timeline */}
             <div ref={timelineRef} className="shrink-0 border-t border-zinc-800 bg-zinc-900/80 flex flex-col relative select-none" style={{ height: timelineHeight }}>
-                {/* ... (Resize Handle & Toolbar) ... */}
                 <div className="h-1 bg-zinc-800 hover:bg-blue-500 cursor-row-resize w-full z-50 transition-colors" onMouseDown={() => setIsResizingTimeline(true)} />
                 <div className="h-8 border-b border-zinc-800 flex items-center px-2 gap-2 bg-zinc-900">
                     <div className="flex bg-zinc-800 rounded p-0.5">
@@ -593,7 +630,7 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                     <div className="flex-1 flex flex-col min-w-0 bg-zinc-900/10">
                         <div ref={rulerRef} className="h-8 border-b border-zinc-800 bg-zinc-900/80 overflow-hidden relative shrink-0">
                             <div className="relative h-full" style={{ width: totalDuration * scale }}>
-                                {Array.from({ length: Math.ceil(totalDuration) }).map((_, i) => (
+                                {Array.from({ length: Math.ceil(totalDuration / 5) }).map((_, i) => (
                                     <div key={i} className="absolute top-0 bottom-0 border-l border-zinc-800 text-[9px] text-zinc-600 pl-1 pt-1 select-none pointer-events-none" style={{ left: i * scale * 5 }}>{i * 5}s</div>
                                 ))}
                                 <div className="absolute top-4 bottom-0 w-[1px] bg-red-500 z-30 pointer-events-none transform -translate-x-1/2" style={{ left: currentTime * scale }}>
@@ -610,7 +647,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                     <div key={track.id} className={`border-b border-zinc-800 relative group ${track.type === 'audio' ? 'bg-zinc-900/30' : 'bg-zinc-900/10'}`} style={{ height: track.height }} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, track.id)}>
                                         {clips.filter(c => c.track === track.id).map(clip => {
                                             const isSelected = selectedClipIds.has(clip.id);
-                                            // Determine Version Index
                                             const assetId = projectNodes.find(n => n.id === clip.sourceNodeId)?.assetId;
                                             const versions = assetId ? projectNodes.filter(n => n.assetId === assetId && (n.data.imageUrl || n.data.videoUrl)).sort((a,b) => a.id.localeCompare(b.id)) : [];
                                             const versionIdx = versions.findIndex(v => v.id === clip.sourceNodeId);
@@ -628,7 +664,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                                         <div className="absolute inset-0 p-1 flex flex-col justify-between bg-gradient-to-r from-black/80 to-transparent pointer-events-none">
                                                             <div className="flex justify-between items-start">
                                                                 <span className="text-[10px] font-bold text-white truncate drop-shadow-md w-full">{clip.label}</span>
-                                                                {/* Version Icon */}
                                                                 {versionIdx !== -1 && (
                                                                     <span className="text-[8px] font-mono bg-black/50 text-zinc-300 px-1 rounded border border-zinc-700">v{versionIdx + 1}</span>
                                                                 )}
@@ -661,7 +696,6 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                         <>
                             <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Clip Actions</div>
                             
-                            {/* Version Flyout Trigger */}
                             <button 
                                 onClick={(e) => { 
                                     const clip = clips.find(c => c.id === contextMenu.clipId);
@@ -673,16 +707,12 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                 <RefreshCw size={12} /> Replace with Version...
                             </button>
 
-                            {/* Video Generation Trigger */}
                             <div className="h-[1px] bg-zinc-800 my-1 mx-2" />
                             <button onClick={() => handleGenerateVideoForClipAction(false, false)} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2">
-                                <Video size={12} /> Generate Video
+                                <Video size={12} /> Generate Video (Luma)
                             </button>
                             <button onClick={() => handleGenerateVideoForClipAction(true, false)} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2">
-                                <Film size={12} /> Generate Video & Replace
-                            </button>
-                            <button onClick={() => handleGenerateVideoForClipAction(false, true)} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2">
-                                <Sparkles size={12} /> Generate Instant Video
+                                <Film size={12} /> Generate & Replace (Luma)
                             </button>
                             
                             <div className="h-[1px] bg-zinc-800 my-1 mx-2" />
@@ -701,38 +731,22 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
                                         className="w-full text-left px-3 py-2 hover:bg-zinc-800 flex items-center gap-3 border-b border-zinc-800/50"
                                     >
                                         <div className="w-8 h-8 bg-black rounded overflow-hidden shrink-0">
-                                            {v.data.imageUrl ? <img src={v.data.imageUrl} className="w-full h-full object-cover"/> : <video src={v.data.videoUrl} className="w-full h-full object-cover"/>}
+                                            {v.data.videoUrl ? <video src={v.data.videoUrl} className="w-full h-full object-cover"/> : <img src={v.data.imageUrl} className="w-full h-full object-cover"/>}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <div className="text-xs text-zinc-300 truncate">Version {i + 1}</div>
-                                            <div className="text-[10px] text-zinc-500">{v.type === NodeType.AI_VIDEO_GEN ? 'Video' : 'Image'} • {new Date(parseInt(v.id.split('-').pop()!)).toLocaleTimeString()}</div>
+                                            <div className="text-[10px] text-zinc-500">{v.data.videoUrl ? 'Video' : 'Image'} • {new Date(parseInt(v.id.split('-').pop()!)).toLocaleTimeString()}</div>
                                         </div>
                                     </button>
                                 ))}
                             </div>
                         </>
                     ) : contextMenu.nodeId ? (
-                        // Bin Context Menu
                         <>
                             <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Asset Status</div>
                             <button onClick={() => handleSetNodeStatus('approved')} className="w-full text-left px-3 py-2 text-xs hover:bg-green-900/30 text-green-400 flex items-center gap-2"><CheckCircle size={12}/> Approved</button>
                             <button onClick={() => handleSetNodeStatus('review')} className="w-full text-left px-3 py-2 text-xs hover:bg-yellow-900/30 text-yellow-400 flex items-center gap-2"><AlertCircle size={12}/> Review</button>
                             <button onClick={() => handleSetNodeStatus('archived')} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-400 flex items-center gap-2"><Archive size={12}/> Archive</button>
-                            
-                            <div className="h-[1px] bg-zinc-800 my-1 mx-2" />
-                            {onGenerateVideoForClip && (
-                                <button 
-                                    onClick={() => {
-                                        // Mock clip generation from Bin (creates unplaced node)
-                                        // For simplicity, reusing same callback logic, passing dummy clip ID if needed or handling differently
-                                        // This demo focuses on Timeline context primarily
-                                        setContextMenu(null);
-                                    }} 
-                                    className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2"
-                                >
-                                    <Video size={12} /> Generate Video
-                                </button>
-                            )}
                         </>
                     ) : null}
                 </div>

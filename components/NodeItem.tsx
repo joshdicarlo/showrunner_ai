@@ -2,12 +2,13 @@
 import React, { useState, useRef, useEffect, memo, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
-import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem, DepartmentType, ProjectSettings } from '../types';
+import { FlowNode, NodeType, ProjectAsset, NodeHistoryItem, DepartmentType, ProjectSettings, BatchType } from '../types';
 import { Move, Play, X, Sparkles, Edit, Image as ImageIcon, Film, CheckCircle, Eye, Archive, AlertCircle, Folder, FolderOpen, ChevronDown, ChevronRight, RotateCcw, User, Maximize2, Minimize2, Bold, Italic, Heading1, Heading2, List, Quote, Code, EyeOff, Bot, Upload, Download, HardDrive, FileText, Cloud, Music, Volume2, VolumeX, ChevronLeft, History, Palette, Search } from 'lucide-react';
 import { Button, Input, TextArea, Select } from './UI';
 import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS, VIDEO_MODELS_OPTIONS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import * as GeminiService from '../services/geminiService';
 import * as FileService from '../services/fileService';
+import { generateLumaVideo } from '../services/lumaService';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 import { StyleSelector } from './StyleSelector';
 
@@ -140,7 +141,6 @@ const HighlightedInput: React.FC<{
     // --- Auto Complete Logic ---
     const getActiveToken = (text: string, cursor: number) => {
         const textBeforeCursor = text.slice(0, cursor);
-        // FIXED: Regex now includes hyphens to support names like R-7
         const match = textBeforeCursor.match(/@([\w\.:\-]*)$/);
         return match ? match[1] : null;
     };
@@ -209,7 +209,6 @@ const HighlightedInput: React.FC<{
             onChange(before + inserted + after);
             setShowSuggestions(false);
             
-            // Restore focus next tick
             setTimeout(() => {
                 if (textareaRef.current) {
                     const newPos = before.length + inserted.length;
@@ -237,7 +236,6 @@ const HighlightedInput: React.FC<{
         }
     };
 
-    // Shared style for perfect alignment
     const sharedStyle = {
         fontFamily: '"Fira Code", monospace',
         fontSize: '12px',
@@ -250,7 +248,6 @@ const HighlightedInput: React.FC<{
 
     return (
         <div className={`relative group ${className} overflow-visible bg-zinc-900 border border-zinc-700 rounded`}>
-             {/* Backdrop Layer for Highlights */}
              <div 
                 className="absolute inset-0 pointer-events-none text-transparent z-0 overflow-hidden"
                 style={sharedStyle}
@@ -259,7 +256,6 @@ const HighlightedInput: React.FC<{
                 {renderHighlights()}
              </div>
 
-             {/* Foreground Input Layer */}
              <textarea
                 ref={textareaRef}
                 value={value}
@@ -275,7 +271,6 @@ const HighlightedInput: React.FC<{
                 spellCheck={false}
              />
 
-             {/* Suggestions Menu */}
              {showSuggestions && filteredSuggestions.length > 0 && (
                  <div className="absolute left-0 top-full mt-1 w-64 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-75 max-h-96 overflow-y-auto">
                      <div className="px-2 py-1 bg-zinc-950 text-[9px] text-zinc-500 font-bold border-b border-zinc-800 sticky top-0 z-10">
@@ -357,12 +352,10 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   const textImportInputRef = useRef<HTMLInputElement>(null); 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Co-Pilot State
   const [isCoPilotEnabled, setIsCoPilotEnabled] = useState(true);
   const [suggestion, setSuggestion] = useState('');
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ... (Standard Handlers from existing file) ...
   const handleMouseDown = (e: React.MouseEvent) => {
     if (isExpanded) return;
     const target = e.target as HTMLElement;
@@ -417,7 +410,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       }, 0);
   };
   
-  // --- History Management ---
   const addToHistory = (type: 'image'|'video'|'text', content: string) => {
       const newEntry: NodeHistoryItem = {
           type,
@@ -426,7 +418,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           timestamp: Date.now()
       };
       const history = node.data.history || [];
-      // Push new entry, keep max 10
       const newHistory = [newEntry, ...history].slice(0, 10);
       return newHistory;
   }
@@ -435,7 +426,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       const history = node.data.history || [];
       if (history.length === 0) return;
       
-      // Let's implement "Restore Previous"
       if (direction === 'prev') {
           const [current, ...rest] = history;
           const rotated = [...rest, current];
@@ -446,16 +436,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       }
   }
 
-
-  // --- File Ops ---
-
   const handleLocalFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
           FileService.readTextFile(file).then(content => {
               const current = node.data.text || '';
               onUpdate(node.id, { ...node.data, text: current + (current ? '\n\n' : '') + content });
-              if (textImportInputRef.current) textImportInputRef.current.value = ''; // Reset
+              if (textImportInputRef.current) textImportInputRef.current.value = ''; 
           }).catch(err => {
               console.error("Failed to read file", err);
               setError("Failed to read file.");
@@ -481,7 +468,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       setIsProcessing(false);
   };
 
-  // --- Co-Pilot Logic ---
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const val = e.target.value;
       onUpdate(node.id, { ...node.data, text: val });
@@ -509,8 +495,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           setSuggestion('');
       }
   };
-
-  // --- Gen Logic ---
 
   const handleTextGen = async () => {
     setIsProcessing(true);
@@ -540,7 +524,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           projectAssets, 
           activeAsset, 
           projectSettings,
-          node.data.styleId // Pass explicit style override
+          node.data.styleId 
       );
       const model = node.data.model || MODELS.IMAGE_GEN;
 
@@ -548,7 +532,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       if (node.data.referenceImageUrl) {
           refImages = [node.data.referenceImageUrl];
       } else {
-          // Use shared util with matchedAssets
           refImages = resolveReferenceImages(
               rawPrompt, 
               projectAssets, 
@@ -572,7 +555,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           imageUrl: result, 
           status: 'review', 
           history: newHistory,
-          submittedPrompt: resolved // Save exact submitted prompt for debugging
+          submittedPrompt: resolved 
       });
     } catch (e) {
       setError("Image generation failed.");
@@ -617,13 +600,12 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
               projectAssets, 
               activeAsset, 
               projectSettings,
-              node.data.styleId // Pass explicit style override
+              node.data.styleId 
           );
           const model = node.data.model || MODELS.VIDEO_FAST;
           
           let refImage = node.data.imageUrl;
           if (!refImage) {
-               // Use shared util with matchedAssets
                const images = resolveReferenceImages(
                    rawPrompt, 
                    projectAssets, 
@@ -636,16 +618,31 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                if (images.length > 0) refImage = images[0];
           }
 
-          const result = await GeminiService.generateVideo(
-              resolved,
-              (node.data.aspectRatio as "16:9" | "9:16") || "16:9",
-              refImage, // Start
-              model,
-              node.data.duration,
-              node.data.withAudio,
-              node.data.lastFrameImageUrl, // End Frame (Loop)
-              (msg) => setProgressMsg(msg)
-          );
+          let result: string;
+          // Fix branching: If it's a Luma model, use Luma service
+          if (model.includes('luma')) {
+              result = await generateLumaVideo(
+                  refImage || "",
+                  resolved,
+                  BatchType.STANDARD,
+                  undefined,
+                  parseFloat(node.data.duration || "5"),
+                  undefined,
+                  (msg) => setProgressMsg(msg)
+              );
+          } else {
+              result = await GeminiService.generateVideo(
+                  resolved,
+                  (node.data.aspectRatio as "16:9" | "9:16") || "16:9",
+                  refImage, 
+                  model,
+                  node.data.duration,
+                  node.data.withAudio,
+                  node.data.lastFrameImageUrl, 
+                  (msg) => setProgressMsg(msg)
+              );
+          }
+
           const newHistory = addToHistory('video', result);
           onUpdate(node.id, { 
               ...node.data, 
@@ -654,15 +651,15 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
               history: newHistory,
               submittedPrompt: resolved 
           });
-      } catch (e) {
-          setError("Video generation failed.");
+      } catch (e: any) {
+          console.error("Video Gen Error", e);
+          setError("Video generation failed. " + (e.message || ""));
       } finally {
           setIsProcessing(false);
           setProgressMsg("");
       }
   }
 
-  // --- Auto-Generate Effect ---
   useEffect(() => {
     if (node.data.status === 'generating' && !isProcessing) {
        if (node.type === NodeType.AI_IMAGE_GEN && !node.data.imageUrl) {
@@ -692,7 +689,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const renderContent = (expanded = false) => {
-    // ... (This function uses NodeItemProps, handled above in types and imports)
     switch (node.type) {
       case NodeType.GROUP:
           return (
@@ -870,7 +866,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                             projectSettings={projectSettings}
                         />
                         
-                        {/* Style Selector Row */}
                         <div className="relative z-20 mb-1">
                             <StyleSelector 
                                 selectedId={node.data.styleId} 
@@ -967,7 +962,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                     </div>
                  )}
 
-                 {/* Reference Frames */}
                  <div className="grid grid-cols-2 gap-2 h-16 shrink-0">
                      <div 
                         className="bg-zinc-900/50 rounded border border-zinc-800 flex items-center justify-center relative overflow-hidden cursor-pointer hover:border-zinc-600 transition-colors"
@@ -1008,7 +1002,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                             projectSettings={projectSettings}
                     />
                     
-                    {/* Style Selector Row */}
                     <div className="relative z-20 mb-1">
                         <StyleSelector 
                             selectedId={node.data.styleId} 

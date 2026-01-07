@@ -16,8 +16,9 @@ export const MODELS = {
   TEXT_PRO: "gemini-3-pro-preview",
   IMAGE_GEN: "gemini-3-pro-image-preview", // Default high quality
   IMAGE_EDIT: "gemini-2.5-flash-image", // Nano Banana
-  VIDEO_FAST: "veo-3.1-fast-generate-preview",
-  VIDEO_HQ: "veo-3.1-generate-preview",
+  VIDEO_LUMA: "luma-ray-2",
+  VIDEO_FAST: "luma-ray-2", 
+  VIDEO_HQ: "luma-ray-2", // Set Luma as default for HQ as well
 };
 
 export const IMAGE_MODELS_OPTIONS = [
@@ -27,19 +28,25 @@ export const IMAGE_MODELS_OPTIONS = [
 ];
 
 export const VIDEO_MODELS_OPTIONS = [
+    { value: "luma-ray-2", label: "Luma Dream Machine" },
     { value: "veo-3.1-fast-generate-preview", label: "Veo Fast (Preview)" },
     { value: "veo-3.1-generate-preview", label: "Veo High Quality" },
 ];
 
 export const VIDEO_MODEL_CAPABILITIES: Record<string, { durations: string[], supportsAudio: boolean, supportsLastFrame: boolean }> = {
+    "luma-ray-2": {
+        durations: ["5"],
+        supportsAudio: false,
+        supportsLastFrame: false
+    },
     "veo-3.1-fast-generate-preview": {
         durations: ["4", "6", "8"],
-        supportsAudio: false, // Typically fast preview might not prioritize audio
+        supportsAudio: false,
         supportsLastFrame: true
     },
     "veo-3.1-generate-preview": {
         durations: ["4", "6", "8"],
-        supportsAudio: true, // High quality typically supports audio
+        supportsAudio: true,
         supportsLastFrame: true
     }
 };

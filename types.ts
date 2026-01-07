@@ -1,4 +1,16 @@
 
+export enum AIProvider {
+  GEMINI = "gemini",
+  LUMA = "luma",
+}
+
+export enum BatchType {
+  STANDARD = "standard",
+  PIXEL_ART = "pixel_art",
+}
+
+export type Resolution = string | number;
+
 export enum DepartmentType {
   WRITERS_ROOM = "Writers Room",
   CASTING_WARDROBE = "Casting & Wardrobe",

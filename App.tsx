@@ -9,20 +9,21 @@ import { ChatBot } from './components/ChatBot';
 import { EditorTimeline } from './components/EditorTimeline';
 import { SettingsModal } from './components/SettingsModal';
 import { RenderQueuePanel } from './components/RenderQueuePanel';
-import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings } from './types';
+import { Login } from './components/Login';
+import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings, BatchType } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus } from 'lucide-react';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage, generateVideo } from './services/geminiService';
+import { generateLumaVideo } from './services/lumaService';
 import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap } from 'lucide-react';
 
 type View = 'dashboard' | 'project';
 
-// Generalized Detection Interface
 interface DetectedItem {
     name: string;
     description: string;
@@ -30,23 +31,21 @@ interface DetectedItem {
     type: string;
     selected: boolean;
     isDuplicate?: boolean;
-    children?: DetectedItem[]; // For nested shots
+    children?: DetectedItem[]; 
 }
 
 const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [view, setView] = useState<View>('dashboard');
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   
-  // Context State
   const [currentDept, setCurrentDept] = useState<DepartmentType>(DepartmentType.WRITERS_ROOM);
-  const [currentAssetId, setCurrentAssetId] = useState<string | null>(null); // Null means Department Root
-  const [workspaceView, setWorkspaceView] = useState<'canvas' | 'gallery'>('canvas'); // New State
+  const [currentAssetId, setCurrentAssetId] = useState<string | null>(null); 
+  const [workspaceView, setWorkspaceView] = useState<'canvas' | 'gallery'>('canvas'); 
 
-  // Canvas Focus State
   const [focusNodeIds, setFocusNodeIds] = useState<string[]>([]);
 
-  // Modals
   const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
   const [isCreateAssetOpen, setIsCreateAssetOpen] = useState(false);
   const [showEnhanceModal, setShowEnhanceModal] = useState(false);
@@ -55,54 +54,43 @@ const App: React.FC = () => {
   const [isRenderQueueOpen, setIsRenderQueueOpen] = useState(false); 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
-  // Form State (New Project)
   const [creationMode, setCreationMode] = useState<'blank' | 'seed'>('blank');
   const [newProjectTitle, setNewProjectTitle] = useState('');
   
-  // Project Seed State
   const [seedPrompt, setSeedPrompt] = useState('');
   const [generatedSeeds, setGeneratedSeeds] = useState<StorySeed[]>([]);
   const [selectedSeedIdx, setSelectedSeedIdx] = useState<number | null>(null);
   const [isGeneratingSeeds, setIsGeneratingSeeds] = useState(false);
   const [autoGenAssets, setAutoGenAssets] = useState(true);
 
-  // Asset Creation State
   const [newAssetTitle, setNewAssetTitle] = useState('');
   const [newAssetDesc, setNewAssetDesc] = useState('');
   const [newAssetParentId, setNewAssetParentId] = useState<string | undefined>(undefined);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhancementOptions, setEnhancementOptions] = useState<string[]>([]);
   
-  // Analysis State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
   const [oneShotItems, setOneShotItems] = useState<OneShotItem[]>([]);
-  const [analysisType, setAnalysisType] = useState<string>(''); // 'Characters', 'Locations', 'Story'
-  const [analysisParentId, setAnalysisParentId] = useState<string | null>(null); // For creating child assets during analysis
+  const [analysisType, setAnalysisType] = useState<string>(''); 
+  const [analysisParentId, setAnalysisParentId] = useState<string | null>(null); 
   const [autoFindShots, setAutoFindShots] = useState(true);
 
-  // Drive State
   const [isDriveConnected, setIsDriveConnected] = useState(false);
   const [isMockDrive, setIsMockDrive] = useState(false);
   const [driveFolderMap, setDriveFolderMap] = useState<Record<string, string>>({});
 
-  // Render Queue State
   const [renderQueue, setRenderQueue] = useState<RenderTask[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
   
-  // Ref for accessing current state in async queue callbacks
   const projectsRef = useRef(projects);
   const currentProjectIdRef = useRef(currentProjectId);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
 
-  // Derived state for Active Project
   const activeProject = projects.find(p => p.id === currentProjectId);
 
-  // --- Render Queue Setup ---
-  // Task Executor logic
   const handleTaskExecution = async (task: RenderTask): Promise<string> => {
-      // Resolve prompt dynamically
       const activeProj = projectsRef.current.find(p => p.id === currentProjectIdRef.current);
       const asset = activeProj?.assets.find(a => a.id === task.assetId);
       
@@ -111,14 +99,12 @@ const App: React.FC = () => {
           activeProj?.assets, 
           asset,
           activeProj?.settings || DEFAULT_PROJECT_SETTINGS,
-          task.config?.styleId // Pass override if available
+          task.config?.styleId 
       );
       
-      // Store the resolved prompt in the task for debug visibility later
       task.submittedPrompt = resolved;
 
       if (task.type === 'image') {
-          // Calculate approvedImagesMap on the fly for the worker
           const approvedMap: Record<string, string[]> = {};
           activeProj?.assets.forEach(a => {
               const images = activeProj.nodes
@@ -133,28 +119,44 @@ const App: React.FC = () => {
               asset, 
               {}, 
               approvedMap, 
-              {}, // assetThumbnails
+              {}, 
               matchedAssets
           );
           return await generateImage(resolved, task.config?.aspectRatio || "16:9", task.config?.model, refImages);
       } else if (task.type === 'video') {
-          // Video Generation Logic
           const startImage = task.startImage; 
-          const duration = "5"; // Default
-          // Veo logic: If using start frame, prioritize it.
-          // Note: Video prompts shouldn't have too many image references if a start frame is used in current API logic
-          return await generateVideo(
-              resolved,
-              task.config?.aspectRatio as any || "16:9",
-              startImage,
-              task.config?.model || MODELS.VIDEO_FAST,
-              duration,
-              false,
-              undefined,
-              (msg, percent) => {
-                  queueService.updateTaskProgress(task.id, percent);
-              }
-          );
+          const duration = 5; 
+          const model = task.config?.model || MODELS.VIDEO_FAST;
+
+          // Branch: Luma vs Veo based on model name
+          if (model.includes('luma')) {
+              return await generateLumaVideo(
+                  startImage || "",
+                  resolved,
+                  BatchType.STANDARD,
+                  undefined,
+                  duration,
+                  undefined,
+                  (status) => {
+                      const match = status.match(/\((\d+)%\)/);
+                      const percent = match ? parseInt(match[1]) : 0;
+                      queueService.updateTaskProgress(task.id, percent);
+                  }
+              );
+          } else {
+              return await generateVideo(
+                  resolved,
+                  task.config?.aspectRatio as any || "16:9",
+                  startImage,
+                  model,
+                  duration.toString(),
+                  false,
+                  undefined,
+                  (msg, percent) => {
+                      queueService.updateTaskProgress(task.id, percent);
+                  }
+              );
+          }
       }
       return "";
   };
@@ -167,19 +169,16 @@ const App: React.FC = () => {
               const asset = p.assets.find(a => a.id === task.assetId);
               if (!asset && !task.config?.targetNodeId) return p;
 
-              // 1. UPDATE EXISTING NODE (If targetNodeId exists)
               if (task.config?.targetNodeId) {
                   return {
                       ...p,
                       nodes: p.nodes.map(n => {
                           if (n.id === task.config!.targetNodeId) {
-                              // Found the target node, update it with result
                               return {
                                   ...n,
                                   data: {
                                       ...n.data,
-                                      // Update relevant fields
-                                      imageUrl: task.type === 'image' ? result : (n.data.imageUrl || task.startImage), // Keep start image for video if present
+                                      imageUrl: task.type === 'image' ? result : (n.data.imageUrl || task.startImage), 
                                       videoUrl: task.type === 'video' ? result : undefined,
                                       status: task.config?.autoApprove ? 'approved' : 'review',
                                       submittedPrompt: task.submittedPrompt
@@ -191,7 +190,6 @@ const App: React.FC = () => {
                   };
               }
 
-              // 2. CREATE NEW NODE (Fallback or for tasks without placeholder like Timeline replace)
               const newNode: FlowNode = {
                   id: `gen-node-${Date.now()}-${Math.random()}`,
                   type: task.type === 'video' ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
@@ -213,17 +211,16 @@ const App: React.FC = () => {
 
               let updatedAssets = p.assets;
               
-              // 3. Auto Assemble (One Shot Workflow)
               if (task.config?.autoAssemble && task.config?.sequenceId && task.config?.autoApprove && asset) {
                   const seqAsset = p.assets.find(a => a.id === task.config?.sequenceId);
                   if (seqAsset) {
                       const newClip: TimelineClip = {
                           id: `clip-${Date.now()}-${Math.random()}`,
-                          sourceNodeId: task.config?.targetNodeId || newNode.id, // Use updated existing node ID or new node ID
+                          sourceNodeId: task.config?.targetNodeId || newNode.id, 
                           mediaUrl: result,
                           mediaType: task.type,
                           start: seqAsset.timelineData ? seqAsset.timelineData.duration : 0,
-                          duration: 4, // Default duration
+                          duration: 5, 
                           offset: 0,
                           track: 0,
                           label: asset.title,
@@ -232,14 +229,13 @@ const App: React.FC = () => {
                       
                       const newTimelineData = {
                           clips: [...(seqAsset.timelineData?.clips || []), newClip],
-                          duration: (seqAsset.timelineData?.duration || 0) + 4
+                          duration: (seqAsset.timelineData?.duration || 0) + 5
                       };
 
                       updatedAssets = p.assets.map(a => a.id === seqAsset.id ? { ...a, timelineData: newTimelineData } : a);
                   }
               }
 
-              // 4. Timeline Clip Replacement (Video Workflow)
               if (task.config?.replaceClipId) {
                   updatedAssets = updatedAssets.map(a => {
                       if (a.timelineData) {
@@ -260,19 +256,15 @@ const App: React.FC = () => {
                   });
               }
 
-              // Only append newNode if we didn't update an existing one
               const finalNodes = task.config?.targetNodeId ? p.nodes : [...p.nodes, newNode];
-
               return { ...p, assets: updatedAssets, nodes: finalNodes };
           }
           return p;
       }));
   };
 
-  // Initialize Queue
   const queueService = useMemo(() => createRenderQueue(onTaskComplete, handleTaskExecution), []);
   
-  // Sync queue state
   useEffect(() => {
       return queueService.subscribe((q) => {
           setRenderQueue(q);
@@ -280,7 +272,6 @@ const App: React.FC = () => {
       });
   }, [queueService]);
 
-  // Effect: Dependency Management for Batches
   useEffect(() => {
       if (renderQueue.length > 0) {
           const waitingTasks = renderQueue.filter(t => t.status === 'waiting' && t.waitingOnBatchId);
@@ -299,16 +290,12 @@ const App: React.FC = () => {
       }
   }, [renderQueue, queueService]);
 
-
-  // Initialize Google Drive API
   useEffect(() => {
       GoogleDriveService.initGapi().then(() => {
           console.log("Google API Initialized");
       });
   }, []);
 
-  // Mock initial data load - Load Templates
-  // Ensure templates have settings
   useEffect(() => {
       const initTemplates = TEMPLATES.map(t => ({
           ...t,
@@ -320,17 +307,12 @@ const App: React.FC = () => {
   const activeAsset = activeProject?.assets.find(a => a.id === currentAssetId);
   const activeDeptConfig = DEPARTMENTS.find(d => d.id === currentDept);
 
-  // ... (Editorial State and Script Context memos remain the same) ...
   const editorialState = useMemo(() => {
       if (!activeAsset || currentDept !== DepartmentType.EDITORIAL) return { sequence: null, filterId: null };
-      
-      // If the selected asset has a parent, assume parent is the Sequence/Scene and asset is a Shot/Element
       if (activeAsset.parentId) {
           const parent = activeProject?.assets.find(a => a.id === activeAsset.parentId);
           return { sequence: parent || null, filterId: activeAsset.id };
       }
-      
-      // Otherwise, the selected asset is the Sequence
       return { sequence: activeAsset, filterId: null };
   }, [activeAsset, currentDept, activeProject?.assets]);
 
@@ -346,24 +328,20 @@ const App: React.FC = () => {
       ).join('\n\n');
   }, [activeProject?.nodes]);
 
-  // ... (Thumbnails and Image Map memos remain the same) ...
   const assetThumbnails = useMemo(() => {
       if (!activeProject) return {};
       const map: Record<string, string> = {};
       
       activeProject.assets.forEach(asset => {
-          // 1. Check explicit thumbnail
           if (asset.thumbnailUrl) {
               map[asset.id] = asset.thumbnailUrl;
           } else {
-              // 2. Find latest approved AI_IMAGE_GEN node
               const candidates = activeProject.nodes.filter(n => 
                   n.assetId === asset.id && 
                   n.type === NodeType.AI_IMAGE_GEN && 
                   n.data.status === 'approved' && 
                   n.data.imageUrl
               );
-              // Simple sort by ID timestamp (works because ID is date-based)
               if (candidates.length > 0) {
                    const latest = candidates.sort((a, b) => b.id.localeCompare(a.id))[0];
                    if (latest.data.imageUrl) map[asset.id] = latest.data.imageUrl;
@@ -397,12 +375,15 @@ const App: React.FC = () => {
       return map;
   }, [activeProject?.nodes, activeProject?.assets]);
 
+  const handleLoginSuccess = (isMock: boolean) => {
+      setIsMockDrive(isMock);
+      setIsDriveConnected(true);
+      setIsAuthenticated(true);
+  };
 
-  // ... (Drive Handlers remain the same) ...
   const handleConnectDrive = async () => {
       try {
           await GoogleDriveService.signIn();
-          // Check mock status after sign in attempt
           if (GoogleDriveService.isMockMode()) {
               setIsMockDrive(true);
           } else {
@@ -411,7 +392,6 @@ const App: React.FC = () => {
           setIsDriveConnected(true);
       } catch (e) {
           console.error("Drive connection failed", e);
-          // Auto fallback on failure
           GoogleDriveService.enableMockMode();
           setIsMockDrive(true);
           setIsDriveConnected(true);
@@ -429,33 +409,32 @@ const App: React.FC = () => {
       await GoogleDriveService.updateProjectDB(project.driveDbId, project.assets);
   }, [isDriveConnected]);
 
-  // Auto-Save Effect
   useEffect(() => {
       if (activeProject && isDriveConnected) {
           const timer = setTimeout(() => {
               syncToDrive(activeProject);
-          }, 3000); // Debounce 3s
+          }, 3000); 
           return () => clearTimeout(timer);
       }
   }, [activeProject?.assets, isDriveConnected, syncToDrive]);
 
-
-  // ... (Project Handlers remain the same) ...
   const resetProjectModal = () => {
       setNewProjectTitle('');
       setCreationMode('blank');
-      setSeedPrompt('');
+      setProjectSeedPrompt('');
       setGeneratedSeeds([]);
       setSelectedSeedIdx(null);
       setAutoGenAssets(true);
       setIsCreateProjectOpen(false);
   }
 
+  const [projectSeedPrompt, setProjectSeedPrompt] = useState('');
+
   const handleRollDice = async () => {
       setIsGeneratingSeeds(true);
       setGeneratedSeeds([]);
       try {
-          const seeds = await generateStorySeeds(seedPrompt);
+          const seeds = await generateStorySeeds(projectSeedPrompt);
           setGeneratedSeeds(seeds);
       } finally {
           setIsGeneratingSeeds(false);
@@ -473,12 +452,11 @@ const App: React.FC = () => {
       if (creationMode === 'blank') {
           if (!newProjectTitle) return;
       } else {
-          // From Seed
           if (selectedSeedIdx === null || !generatedSeeds[selectedSeedIdx]) return;
           const seed = generatedSeeds[selectedSeedIdx];
           title = seed.title;
           summary = seed.logline;
-          visualStyle = seed.visualStyle; // Legacy, map to prompt or description?
+          visualStyle = seed.visualStyle; 
           
           initialAssets.push({
               id: `asset-bible-${Date.now()}`,
@@ -530,7 +508,6 @@ const App: React.FC = () => {
           }
       }
 
-      // Drive Integration
       let driveData = {};
       if (isDriveConnected) {
           try {
@@ -539,7 +516,7 @@ const App: React.FC = () => {
                   driveFolderId: struct.projectId,
                   driveDbId: struct.dbId
               };
-              setDriveFolderMap(struct.folders); // Store local map for session
+              setDriveFolderMap(struct.folders); 
           } catch(e) {
               console.error("Failed to create Drive structure", e);
           }
@@ -594,9 +571,6 @@ const App: React.FC = () => {
       if (!currentProjectId || !newAssetTitle) return;
       
       const newId = `asset-${Date.now()}`;
-      
-      let defaultVisualStyle = ""; // Deprecated, will rely on Settings default now
-      
       const newAsset: ProjectAsset = {
           id: newId,
           department: currentDept,
@@ -604,14 +578,12 @@ const App: React.FC = () => {
           description: newAssetDesc,
           summary: "Generating AI summary...", 
           parentId: newAssetParentId,
-          visualStyle: defaultVisualStyle,
+          visualStyle: "",
           status: 'active'
       };
 
-      // Drive: Sync Folder
       if (isDriveConnected && activeProject) {
           try {
-              // Ensure we have a folder ID for this asset (important for Sets/Prod)
               const driveId = await GoogleDriveService.syncAssetFolder(newAsset, activeProject.driveFolderId!, driveFolderMap);
               newAsset.driveId = driveId;
           } catch(e) { console.error(e); }
@@ -633,7 +605,6 @@ const App: React.FC = () => {
           setCurrentAssetId(newAsset.id);
       }
 
-      // Generate Summary in background
       if (newAssetDesc) {
           try {
               const summary = await generateSummary(newAssetDesc);
@@ -764,7 +735,6 @@ const App: React.FC = () => {
       
       let finalUrl = imageUrl;
 
-      // Drive Upload Logic
       if (isDriveConnected && activeProject) {
           const asset = activeProject.assets.find(a => a.id === assetId);
           if (asset && asset.driveId) {
@@ -794,12 +764,9 @@ const App: React.FC = () => {
       }
   };
 
-
-  // ... (Generation Workflows remain the same) ...
   const handleGenerateConcepts = (count: number, styleId?: string) => {
     if (!activeAsset || !currentProjectId || !activeProject) return;
     
-    // Determine Bounding Box logic (omitted for brevity, assume smart placement)
     const contextNodes = activeProject.nodes.filter(n => 
         n.department === currentDept && 
         n.assetId === activeAsset.id &&
@@ -832,7 +799,6 @@ const App: React.FC = () => {
         }
     };
 
-    // Create Batch Metadata
     const batchId = `batch-concepts-${Date.now()}`;
     const batchLabel = `Concepts: ${activeAsset.title}`;
 
@@ -875,7 +841,6 @@ const App: React.FC = () => {
             }
         });
         
-        // Add to Queue with targetNodeId
         tasks.push({
             id: `task-${Date.now()}-${i}`,
             type: 'image',
@@ -886,7 +851,7 @@ const App: React.FC = () => {
                 styleId: styleId,
                 aspectRatio: defaultRatio,
                 model: MODELS.IMAGE_GEN,
-                targetNodeId: nodeId // LINK TO VISUAL NODE
+                targetNodeId: nodeId 
             },
             batchId,
             batchLabel
@@ -900,7 +865,7 @@ const App: React.FC = () => {
         return p;
     }));
 
-    tasks.forEach(t => queueService.add(t)); // Add tasks after nodes exist
+    tasks.forEach(t => queueService.add(t)); 
 
     setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
     setIsRenderQueueOpen(true);
@@ -956,7 +921,7 @@ const App: React.FC = () => {
 
           newNodes.push({
               id: nodeId,
-              type: model.includes('veo') ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
+              type: model.includes('veo') || model.includes('luma') ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
               department: currentDept,
               assetId: currentAssetId || undefined,
               parentId: groupId,
@@ -968,15 +933,14 @@ const App: React.FC = () => {
                   aspectRatio: aspectRatio,
                   model: model,
                   status: 'generating',
-                  duration: model.includes('veo') ? '4' : undefined,
+                  duration: (model.includes('veo') || model.includes('luma')) ? '5' : undefined,
                   withAudio: false
               }
           });
 
-          // Add to Queue with targetNodeId
           tasks.push({
               id: `task-${Date.now()}-${i}`,
-              type: model.includes('veo') ? 'video' : 'image',
+              type: (model.includes('veo') || model.includes('luma')) ? 'video' : 'image',
               prompt: prompt,
               assetId: currentAssetId || 'root', 
               status: 'pending',
@@ -1003,11 +967,11 @@ const App: React.FC = () => {
       setIsRenderQueueOpen(true);
   }
 
-  // New: Handle Video Gen from Image Node
   const handleGenerateVideoFromNode = (node: FlowNode, model: string) => {
       if (!currentProjectId || !activeProject) return;
       if (!node.data.imageUrl && !node.data.videoUrl) return;
 
+      const targetModel = model || MODELS.VIDEO_LUMA; // Default to Luma
       const batchId = `batch-video-${Date.now()}`;
       const batchLabel = `Video from: ${node.data.prompt?.substring(0,20) || 'Image'}`;
       const nodeId = `gen-node-${Date.now()}`;
@@ -1017,15 +981,15 @@ const App: React.FC = () => {
           type: NodeType.AI_VIDEO_GEN,
           department: currentDept,
           assetId: node.assetId,
-          parentId: node.parentId, // keep in same group if grouped
+          parentId: node.parentId, 
           position: { x: node.position.x + 50, y: node.position.y + 50 },
           width: 300,
           height: 400,
           data: {
-              imageUrl: node.data.imageUrl, // Start frame thumbnail
+              imageUrl: node.data.imageUrl, 
               prompt: node.data.prompt || "Video from image",
               status: 'generating',
-              model: model,
+              model: targetModel,
               aspectRatio: node.data.aspectRatio || '16:9'
           }
       };
@@ -1037,16 +1001,15 @@ const App: React.FC = () => {
           return p;
       }));
 
-      // Queue it with targetNodeId
       queueService.add({
           id: `task-vid-${Date.now()}`,
           type: 'video',
           prompt: node.data.prompt || "Video",
           assetId: node.assetId || 'root',
           status: 'pending',
-          startImage: node.data.imageUrl, // Important!
+          startImage: node.data.imageUrl, 
           config: {
-              model,
+              model: targetModel,
               aspectRatio: node.data.aspectRatio,
               targetNodeId: nodeId
           },
@@ -1056,17 +1019,16 @@ const App: React.FC = () => {
       setIsRenderQueueOpen(true);
   }
 
-  // New: Handle Video Gen from Timeline
   const handleGenerateVideoForClip = (clipId: string, sourceNodeId: string, replace: boolean, model: string) => {
       if (!currentProjectId || !activeProject) return;
       
       const sourceNode = activeProject.nodes.find(n => n.id === sourceNodeId);
       if (!sourceNode || (!sourceNode.data.imageUrl && !sourceNode.data.videoUrl)) return;
 
+      const targetModel = model || MODELS.VIDEO_LUMA; // Default to Luma
       const batchId = `batch-clip-vid-${Date.now()}`;
       const batchLabel = `Timeline Video: ${sourceNode.data.prompt?.substring(0, 20) || 'Clip'}`;
 
-      // Queue directly - on success it creates a node and optionally updates timeline
       queueService.add({
           id: `task-clip-vid-${Date.now()}`,
           type: 'video',
@@ -1075,9 +1037,9 @@ const App: React.FC = () => {
           status: 'pending',
           startImage: sourceNode.data.imageUrl,
           config: {
-              model,
+              model: targetModel,
               aspectRatio: sourceNode.data.aspectRatio,
-              replaceClipId: replace ? clipId : undefined // Metadata for replacement
+              replaceClipId: replace ? clipId : undefined 
           },
           batchId,
           batchLabel
@@ -1085,9 +1047,7 @@ const App: React.FC = () => {
       setIsRenderQueueOpen(true);
   }
 
-  // --- One Shot Discovery (Editorial) ---
   const handleOneShotBreakdown = async () => {
-      // ... (Existing logic same)
       if (!activeProject) return;
       setOneShotItems([]);
       setIsOneShotModalOpen(true);
@@ -1097,7 +1057,7 @@ const App: React.FC = () => {
           const scriptNodes = activeProject.nodes.filter(n => 
               n.department === DepartmentType.WRITERS_ROOM && 
               n.type === NodeType.AI_TEXT_GEN && 
-              n.data.status === 'approved' && // Fix: Only use APPROVED scripts
+              n.data.status === 'approved' && 
               n.data.text
           );
           const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
@@ -1111,7 +1071,6 @@ const App: React.FC = () => {
           const rawData = await extractOneShotBreakdown(fullText);
           const newItems: OneShotItem[] = [];
           
-          // Map to internal Item structure - Default auto-gen off
           rawData.characters.forEach((c: any) => newItems.push({ 
               id: `char-${Math.random()}`, type: 'Character', name: c.name, description: c.description, summary: c.summary, selected: true, autoGenerate: true, autoApprove: false 
           }));
@@ -1129,13 +1088,12 @@ const App: React.FC = () => {
               });
           });
 
-          // Deduplicate against existing assets
           const existingMap = new Set(activeProject.assets.map(a => a.title.toLowerCase()));
           newItems.forEach(item => {
               if (existingMap.has(item.name.toLowerCase())) {
                   item.selected = false;
                   item.isExisting = true;
-                  item.autoGenerate = false; // Disable existing gen
+                  item.autoGenerate = false; 
               }
           });
 
@@ -1153,14 +1111,12 @@ const App: React.FC = () => {
 
       const itemsToProcess = oneShotItems.filter(i => i.selected);
       const newAssets: ProjectAsset[] = [];
-      const primaryTasks: RenderTask[] = []; // Characters
-      const secondaryTasks: RenderTask[] = []; // Scenes/Shots
+      const primaryTasks: RenderTask[] = []; 
+      const secondaryTasks: RenderTask[] = []; 
 
-      // Batch IDs
       const charBatchId = `batch-char-${Date.now()}`;
       const shotBatchId = `batch-shot-${Date.now()}`;
 
-      // Recursive function to process tree (scenes -> shots)
       const processItem = (item: OneShotItem, parentAssetId?: string) => {
           const dept = item.type === 'Character' ? DepartmentType.CASTING_WARDROBE : 
                        item.type === 'Location' ? DepartmentType.SET_DESIGN :
@@ -1169,7 +1125,6 @@ const App: React.FC = () => {
           let assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
           
           if (item.isExisting) {
-               // Find existing asset to attach tasks to
                const existingAsset = projectsRef.current
                   .find(p => p.id === currentProjectIdRef.current)?.assets
                   .find(a => a.title.toLowerCase() === item.name.toLowerCase());
@@ -1178,14 +1133,13 @@ const App: React.FC = () => {
                    assetId = existingAsset.id;
                } 
           } else {
-               // Create New Asset
                const asset: ProjectAsset = {
                   id: assetId,
                   department: dept,
                   title: item.name,
                   description: item.description,
                   visualStyle: item.type === 'Character' ? 'Cinematic' : 'Wide Shot',
-                  summary: item.summary || 'Auto-detected', // Use extracted summary
+                  summary: item.summary || 'Auto-detected', 
                   parentId: parentAssetId,
                   status: 'active'
               };
@@ -1197,12 +1151,9 @@ const App: React.FC = () => {
               newAssets.push(asset);
           }
 
-          // Queue Generation if requested specificially for this item
           if (item.autoGenerate) {
               let prompt = `@${item.name}`;
-              // Contextual prompt for shots
               if (item.type === 'Shot' && parentAssetId) {
-                  // We need parent name for prompt
                   const parentItem = oneShotItems.find(p => p.children?.some(c => c.id === item.id)); 
                   if (parentItem) prompt = `@${parentItem.name}.${item.name}`;
               }
@@ -1213,13 +1164,12 @@ const App: React.FC = () => {
                       type: 'image',
                       prompt: prompt,
                       assetId: assetId,
-                      // Default Status will be overwritten below based on type
                       status: 'pending',
                       config: {
                           count: config.count,
-                          autoApprove: item.autoApprove, // Use per-item setting
+                          autoApprove: item.autoApprove, 
                           autoAssemble: config.autoAssemble,
-                          sequenceId: parentAssetId // For shots, parent is the sequence
+                          sequenceId: parentAssetId 
                       }
                   };
                   
@@ -1231,14 +1181,13 @@ const App: React.FC = () => {
                   } else {
                       task.batchId = shotBatchId;
                       task.batchLabel = "One Shot: Shot Production";
-                      task.status = 'waiting'; // Wait for chars
+                      task.status = 'waiting'; 
                       task.waitingOnBatchId = charBatchId;
                       secondaryTasks.push(task);
                   }
               }
           }
 
-          // Process Children (Shots)
           if (item.children) {
               item.children.filter(c => c.selected).forEach(child => processItem(child, assetId));
           }
@@ -1246,7 +1195,6 @@ const App: React.FC = () => {
 
       itemsToProcess.forEach(item => processItem(item));
 
-      // Update State with new Assets immediately so references exist
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectIdRef.current) {
               return { ...p, assets: [...p.assets, ...newAssets] };
@@ -1254,13 +1202,10 @@ const App: React.FC = () => {
           return p;
       }));
 
-      // Queue Logic: Add all tasks. Primary will start, Secondary will wait.
-      // If no characters, Secondary don't need to wait.
       if (primaryTasks.length > 0) {
           primaryTasks.forEach(t => queueService.add(t));
-          secondaryTasks.forEach(t => queueService.add(t)); // Added as waiting
+          secondaryTasks.forEach(t => queueService.add(t)); 
       } else {
-          // No characters, just run everything immediately
           secondaryTasks.forEach(t => {
               t.status = 'pending'; 
               t.waitingOnBatchId = undefined;
@@ -1269,11 +1214,10 @@ const App: React.FC = () => {
       }
       
       if (primaryTasks.length > 0 || secondaryTasks.length > 0) {
-          setIsRenderQueueOpen(true); // Auto show queue
+          setIsRenderQueueOpen(true); 
       }
   }
 
-  // ... (Rest of the handlers remain the same) ...
   const handleNodesChange = useCallback((value: React.SetStateAction<FlowNode[]>) => {
       if (!currentProjectId) return;
       setProjects(prev => prev.map(p => {
@@ -1310,7 +1254,6 @@ const App: React.FC = () => {
   }, [currentProjectId]);
 
   const handleAnalyzeScripts = () => {
-    // Determine type based on Dept
     if (currentDept === DepartmentType.CASTING_WARDROBE) setAnalysisType('Characters');
     else if (currentDept === DepartmentType.SET_DESIGN) setAnalysisType('Locations');
     else if (currentDept === DepartmentType.STORY) setAnalysisType('Story');
@@ -1324,7 +1267,6 @@ const App: React.FC = () => {
     if (!activeProject) return;
     setIsAnalyzing(true);
     try {
-        // Gather script text
         const scriptNodes = activeProject.nodes.filter(n => n.department === DepartmentType.WRITERS_ROOM && (n.type === NodeType.AI_TEXT_GEN || n.type === NodeType.TEXT_INPUT) && n.data.text);
         const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
         
@@ -1344,19 +1286,17 @@ const App: React.FC = () => {
             results = await extractStoryElementsFromScript(fullText, knownChars, autoFindShots);
         }
         
-        // Transform to DetectedItem[]
         const items: DetectedItem[] = results.map((r: any) => ({
              name: r.name || r.title,
              description: r.description,
-             summary: r.summary, // Captured summary
-             type: r.type || r.role || analysisType, // Fallback
+             summary: r.summary, 
+             type: r.type || r.role || analysisType, 
              selected: true,
              children: r.shots ? r.shots.map((s:any) => ({
                  name: s.title, description: s.description, type: 'Shot', selected: true
              })) : undefined
         }));
 
-        // Check duplicates
         const existingTitles = new Set(activeProject.assets.map(a => a.title.toLowerCase()));
         items.forEach(i => {
             if (existingTitles.has(i.name.toLowerCase())) {
@@ -1385,12 +1325,11 @@ const App: React.FC = () => {
             title: item.name,
             description: item.description,
             visualStyle: 'Cinematic',
-            summary: item.summary || 'Auto-detected', // Use detected summary
+            summary: item.summary || 'Auto-detected', 
             status: 'active'
         };
         newAssets.push(asset);
 
-        // Children (Shots)
         if (item.children) {
             item.children.filter(c => c.selected).forEach(child => {
                 newAssets.push({
@@ -1421,7 +1360,6 @@ const App: React.FC = () => {
     const asset = activeProject.assets.find(a => a.id === assetId);
     if (!asset) return;
 
-    // Heuristic: If there's a Story Node for this asset with text, use that.
     const storyNode = activeProject.nodes.find(n => n.assetId === assetId && n.data.text);
     const textToAnalyze = storyNode ? storyNode.data.text : asset.description;
 
@@ -1501,7 +1439,6 @@ const App: React.FC = () => {
           data: { label: `Refined Character Sheet`, collapsed: false }
       };
 
-      // Batch Meta
       const batchId = `batch-refine-${Date.now()}`;
       const batchLabel = `Refinement: ${asset.title}`;
 
@@ -1534,7 +1471,6 @@ const App: React.FC = () => {
               }
           });
 
-          // Add to Queue with targetNodeId
           tasks.push({
               id: `task-${Date.now()}-${i}`,
               type: 'image',
@@ -1616,12 +1552,12 @@ const App: React.FC = () => {
            height: height,
            data: {
                prompt: `A smooth 360 degree 3D turntable of a static model, seamless loop, high quality render`,
-               imageUrl: node.data.imageUrl, // Seed image
+               imageUrl: node.data.imageUrl, 
                lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
                model: model,
                aspectRatio: '16:9',
-               status: 'generating', // Was draft, now generating
-               duration: '8',
+               status: 'generating', 
+               duration: '5',
                withAudio: false
            }
       };
@@ -1633,7 +1569,6 @@ const App: React.FC = () => {
           return p;
       }));
 
-      // Queue it
       queueService.add({
           id: `task-turntable-${Date.now()}`,
           type: 'video',
@@ -1712,7 +1647,7 @@ const App: React.FC = () => {
                type: NodeType.AI_VIDEO_GEN,
                department: currentDept,
                assetId: node.assetId,
-               parentId: groupId, // Link to group
+               parentId: groupId, 
                position: { x: childX, y: childY },
                width: nodeW,
                height: nodeH,
@@ -1722,12 +1657,11 @@ const App: React.FC = () => {
                    model: targetModel,
                    aspectRatio: '16:9',
                    status: 'generating',
-                   duration: '4', // Shortest
+                   duration: '5', 
                    withAudio: false
                }
            });
 
-           // Add to queue with targetNodeId
            tasks.push({
                 id: `task-${Date.now()}-${idx}`,
                 type: 'video',
@@ -1757,7 +1691,6 @@ const App: React.FC = () => {
        setIsRenderQueueOpen(true);
   }
 
-  // --- Remove Ref Handler ---
   const handleRemoveRef = (imageUrl: string) => {
       if (!currentProjectId || !activeProject) return;
       const node = activeProject.nodes.find(n => n.data.imageUrl === imageUrl);
@@ -1766,72 +1699,142 @@ const App: React.FC = () => {
       }
   }
 
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={handleLoginSuccess} />;
+  }
+
   if (view === 'dashboard') {
     return (
-      <div className="w-full h-full bg-background flex flex-col font-sans">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border">
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-                ShowrunnerAI
-            </h1>
-            <div className="flex items-center gap-2">
+      <div className="w-full h-full bg-background flex flex-col font-sans animate-in fade-in duration-700 relative overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/5 rounded-full blur-[160px] animate-pulse pointer-events-none" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/5 rounded-full blur-[160px] animate-pulse delay-1000 pointer-events-none" />
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '32px 32px' }} />
+
+        <header className="flex items-center justify-between p-6 px-8 border-b border-white/5 bg-zinc-950/40 backdrop-blur-md relative z-10">
+            <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <Sparkles className="text-white" size={20} />
+                </div>
+                <h1 className="text-2xl font-black tracking-tight text-white">
+                    Showrunner<span className="text-blue-500">AI</span>
+                </h1>
+            </div>
+            
+            <div className="flex items-center gap-4">
                  {isDriveConnected ? (
-                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border ${isMockDrive ? 'bg-yellow-900/30 border-yellow-700 text-yellow-500' : 'bg-green-900/30 border-green-700 text-green-500'}`}>
+                     <div className={`flex items-center gap-2 px-4 py-2 rounded-full border shadow-sm transition-all ${isMockDrive ? 'bg-yellow-900/10 border-yellow-700/30 text-yellow-500' : 'bg-green-900/10 border-green-700/30 text-green-500'}`}>
                          {isMockDrive ? <CloudOff size={16}/> : <Cloud size={16}/>}
-                         <span className="text-xs font-bold">{isMockDrive ? "Offline Mode" : "Drive Connected"}</span>
+                         <span className="text-xs font-bold uppercase tracking-wider">{isMockDrive ? "Offline Mode" : "Drive Synced"}</span>
                      </div>
                  ) : (
-                     <>
-                        <Button variant="secondary" size="sm" onClick={handleForceOffline} icon={CloudOff}>
-                             Work Offline
+                     <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={handleForceOffline} className="text-zinc-400">
+                             Go Offline
                         </Button>
-                        <Button variant="secondary" size="sm" onClick={handleConnectDrive} icon={Cloud}>
+                        <Button variant="secondary" size="sm" onClick={handleConnectDrive} icon={Cloud} className="bg-zinc-800/50">
                              Connect Drive
                         </Button>
-                     </>
+                     </div>
                  )}
             </div>
-        </div>
+        </header>
         
-        {/* Projects List */}
-        <div className="flex-1 p-8 overflow-y-auto">
-             <div className="flex items-center justify-between mb-6">
-                 <h2 className="text-xl font-bold text-zinc-100">Projects</h2>
-                 <Button onClick={() => setIsCreateProjectOpen(true)} icon={FolderPlus}>New Project</Button>
-             </div>
-             
-             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                 {projects.map(project => (
-                     <div 
-                        key={project.id}
-                        onClick={() => { setCurrentProjectId(project.id); setView('project'); }}
-                        className="bg-surface border border-border rounded-xl p-6 hover:border-zinc-600 transition-all cursor-pointer group hover:shadow-xl hover:shadow-blue-900/10"
-                     >
-                         <div className="flex justify-between items-start mb-4">
-                             <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-900 to-purple-900 flex items-center justify-center text-white font-bold text-lg">
-                                 {project.title.substring(0, 2).toUpperCase()}
-                             </div>
-                             <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-1 rounded-full border border-zinc-700">
-                                 {project.type}
-                             </span>
-                         </div>
-                         <h3 className="font-bold text-lg text-zinc-100 mb-2 group-hover:text-blue-400 transition-colors">{project.title}</h3>
-                         <p className="text-sm text-zinc-500 line-clamp-2">{project.summary}</p>
-                         <div className="mt-4 pt-4 border-t border-zinc-800 flex justify-between items-center text-xs text-zinc-600">
-                             <span>{project.assets.length} Assets</span>
-                             <span>Last edit: {project.updatedAt.toLocaleDateString()}</span>
-                         </div>
-                     </div>
-                 ))}
-             </div>
-        </div>
+        <main className="flex-1 p-8 px-12 overflow-y-auto relative z-10 custom-scrollbar">
+             <div className="max-w-7xl mx-auto mb-12">
+                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+                    <div>
+                        <h2 className="text-4xl font-black text-white mb-2 tracking-tight">Welcome Back.</h2>
+                        <p className="text-zinc-500 text-lg max-w-xl leading-relaxed">
+                            Your creative studio is ready. Pick up where you left off or start a new cinematic journey.
+                        </p>
+                    </div>
+                    <Button 
+                        onClick={() => setIsCreateProjectOpen(true)} 
+                        size="lg"
+                        className="bg-blue-600 hover:bg-blue-500 shadow-2xl shadow-blue-600/30 h-14 px-8 text-base font-bold transition-all active:scale-[0.98]"
+                        icon={Plus}
+                    >
+                        Create New Story
+                    </Button>
+                 </div>
 
-        {/* Create Project Modal */}
+                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
+                    {[
+                        { label: 'Total Projects', value: projects.length, icon: Layers, color: 'text-blue-400' },
+                        { label: 'Total Assets', value: projects.reduce((acc, p) => acc + p.assets.length, 0), icon: Zap, color: 'text-yellow-400' },
+                        { label: 'Active Renders', value: renderQueue.filter(t => t.status === 'processing' || t.status === 'pending').length, icon: Film, color: 'text-purple-400' },
+                        { label: 'Stories Told', value: projects.filter(p => p.type === 'Feature').length, icon: Star, color: 'text-green-400' },
+                    ].map((stat, i) => (
+                        <div key={i} className="bg-surface/40 backdrop-blur-sm border border-white/5 rounded-2xl p-6 flex flex-col items-center justify-center text-center group hover:bg-surface/60 transition-colors">
+                            <stat.icon className={`${stat.color} mb-3`} size={20} />
+                            <div className="text-2xl font-black text-white">{stat.value}</div>
+                            <div className="text-[10px] uppercase tracking-widest font-bold text-zinc-500 mt-1">{stat.label}</div>
+                        </div>
+                    ))}
+                 </div>
+                 
+                 <div className="flex items-center justify-between mb-8">
+                     <h3 className="text-sm font-black text-zinc-500 uppercase tracking-[0.2em]">Recent Productions</h3>
+                     <div className="h-[1px] flex-1 bg-white/5 mx-6" />
+                 </div>
+                 
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6">
+                     {projects.map(project => (
+                         <div 
+                            key={project.id}
+                            onClick={() => { setCurrentProjectId(project.id); setView('project'); }}
+                            className="bg-zinc-900/40 backdrop-blur-md border border-white/5 rounded-2xl p-6 hover:border-blue-500/50 transition-all cursor-pointer group hover:shadow-2xl hover:shadow-blue-500/10 relative overflow-hidden"
+                         >
+                             <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 rounded-full blur-3xl -mr-16 -mt-16 group-hover:bg-blue-600/10 transition-colors" />
+                             
+                             <div className="flex justify-between items-start mb-6 relative z-10">
+                                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-900/40 to-purple-900/40 border border-white/10 flex items-center justify-center text-white font-black text-xl group-hover:scale-110 transition-transform">
+                                     {project.title.substring(0, 2).toUpperCase()}
+                                 </div>
+                                 <div className="flex flex-col items-end gap-2">
+                                     <span className="text-[10px] font-black uppercase tracking-widest bg-zinc-800 text-zinc-400 px-3 py-1 rounded-full border border-white/5">
+                                         {project.type}
+                                     </span>
+                                     {project.driveDbId && !isMockDrive && (
+                                         <div className="text-green-500" title="Synced to Cloud">
+                                             <Cloud size={14} />
+                                         </div>
+                                     )}
+                                 </div>
+                             </div>
+
+                             <h3 className="font-bold text-xl text-white mb-3 group-hover:text-blue-400 transition-colors line-clamp-1">{project.title}</h3>
+                             <p className="text-sm text-zinc-500 line-clamp-2 leading-relaxed mb-6 h-10">{project.summary || "No description provided."}</p>
+                             
+                             <div className="mt-auto pt-6 border-t border-white/5 flex justify-between items-center text-[10px] font-bold text-zinc-600 uppercase tracking-wider relative z-10">
+                                 <div className="flex items-center gap-4">
+                                     <span className="flex items-center gap-1.5"><Layout size={12}/> {project.assets.length}</span>
+                                     <span className="flex items-center gap-1.5"><Clock size={12}/> {project.updatedAt.toLocaleDateString()}</span>
+                                 </div>
+                                 <ArrowRight size={16} className="text-zinc-700 group-hover:text-blue-500 group-hover:translate-x-1 transition-all" />
+                             </div>
+                         </div>
+                     ))}
+                     
+                     {projects.length === 0 && (
+                         <div 
+                             onClick={() => setIsCreateProjectOpen(true)}
+                             className="border-2 border-dashed border-white/5 rounded-2xl p-8 flex flex-col items-center justify-center text-center hover:border-blue-500/50 hover:bg-blue-500/5 transition-all cursor-pointer group"
+                         >
+                             <div className="w-16 h-16 rounded-full bg-zinc-900 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                                 <Plus className="text-zinc-600 group-hover:text-blue-400" size={32} />
+                             </div>
+                             <h4 className="text-lg font-bold text-zinc-400 mb-1 group-hover:text-white">Start Your First Project</h4>
+                             <p className="text-sm text-zinc-600">Bring your vision to life today.</p>
+                         </div>
+                     )}
+                 </div>
+             </div>
+        </main>
+
         {isCreateProjectOpen && (
              <Modal title="Create New Project" onClose={resetProjectModal}>
                  <div className="space-y-6">
-                     
-                     {/* Creation Mode Tabs */}
                      <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800">
                          <button 
                             className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${creationMode === 'blank' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
@@ -1860,8 +1863,8 @@ const App: React.FC = () => {
                                 <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Prompt / Genre</label>
                                 <div className="flex gap-2">
                                     <Input 
-                                        value={seedPrompt} 
-                                        onChange={(e) => setSeedPrompt(e.target.value)} 
+                                        value={projectSeedPrompt} 
+                                        onChange={(e) => setProjectSeedPrompt(e.target.value)} 
                                         placeholder='e.g. "A cyberpunk detective story in Neo Tokyo"'
                                     />
                                     <Button onClick={handleRollDice} disabled={isGeneratingSeeds} icon={Dice5}>
@@ -1870,7 +1873,6 @@ const App: React.FC = () => {
                                 </div>
                             </div>
                             
-                            {/* Seed Results Grid */}
                             {generatedSeeds.length > 0 && (
                                 <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto p-1">
                                     {generatedSeeds.map((seed, idx) => (
@@ -1909,7 +1911,6 @@ const App: React.FC = () => {
 
   return (
     <div className="w-full h-full flex bg-background font-sans overflow-hidden">
-        {/* Sidebar Navigation */}
         <Sidebar 
             currentDept={currentDept} 
             onChangeDept={(d) => { setCurrentDept(d); setCurrentAssetId(null); setFocusNodeIds([]); }}
@@ -1917,7 +1918,6 @@ const App: React.FC = () => {
             onOpenSettings={() => setIsSettingsOpen(true)}
         />
         
-        {/* Department Panel */}
         <DepartmentPanel 
             department={currentDept}
             assets={activeProject?.assets || []}
@@ -1934,9 +1934,7 @@ const App: React.FC = () => {
             onOneShotDiscovery={handleOneShotBreakdown}
         />
 
-        {/* Workspace Area */}
         <div className="flex-1 flex flex-col relative min-w-0">
-             {/* Sub-Header */}
              <div className="h-14 border-b border-border bg-surface flex items-center justify-between px-6 shrink-0 z-20">
                  <div className="flex items-center gap-4 min-w-0 flex-1">
                      <h2 className="font-bold text-zinc-100 truncate shrink-0">{activeAsset ? activeAsset.title : "General"}</h2>
@@ -1948,7 +1946,6 @@ const App: React.FC = () => {
                  </div>
                  
                  <div className="flex items-center gap-3 shrink-0 ml-4">
-                     {/* Render Queue Manual Trigger */}
                      {renderQueue.length > 0 && (
                          <button 
                             onClick={() => setIsRenderQueueOpen(!isRenderQueueOpen)}
@@ -1960,7 +1957,6 @@ const App: React.FC = () => {
                          </button>
                      )}
 
-                     {/* View Toggle (Only show if NOT Editorial) */}
                      {currentDept !== DepartmentType.EDITORIAL && (
                          <ToggleGroup 
                             options={[
@@ -1983,10 +1979,8 @@ const App: React.FC = () => {
                  </div>
              </div>
 
-             {/* Workspace Content */}
              <div className="flex-1 relative bg-black overflow-hidden">
                  {currentDept === DepartmentType.EDITORIAL ? (
-                     // Editorial View
                      editorialState.sequence ? (
                          <EditorTimeline 
                              sequenceAsset={editorialState.sequence}
@@ -1995,7 +1989,7 @@ const App: React.FC = () => {
                              projectNodes={activeProject?.nodes || []}
                              onUpdateAsset={handleUpdateAsset}
                              onUpdateNode={handleUpdateNode}
-                             onGenerateVideoForClip={handleGenerateVideoForClip} // Pass new handler
+                             onGenerateVideoForClip={handleGenerateVideoForClip} 
                          />
                      ) : (
                          <div className="flex flex-col items-center justify-center h-full text-zinc-500 gap-4">
@@ -2004,7 +1998,6 @@ const App: React.FC = () => {
                          </div>
                      )
                  ) : (
-                     // Standard Canvas/Gallery View
                      workspaceView === 'canvas' ? (
                          <Canvas 
                             nodes={activeProject?.nodes || []}
@@ -2019,9 +2012,10 @@ const App: React.FC = () => {
                             projectAssets={activeProject?.assets}
                             onRefineConcept={handleRefineConcept}
                             refinedImagesMap={refinedImagesMap}
-                            approvedImagesMap={approvedImagesMap} // New Prop
+                            approvedImagesMap={approvedImagesMap} 
                             projectSettings={activeProject?.settings}
-                            onGenerateVideo={handleGenerateVideoFromNode} // Pass new handler
+                            onGenerateVideo={handleGenerateVideoFromNode} 
+                            assetThumbnails={assetThumbnails}
                          />
                      ) : (
                         <GalleryView 
@@ -2037,14 +2031,10 @@ const App: React.FC = () => {
                      )
                  )}
                  
-                 {/* Chat Assistant - Hide in Editorial for space? Kept for now. */}
                  {currentDept !== DepartmentType.EDITORIAL && <ChatBot scriptContext={scriptContext} />}
              </div>
         </div>
 
-        {/* Global Floating Elements */}
-        
-        {/* Render Queue Panel (Detailed View) */}
         {isRenderQueueOpen && (
             <RenderQueuePanel 
                 queue={renderQueue} 
@@ -2057,12 +2047,10 @@ const App: React.FC = () => {
             />
         )}
 
-        {/* Render Queue Indicator (Passive View - only if panel closed) */}
         {!isRenderQueueOpen && renderQueue.some(t => t.status === 'processing') && (
             <QueueIndicator queue={renderQueue} />
         )}
 
-        {/* Floating Modals */}
         {isSettingsOpen && activeProject && (
             <SettingsModal 
                 settings={activeProject.settings || DEFAULT_PROJECT_SETTINGS}
@@ -2182,7 +2170,6 @@ const App: React.FC = () => {
             />
         )}
         
-        {/* Asset Editor Panel */}
         {activeAsset && currentDept !== DepartmentType.EDITORIAL && (
             <AssetEditorPanel 
                 asset={activeAsset} 
@@ -2198,8 +2185,8 @@ const App: React.FC = () => {
                 onGenerateRefSheet={handleRefineConcept}
                 assetThumbnails={assetThumbnails}
                 refinedImages={refinedImagesMap[activeAsset.id] || []}
-                projectSettings={activeProject?.settings} // Pass settings
-                onRemoveRef={handleRemoveRef} // Pass new handler
+                projectSettings={activeProject?.settings} 
+                onRemoveRef={handleRemoveRef} 
             />
         )}
         
