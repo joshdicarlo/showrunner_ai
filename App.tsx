@@ -167,38 +167,20 @@ const App: React.FC = () => {
       setProjects(prev => prev.map(p => {
           if (p.id === currentProjectIdRef.current) {
               const asset = p.assets.find(a => a.id === task.assetId);
+              // Basic validation for node creation
               if (!asset && !task.config?.targetNodeId) return p;
 
-              if (task.config?.targetNodeId) {
-                  return {
-                      ...p,
-                      nodes: p.nodes.map(n => {
-                          if (n.id === task.config!.targetNodeId) {
-                              return {
-                                  ...n,
-                                  data: {
-                                      ...n.data,
-                                      imageUrl: task.type === 'image' ? result : (n.data.imageUrl || task.startImage), 
-                                      videoUrl: task.type === 'video' ? result : undefined,
-                                      status: task.config?.autoApprove ? 'approved' : 'review',
-                                      submittedPrompt: task.submittedPrompt
-                                  }
-                              };
-                          }
-                          return n;
-                      })
-                  };
-              }
-
+              // 1. Create or update the flow node
+              const newNodeId = task.config?.targetNodeId || `gen-node-${Date.now()}-${Math.random()}`;
               const newNode: FlowNode = {
-                  id: `gen-node-${Date.now()}-${Math.random()}`,
+                  id: newNodeId,
                   type: task.type === 'video' ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
                   department: asset ? asset.department : DepartmentType.WRITERS_ROOM,
                   assetId: asset?.id,
                   parentId: undefined, 
                   position: { x: 100, y: 100 }, 
                   data: {
-                      imageUrl: task.type === 'image' ? result : task.startImage, 
+                      imageUrl: task.type === 'image' ? result : (task.startImage || result), 
                       videoUrl: task.type === 'video' ? result : undefined,
                       prompt: task.prompt,
                       status: task.config?.autoApprove ? 'approved' : 'review',
@@ -209,33 +191,17 @@ const App: React.FC = () => {
                   }
               };
 
-              let updatedAssets = p.assets;
-              
-              if (task.config?.autoAssemble && task.config?.sequenceId && task.config?.autoApprove && asset) {
-                  const seqAsset = p.assets.find(a => a.id === task.config?.sequenceId);
-                  if (seqAsset) {
-                      const newClip: TimelineClip = {
-                          id: `clip-${Date.now()}-${Math.random()}`,
-                          sourceNodeId: task.config?.targetNodeId || newNode.id, 
-                          mediaUrl: result,
-                          mediaType: task.type,
-                          start: seqAsset.timelineData ? seqAsset.timelineData.duration : 0,
-                          duration: 5, 
-                          offset: 0,
-                          track: 0,
-                          label: asset.title,
-                          thumbnail: task.type === 'image' ? result : task.startImage
-                      };
-                      
-                      const newTimelineData = {
-                          clips: [...(seqAsset.timelineData?.clips || []), newClip],
-                          duration: (seqAsset.timelineData?.duration || 0) + 5
-                      };
-
-                      updatedAssets = p.assets.map(a => a.id === seqAsset.id ? { ...a, timelineData: newTimelineData } : a);
-                  }
+              let updatedNodes = p.nodes;
+              if (task.config?.targetNodeId) {
+                  updatedNodes = p.nodes.map(n => n.id === task.config!.targetNodeId ? newNode : n);
+              } else {
+                  updatedNodes = [...p.nodes, newNode];
               }
 
+              // 2. Sync results to project assets (Timeline and Sequence updates)
+              let updatedAssets = p.assets;
+              
+              // Handle "Generate & Replace" functionality
               if (task.config?.replaceClipId) {
                   updatedAssets = updatedAssets.map(a => {
                       if (a.timelineData) {
@@ -245,7 +211,8 @@ const App: React.FC = () => {
                                       ...c,
                                       mediaUrl: result,
                                       mediaType: 'video' as const,
-                                      sourceNodeId: task.config?.targetNodeId || newNode.id
+                                      sourceNodeId: newNodeId,
+                                      thumbnail: task.startImage || result
                                   };
                               }
                               return c;
@@ -255,9 +222,35 @@ const App: React.FC = () => {
                       return a;
                   });
               }
+              
+              // Handle "Auto-Assemble" functionality
+              else if (task.config?.autoAssemble && task.config?.sequenceId && asset) {
+                  updatedAssets = updatedAssets.map(a => {
+                      if (a.id === task.config!.sequenceId) {
+                          const newClip: TimelineClip = {
+                              id: `clip-${Date.now()}-${Math.random()}`,
+                              sourceNodeId: newNodeId, 
+                              mediaUrl: result,
+                              mediaType: task.type as any,
+                              start: a.timelineData ? a.timelineData.duration : 0,
+                              duration: 5, 
+                              offset: 0,
+                              track: 0,
+                              label: asset.title,
+                              thumbnail: task.type === 'image' ? result : task.startImage
+                          };
+                          
+                          const newTimelineData = {
+                              clips: [...(a.timelineData?.clips || []), newClip],
+                              duration: (a.timelineData?.duration || 0) + 5
+                          };
+                          return { ...a, timelineData: newTimelineData };
+                      }
+                      return a;
+                  });
+              }
 
-              const finalNodes = task.config?.targetNodeId ? p.nodes : [...p.nodes, newNode];
-              return { ...p, assets: updatedAssets, nodes: finalNodes };
+              return { ...p, assets: updatedAssets, nodes: updatedNodes };
           }
           return p;
       }));
@@ -1025,12 +1018,12 @@ const App: React.FC = () => {
       const sourceNode = activeProject.nodes.find(n => n.id === sourceNodeId);
       if (!sourceNode || (!sourceNode.data.imageUrl && !sourceNode.data.videoUrl)) return;
 
-      const targetModel = model || MODELS.VIDEO_LUMA; // Default to Luma
+      const targetModel = model || MODELS.VIDEO_LUMA; 
       const batchId = `batch-clip-vid-${Date.now()}`;
       const batchLabel = `Timeline Video: ${sourceNode.data.prompt?.substring(0, 20) || 'Clip'}`;
 
       queueService.add({
-          id: `task-clip-vid-${Date.now()}`,
+          id: `task-clip-vid-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           type: 'video',
           prompt: sourceNode.data.prompt || "Timeline Video",
           assetId: sourceNode.assetId || 'root',
@@ -1038,7 +1031,7 @@ const App: React.FC = () => {
           startImage: sourceNode.data.imageUrl,
           config: {
               model: targetModel,
-              aspectRatio: sourceNode.data.aspectRatio,
+              aspectRatio: sourceNode.data.aspectRatio || '16:9',
               replaceClipId: replace ? clipId : undefined 
           },
           batchId,

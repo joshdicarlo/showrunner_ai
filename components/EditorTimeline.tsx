@@ -476,12 +476,20 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
     };
 
     const handleGenerateVideoForClipAction = (replace: boolean, instant: boolean) => {
-        if (contextMenu && contextMenu.clipId && onGenerateVideoForClip) {
-            const clip = clips.find(c => c.id === contextMenu.clipId);
-            if (clip) {
-                const model = MODELS.VIDEO_LUMA; 
-                onGenerateVideoForClip(clip.id, clip.sourceNodeId, replace, model);
-            }
+        if (contextMenu && (contextMenu.clipId || selectedClipIds.size > 0) && onGenerateVideoForClip) {
+            // Determine targets: if the right-clicked clip is selected, process the whole selection.
+            // Otherwise, process only the right-clicked clip.
+            const targetIds = (contextMenu.clipId && selectedClipIds.has(contextMenu.clipId))
+                ? Array.from(selectedClipIds)
+                : (contextMenu.clipId ? [contextMenu.clipId] : []);
+
+            targetIds.forEach(id => {
+                const clip = clips.find(c => c.id === id);
+                if (clip) {
+                    const model = instant ? MODELS.VIDEO_FAST : MODELS.VIDEO_HQ;
+                    onGenerateVideoForClip(clip.id, clip.sourceNodeId, replace, model);
+                }
+            });
         }
         setContextMenu(null);
     }
@@ -709,10 +717,13 @@ export const EditorTimeline: React.FC<EditorTimelineProps> = ({
 
                             <div className="h-[1px] bg-zinc-800 my-1 mx-2" />
                             <button onClick={() => handleGenerateVideoForClipAction(false, false)} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2">
-                                <Video size={12} /> Generate Video (Luma)
+                                <Video size={12} /> Generate Video
                             </button>
                             <button onClick={() => handleGenerateVideoForClipAction(true, false)} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2">
-                                <Film size={12} /> Generate & Replace (Luma)
+                                <Film size={12} /> Generate & Replace
+                            </button>
+                            <button onClick={() => handleGenerateVideoForClipAction(false, true)} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-300 flex items-center gap-2">
+                                <Sparkles size={12} /> Generate Instant Video
                             </button>
                             
                             <div className="h-[1px] bg-zinc-800 my-1 mx-2" />

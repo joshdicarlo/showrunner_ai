@@ -1,3 +1,4 @@
+
 import { RenderTask } from "../types";
 
 type Listener = (queue: RenderTask[]) => void;
@@ -14,7 +15,7 @@ export const createRenderQueue = (
     let listeners: Listener[] = [];
     let active = 0;
     let isPaused = false;
-    const concurrency = 2; // Conservative limit
+    const concurrency = 10; // Increased to 10 for better throughput of server-side video jobs
 
     const notify = () => listeners.forEach(l => l([...queue]));
 
