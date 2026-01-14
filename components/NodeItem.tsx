@@ -857,10 +857,10 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                      </div>
                  ) : (
                      <div className={`${expanded ? 'flex-1' : 'flex-1 min-h-0'} bg-zinc-900/50 rounded flex items-center justify-center border border-dashed border-zinc-700 text-zinc-600 text-xs`}>
-                         {isProcessing ? (
+                         {(isProcessing || node.data.status === 'pending') ? (
                              <div className="flex flex-col items-center gap-2">
                                 <Sparkles className="animate-spin text-purple-500" />
-                                <span className="animate-pulse">{progressMsg || "Generating..."}</span>
+                                <span className="animate-pulse">{progressMsg || "Dreaming..."}</span>
                              </div>
                          ) : "No Image"}
                      </div>
@@ -969,10 +969,10 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                      <video controls src={node.data.videoUrl} className={`rounded border border-zinc-700 bg-black ${expanded ? 'flex-1 w-full h-full' : 'w-full flex-1 min-h-0 object-contain'}`} />
                  ) : (
                     <div className={`${expanded ? 'flex-1' : 'flex-1 min-h-0'} bg-zinc-900/50 rounded flex items-center justify-center border border-dashed border-zinc-700 text-zinc-600`}>
-                         {isProcessing ? (
+                         {(isProcessing || node.data.status === 'pending') ? (
                              <div className="flex flex-col items-center gap-2">
                                 <Film className="animate-spin text-red-500" />
-                                <span className="animate-pulse text-xs">{progressMsg || "Generating..."}</span>
+                                <span className="animate-pulse text-xs">{progressMsg || "Dreaming..."}</span>
                              </div>
                          ) : "No Video"}
                     </div>
