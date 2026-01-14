@@ -498,7 +498,7 @@ const App: React.FC = () => {
                  height: 400,
                  data: {
                      prompt: `Write a beat sheet for a ${seed.genre} film called "${title}".\nLogline: ${summary}`,
-                     status: 'generating'
+                     status: 'draft'
                  }
              });
              initialNodes.push({
@@ -511,7 +511,7 @@ const App: React.FC = () => {
                  height: 400,
                  data: {
                      prompt: `Write the opening sequence script for "${title}".\nGenre: ${seed.genre}.\nLogline: ${summary}`,
-                     status: 'generating'
+                     status: 'draft'
                  }
              });
           }
@@ -844,7 +844,7 @@ const App: React.FC = () => {
             data: {
                 prompt: defaultPrompt,
                 aspectRatio: defaultRatio,
-                status: 'generating',
+                status: 'pending',
                 tag: 'concept',
                 styleId: styleId 
             }
@@ -877,7 +877,6 @@ const App: React.FC = () => {
     tasks.forEach(t => queueService.add(t)); 
 
     setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
-    setIsRenderQueueOpen(true);
   };
   
   const handleGalleryGenerate = (prompt: string, count: number, model: string, aspectRatio: string) => {
@@ -941,7 +940,7 @@ const App: React.FC = () => {
                   prompt: prompt,
                   aspectRatio: aspectRatio,
                   model: model,
-                  status: 'generating',
+                  status: 'pending',
                   duration: (model.includes('veo') || model.includes('luma')) ? '5' : undefined,
                   withAudio: false
               }
@@ -973,7 +972,6 @@ const App: React.FC = () => {
       tasks.forEach(t => queueService.add(t));
 
       setFocusNodeIds([groupId, ...newNodes.map(n => n.id)]);
-      setIsRenderQueueOpen(true);
   }
 
   const handleGenerateVideoFromNode = (node: FlowNode, model: string) => {
@@ -997,7 +995,7 @@ const App: React.FC = () => {
           data: {
               imageUrl: node.data.imageUrl, 
               prompt: node.data.prompt || "Video from image",
-              status: 'generating',
+              status: 'pending',
               model: targetModel,
               aspectRatio: node.data.aspectRatio || '16:9'
           }
@@ -1025,7 +1023,6 @@ const App: React.FC = () => {
           batchId,
           batchLabel
       });
-      setIsRenderQueueOpen(true);
   }
 
   const handleGenerateVideoForClip = (clipId: string, sourceNodeId: string, replace: boolean, model: string) => {
@@ -1053,7 +1050,6 @@ const App: React.FC = () => {
           batchId,
           batchLabel
       });
-      setIsRenderQueueOpen(true);
   }
 
   const handleOneShotBreakdown = async () => {
@@ -1224,7 +1220,7 @@ const App: React.FC = () => {
       }
       
       if (primaryTasks.length > 0 || secondaryTasks.length > 0) {
-          setIsRenderQueueOpen(true); 
+          // Notifications will inform users of queued tasks
       }
   }
 
@@ -1475,7 +1471,7 @@ const App: React.FC = () => {
                   prompt: p,
                   aspectRatio: "1:1",
                   model: MODELS.IMAGE_GEN, 
-                  status: 'generating',
+                  status: 'pending',
                   tag: 'refinement', 
                   referenceImageUrl: sourceImageUrl 
               }
@@ -1507,7 +1503,6 @@ const App: React.FC = () => {
       tasks.forEach(t => queueService.add(t));
 
       setFocusNodeIds([groupId]);
-      setIsRenderQueueOpen(true);
   }
 
   const handleGenerateOutline = () => {
@@ -1566,7 +1561,7 @@ const App: React.FC = () => {
                lastFrameImageUrl: supportsLastFrame ? node.data.imageUrl : undefined,
                model: model,
                aspectRatio: '16:9',
-               status: 'generating', 
+               status: 'pending', 
                duration: '5',
                withAudio: false
            }
@@ -1594,7 +1589,6 @@ const App: React.FC = () => {
       });
 
       setFocusNodeIds([newNode.id]);
-      setIsRenderQueueOpen(true);
   }
 
   const handleGalleryExpressions = (node: FlowNode) => {
@@ -1666,7 +1660,7 @@ const App: React.FC = () => {
                    imageUrl: node.data.imageUrl,
                    model: targetModel,
                    aspectRatio: '16:9',
-                   status: 'generating',
+                   status: 'pending',
                    duration: '5', 
                    withAudio: false
                }
@@ -1698,7 +1692,6 @@ const App: React.FC = () => {
        tasks.forEach(t => queueService.add(t));
 
        setFocusNodeIds([groupId]);
-       setIsRenderQueueOpen(true);
   }
 
   const handleRemoveRef = (imageUrl: string) => {
