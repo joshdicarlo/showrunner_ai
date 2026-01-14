@@ -15,7 +15,9 @@ export const MODELS = {
   TEXT_FAST: "gemini-2.5-flash",
   TEXT_PRO: "gemini-3-pro-preview",
   IMAGE_GEN: "gemini-3-pro-image-preview", // Default high quality
+  IMAGE_FAST: "gemini-2.5-flash-image",
   IMAGE_EDIT: "gemini-2.5-flash-image", // Nano Banana
+  IMAGE_LUMA: "luma-photon-1",
   VIDEO_LUMA: "luma-ray-2",
   VIDEO_FAST: "luma-ray-2", 
   VIDEO_HQ: "luma-ray-2", // Set Luma as default for HQ as well
@@ -113,6 +115,7 @@ export const DEFAULT_STYLES: VisualStyle[] = [
 
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
     defaultStyleId: 'style-cinematic',
+    concurrentGenerations: 10,
     styles: DEFAULT_STYLES,
     assetConfigs: {
         [DepartmentType.CASTING_WARDROBE]: { hiddenPrompt: "framing: wide angle, full-body" },

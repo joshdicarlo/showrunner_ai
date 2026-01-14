@@ -581,6 +581,7 @@ export const generateImage = async (
     referenceImages: string[] = []
 ): Promise<string> => {
     const ai = createAI();
+    console.log(`[Gemini Service] Generating Image (${model}):`, prompt.substring(0, 50));
     try {
         return await retryWithBackoff(async () => {
             if (model.includes('imagen')) {
@@ -619,10 +620,12 @@ export const generateImage = async (
                 if (response.candidates?.[0]?.content?.parts) {
                     for (const part of response.candidates[0].content.parts) {
                         if (part.inlineData) {
+                            console.log(`[Gemini Service] Image Generation Successful`);
                             return `data:image/png;base64,${part.inlineData.data}`;
                         }
                     }
                 }
+                console.warn(`[Gemini Service] No Inline Data found in response`);
                 return "";
             }
         });

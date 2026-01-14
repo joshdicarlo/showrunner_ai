@@ -9,19 +9,23 @@ export class RenderQueue {
 
 export const createRenderQueue = (
     onTaskComplete: (task: RenderTask, result: string) => void,
-    taskExecutor: (task: RenderTask) => Promise<string>
+    taskExecutor: (task: RenderTask) => Promise<string>,
+    getConcurrencyLimit: () => number
 ) => {
     let queue: RenderTask[] = [];
     let listeners: Listener[] = [];
     let active = 0;
     let isPaused = false;
-    const concurrency = 10; // Increased to 10 for better throughput of server-side video jobs
+    // Map to track retries per task ID
+    const retryCounts = new Map<string, number>();
+    const MAX_RETRIES = 3;
 
     const notify = () => listeners.forEach(l => l([...queue]));
 
     const process = async () => {
         if (isPaused) return;
-        if (active >= concurrency) return;
+        const currentLimit = getConcurrencyLimit();
+        if (active >= currentLimit) return;
         
         // Find next pending task that isn't waiting or stopped
         const nextIdx = queue.findIndex(t => t.status === 'pending');
@@ -31,7 +35,11 @@ export const createRenderQueue = (
         task.status = 'processing';
         task.progress = 0;
         active++;
+        
+        console.log(`[Queue] Starting Task ${task.id}:`, { type: task.type, prompt: task.prompt.substring(0, 50) + "..." });
+        
         notify();
+        process(); // Try to launch more if capacity allows
 
         try {
             // Executor wrapper to handle progress updates
@@ -42,23 +50,45 @@ export const createRenderQueue = (
             // Check if it was stopped during execution
             // We cast status to string to prevent TS narrowing from assuming it is 'processing'
             if ((task.status as string) === 'stopped') {
+                console.log(`[Queue] Task ${task.id} stopped manually.`);
                 active--;
                 notify();
                 process();
                 return;
             }
 
+            console.log(`[Queue] Task ${task.id} completed successfully.`);
             task.status = 'completed';
             task.progress = 100;
             task.result = result;
             onTaskComplete(task, result);
         } catch (e: any) {
+            console.error(`[Queue] Task ${task.id} failed:`, e);
             if ((task.status as string) === 'stopped') {
                 // Ignore errors if stopped manually
             } else {
                 console.error("Task Failed", e);
-                task.status = 'failed';
-                task.error = e.message || "Unknown error";
+                // Check for 429 or other retryable errors
+                const isRetryable = e.message?.includes('429') || e.message?.includes('Too Many Requests') || e.message?.includes('Recitation');
+                const retries = retryCounts.get(task.id) || 0;
+                
+                if (isRetryable && retries < MAX_RETRIES) {
+                    console.warn(`Retrying task ${task.id} (Attempt ${retries + 1}/${MAX_RETRIES})`);
+                    retryCounts.set(task.id, retries + 1);
+                    
+                    // Simple exponential backoff
+                    const delay = Math.pow(2, retries) * 1000;
+                    setTimeout(() => {
+                        task.status = 'pending'; // Re-queue
+                        notify();
+                        process();
+                    }, delay);
+                    
+                    // Decrement active count immediately so slot is freed while we wait
+                } else {
+                    task.status = 'failed';
+                    task.error = e.message || "Unknown error";
+                }
             }
         } finally {
             active--;

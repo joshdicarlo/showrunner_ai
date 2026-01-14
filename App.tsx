@@ -14,7 +14,7 @@ import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAss
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
 import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage, generateVideo } from './services/geminiService';
-import { generateLumaVideo } from './services/lumaService';
+import { generateLumaVideo, generateLumaImage } from './services/lumaService';
 import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
 import { OneShotModal } from './components/OneShotModal';
@@ -103,8 +103,15 @@ const App: React.FC = () => {
       );
       
       task.submittedPrompt = resolved;
+      
+      const model = task.config?.model || MODELS.IMAGE_GEN;
 
       if (task.type === 'image') {
+          if (model.includes('luma')) {
+               const res = await generateLumaImage(resolved, BatchType.STANDARD, "1024x1024"); // Default res
+               return res.uri;
+          }
+
           const approvedMap: Record<string, string[]> = {};
           activeProj?.assets.forEach(a => {
               const images = activeProj.nodes
@@ -256,7 +263,11 @@ const App: React.FC = () => {
       }));
   };
 
-  const queueService = useMemo(() => createRenderQueue(onTaskComplete, handleTaskExecution), []);
+  const queueService = useMemo(() => createRenderQueue(
+      onTaskComplete, 
+      handleTaskExecution,
+      () => projectsRef.current.find(p => p.id === currentProjectIdRef.current)?.settings.concurrentGenerations || 10
+  ), []);
   
   useEffect(() => {
       return queueService.subscribe((q) => {
@@ -1162,7 +1173,8 @@ const App: React.FC = () => {
                           count: config.count,
                           autoApprove: item.autoApprove, 
                           autoAssemble: config.autoAssemble,
-                          sequenceId: parentAssetId 
+                          sequenceId: parentAssetId,
+                          model: item.model || MODELS.IMAGE_GEN
                       }
                   };
                   

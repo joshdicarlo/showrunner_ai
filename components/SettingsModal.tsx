@@ -146,6 +146,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, 
                                         </Select>
                                     </div>
                                 </div>
+
+                                <div className="mb-8">
+                                    <h2 className="text-lg font-medium text-zinc-100 mb-1">Concurrent Tasks</h2>
+                                    <p className={descClass}>
+                                        Max parallel generation tasks (default: 10). Reduce if you hit rate limits.
+                                    </p>
+                                    <div className="mt-2 w-full max-w-md">
+                                         <input 
+                                             type="number" 
+                                             min="1" 
+                                             max="50"
+                                             value={localSettings.concurrentGenerations || 10} 
+                                             onChange={(e) => setLocalSettings({...localSettings, concurrentGenerations: parseInt(e.target.value)})}
+                                             className="w-full bg-[#3c3c3c] rounded-none border border-transparent focus:border-[#007fd4] text-zinc-200 px-3 py-1.5 text-sm"
+                                         />
+                                    </div>
+                                </div>
                             </div>
                         )}
 

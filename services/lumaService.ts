@@ -114,6 +114,8 @@ export const generateLumaImage = async (
     fullPrompt = `${prompt}. Master-piece hyper-realistic, High-end professional surrealist photography. The head must be entirely made of produce material, features formed from skin rind and pulp. Cinematic lighting, 8k detail. Strictly photographic style.`;
   }
 
+  console.log(`[Luma Service] Submit Image Gen:`, { prompt: fullPrompt });
+
   const response = await proxiedFetch(`${LUMA_API_BASE}/generations/image`, {
     method: 'POST',
     headers: {
@@ -129,11 +131,13 @@ export const generateLumaImage = async (
 
   if (!response.ok) {
     const errorBody = await response.text();
+    console.error(`[Luma Service] Submission Failed: ${response.status}`, errorBody);
     throw new Error(`Luma Image Error: ${response.status} - ${errorBody}`);
   }
 
   let generation = await response.json();
   const generationId = generation.id;
+  console.log(`[Luma Service] Image Job Created: ${generationId}`);
 
   let attempts = 0;
   while (generation.state !== 'completed' && generation.state !== 'failed' && attempts < 100) {
@@ -142,7 +146,10 @@ export const generateLumaImage = async (
     const pollRes = await proxiedFetch(`${LUMA_API_BASE}/generations/${generationId}`, {
       headers: { 'Authorization': `Bearer ${key}` }
     }, true);
-    if (pollRes.ok) generation = await pollRes.json();
+    if (pollRes.ok) {
+        generation = await pollRes.json();
+        console.log(`[Luma Service] Polling Image ${generationId}: ${generation.state}`);
+    }
   }
 
   if (generation.state === 'failed') throw new Error(`Luma Failed: ${generation.failure_reason}`);

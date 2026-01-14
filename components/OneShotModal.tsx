@@ -2,6 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { Modal, Button, Select } from './UI';
 import { OneShotItem } from '../types';
+import { MODELS } from '../constants';
 import { Wand2, Check, User, MapPin, Layout, Clapperboard, Plus, ChevronRight, ChevronDown, CheckCircle, Circle, Play, Layers, Loader2, Search } from 'lucide-react';
 
 interface OneShotModalProps {
@@ -72,6 +73,25 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
         });
     };
 
+    const updateAllModels = (type: string, model: string) => {
+        setItems(prev => {
+            const newItems = [...prev];
+            const updateRecursive = (list: OneShotItem[]): OneShotItem[] => {
+                return list.map(item => {
+                    let newItem = item;
+                    if (item.type === type || (type === 'Scene' && item.type === 'Shot')) {
+                        newItem = { ...item, model };
+                    }
+                    if (item.children) {
+                        newItem = { ...newItem, children: updateRecursive(item.children) };
+                    }
+                    return newItem;
+                });
+            };
+            return updateRecursive(newItems);
+        });
+    };
+
     const renderIcon = (type: string) => {
         switch(type) {
             case 'Character': return <User size={14} className="text-purple-400"/>;
@@ -131,20 +151,39 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                         </div>
                     </div>
 
+                    <div className="w-32 shrink-0 px-2 flex justify-end">
+                        {item.autoGenerate && item.selected ? (
+                            <div className="relative w-full">
+                                <select 
+                                    value={item.model || MODELS.IMAGE_GEN} 
+                                    onChange={(e) => updateItem(item.id, { model: e.target.value })}
+                                    className="w-full text-[10px] py-1.5 pl-2 pr-6 h-8 bg-zinc-900 border border-zinc-700 hover:border-zinc-500 rounded text-zinc-300 appearance-none focus:ring-1 focus:ring-blue-500 transition-colors cursor-pointer outline-none"
+                                >
+                                    <option value={MODELS.IMAGE_GEN}>Imagine 3 Pro</option>
+                                    <option value={MODELS.IMAGE_FAST}>Gemini Flash</option>
+                                    <option value={MODELS.IMAGE_LUMA}>Luma Photon</option>
+                                </select>
+                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
+                                    <ChevronDown size={10} />
+                                </div>
+                            </div>
+                        ) : <div className="w-full h-8" />}
+                    </div>
+
                     {/* Controls */}
-                    <div className="flex items-center gap-1 pr-4">
+                    <div className="flex items-center gap-2 pr-4">
                         
                         {/* Auto Generate Toggle */}
                         <button 
                             onClick={() => updateItem(item.id, { autoGenerate: !item.autoGenerate })}
                             disabled={!item.selected}
-                            className={`p-1.5 rounded flex items-center gap-1.5 border transition-all text-[10px] w-24 justify-center
+                            className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-28 justify-center font-medium h-8
                                 ${!item.selected ? 'opacity-20 cursor-not-allowed border-transparent' : 
-                                  item.autoGenerate ? 'bg-blue-900/30 text-blue-300 border-blue-800 shadow-[0_0_10px_rgba(59,130,246,0.2)]' : 'bg-zinc-900 text-zinc-500 border-zinc-700 hover:border-zinc-500'}
+                                  item.autoGenerate ? 'bg-blue-900/20 text-blue-300 border-blue-800 hover:bg-blue-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
                             `}
                             title="Auto-Generate Image"
                         >
-                            <Wand2 size={12} />
+                            <Wand2 size={12} className={item.autoGenerate ? "text-blue-400" : "text-zinc-500"} />
                             {item.autoGenerate ? "Auto-Gen" : "Manual"}
                         </button>
 
@@ -152,13 +191,13 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                         <button 
                             onClick={() => updateItem(item.id, { autoApprove: !item.autoApprove })}
                             disabled={!item.selected || !item.autoGenerate}
-                            className={`p-1.5 rounded flex items-center gap-1.5 border transition-all text-[10px] w-24 justify-center
+                            className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-28 justify-center font-medium h-8
                                 ${!item.selected || !item.autoGenerate ? 'opacity-20 cursor-not-allowed border-transparent' : 
-                                  item.autoApprove ? 'bg-green-900/30 text-green-300 border-green-800' : 'bg-zinc-900 text-zinc-500 border-zinc-700 hover:border-zinc-500'}
+                                  item.autoApprove ? 'bg-green-900/20 text-green-300 border-green-800 hover:bg-green-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
                             `}
                             title="Auto-Approve First Result"
                         >
-                            {item.autoApprove ? <CheckCircle size={12} /> : <Circle size={12} />}
+                            {item.autoApprove ? <CheckCircle size={12} className="text-green-400"/> : <Circle size={12} className="text-zinc-500"/>}
                             {item.autoApprove ? "Approved" : "Review"}
                         </button>
 
@@ -175,6 +214,22 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                 {title}
             </h4>
             <div className="flex items-center gap-2">
+                <div className="relative">
+                    <select 
+                        value=""
+                        onChange={(e) => updateAllModels(type, e.target.value)}
+                        className="w-32 text-[10px] py-1 pl-2 pr-6 h-6 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded text-zinc-400 hover:text-zinc-200 appearance-none transition-colors cursor-pointer outline-none"
+                    >
+                        <option value="" disabled>Set Model...</option>
+                        <option value={MODELS.IMAGE_GEN}>Imagine 3 Pro</option>
+                        <option value={MODELS.IMAGE_FAST}>Gemini Flash</option>
+                        <option value={MODELS.IMAGE_LUMA}>Luma Photon</option>
+                    </select>
+                     <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-600">
+                        <ChevronDown size={10} />
+                    </div>
+                </div>
+                <div className="w-[1px] h-3 bg-zinc-800 mx-1"/>
                 <button onClick={() => toggleSection(type, 'selected', true)} className="text-[10px] text-zinc-500 hover:text-white px-1">All</button>
                 <button onClick={() => toggleSection(type, 'selected', false)} className="text-[10px] text-zinc-500 hover:text-white px-1">None</button>
                 <div className="w-[1px] h-3 bg-zinc-800 mx-1"/>

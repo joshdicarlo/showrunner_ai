@@ -136,6 +136,7 @@ export interface ProjectSettings {
     defaultStyleId?: string;
     styles: VisualStyle[];
     assetConfigs: Partial<Record<DepartmentType, AssetTypeConfig>>;
+    concurrentGenerations?: number;
 }
 
 export interface Project {
@@ -214,4 +215,5 @@ export interface OneShotItem {
     autoApprove: boolean;
     isExisting?: boolean; // If matching asset found
     children?: OneShotItem[];
+    model?: string;
 }
