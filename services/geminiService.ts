@@ -585,7 +585,8 @@ export const extractOneShotBreakdown = async (
                     
                     if (part.thought) {
                         // part.thought is a boolean, content is in part.text
-                        thinkingText += part.text;
+                        // Prepend new content so latest appears at top
+                        thinkingText = part.text + thinkingText;
                         onThinkingUpdate?.(thinkingText);
                     } else {
                         fullText += part.text;
