@@ -48,7 +48,7 @@ export interface NodeData {
   imageUrl?: string;
   videoUrl?: string;
   prompt?: string;
-  status?: 'draft' | 'generating' | 'approved' | 'review' | 'archived';
+  status?: 'pending' | 'draft' | 'generating' | 'approved' | 'review' | 'archived';
   aspectRatio?: string;
   model?: string;
   label?: string; // For groups

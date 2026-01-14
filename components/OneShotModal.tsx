@@ -12,9 +12,10 @@ interface OneShotModalProps {
     onExecute: (config: { count: number, autoAssemble: boolean }) => void;
     onDiscover: () => void;
     isLoading: boolean;
+    thinkingText?: string;
 }
 
-export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onClose, onExecute, onDiscover, isLoading }) => {
+export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onClose, onExecute, onDiscover, isLoading, thinkingText }) => {
     const [genCount, setGenCount] = useState(1);
     const [autoAssemble, setAutoAssemble] = useState(true);
     const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -274,9 +275,17 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                 {/* Content Area */}
                 <div className="flex-1 overflow-y-auto bg-zinc-900/50">
                     {isLoading ? (
-                        <div className="flex flex-col items-center justify-center h-full gap-4">
+                        <div className="flex flex-col items-center justify-center h-full gap-4 p-6">
                              <Loader2 size={48} className="animate-spin text-blue-500" />
                              <p className="text-zinc-400 animate-pulse">Analyzing script content...</p>
+                             {thinkingText && (
+                                <div className="w-full max-w-2xl mt-4">
+                                    <p className="text-xs text-zinc-500 mb-2 font-medium">AI Reasoning:</p>
+                                    <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto">
+                                        <pre className="text-xs text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">{thinkingText}</pre>
+                                    </div>
+                                </div>
+                             )}
                         </div>
                     ) : items.length > 0 ? (
                         <>

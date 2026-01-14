@@ -474,9 +474,12 @@ export const extractStoryElementsFromScript = async (scriptText: string, knownCh
 }
 
 /**
- * ONE SHOT BREAKDOWN: Extracts Everything
+ * ONE SHOT BREAKDOWN: Extracts Everything (with streaming thinking output)
  */
-export const extractOneShotBreakdown = async (scriptText: string): Promise<{ characters: any[], locations: LocationProfile[], scenes: StoryElement[] }> => {
+export const extractOneShotBreakdown = async (
+    scriptText: string,
+    onThinkingUpdate?: (thinking: string) => void
+): Promise<{ characters: any[], locations: LocationProfile[], scenes: StoryElement[] }> => {
     const ai = createAI();
     try {
         const prompt = `You are a breakdown artist. Analyze the script and extract Characters, Locations, and Scenes with their shots in one pass.
@@ -504,55 +507,58 @@ export const extractOneShotBreakdown = async (scriptText: string): Promise<{ cha
         "${scriptText.slice(0, 200000)}"
         `;
 
-        const response = await retryWithBackoff(async () => {
-            return await ai.models.generateContent({
-                model: MODELS.TEXT_FAST,
-                contents: prompt,
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            characters: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        name: { type: Type.STRING },
-                                        description: { type: Type.STRING, description: "Natural Language Paragraph Prompt" },
-                                        summary: { type: Type.STRING, description: "One concise sentence summary max" },
-                                        role: { type: Type.STRING }
-                                    }
+        // Use streaming to capture thinking/progress
+        const stream = await ai.models.generateContentStream({
+            model: MODELS.TEXT_FAST,
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                thinkingConfig: {
+                    thinkingBudget: 8000,
+                    includeThoughts: true
+                },
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        characters: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    description: { type: Type.STRING, description: "Natural Language Paragraph Prompt" },
+                                    summary: { type: Type.STRING, description: "One concise sentence summary max" },
+                                    role: { type: Type.STRING }
                                 }
-                            },
-                            locations: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        name: { type: Type.STRING },
-                                        description: { type: Type.STRING },
-                                        type: { type: Type.STRING }
-                                    }
+                            }
+                        },
+                        locations: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    name: { type: Type.STRING },
+                                    description: { type: Type.STRING },
+                                    type: { type: Type.STRING }
                                 }
-                            },
-                            scenes: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        title: { type: Type.STRING },
-                                        description: { type: Type.STRING },
-                                        type: { type: Type.STRING },
-                                        shots: {
-                                            type: Type.ARRAY,
-                                            items: {
-                                                type: Type.OBJECT,
-                                                properties: {
-                                                    title: { type: Type.STRING },
-                                                    description: { type: Type.STRING, description: "Structured YAML Prompt" },
-                                                    type: { type: Type.STRING }
-                                                }
+                            }
+                        },
+                        scenes: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    title: { type: Type.STRING },
+                                    description: { type: Type.STRING },
+                                    type: { type: Type.STRING },
+                                    shots: {
+                                        type: Type.ARRAY,
+                                        items: {
+                                            type: Type.OBJECT,
+                                            properties: {
+                                                title: { type: Type.STRING },
+                                                description: { type: Type.STRING, description: "Structured YAML Prompt" },
+                                                type: { type: Type.STRING }
                                             }
                                         }
                                     }
@@ -561,10 +567,34 @@ export const extractOneShotBreakdown = async (scriptText: string): Promise<{ cha
                         }
                     }
                 }
-            });
+            }
         });
 
-        return JSON.parse(response.text || "{}");
+        let fullText = '';
+        let thinkingText = '';
+        
+        for await (const chunk of stream) {
+            // Debug log to see chunk structure
+            console.log('[OneShot Stream] Chunk:', JSON.stringify(chunk, null, 2));
+            
+            // Check for thinking content in the chunk
+            if (chunk.candidates?.[0]?.content?.parts) {
+                for (const part of chunk.candidates[0].content.parts) {
+                    console.log('[OneShot Stream] Part:', JSON.stringify(part, null, 2));
+                    if (!part.text) continue;
+                    
+                    if (part.thought) {
+                        // part.thought is a boolean, content is in part.text
+                        thinkingText += part.text;
+                        onThinkingUpdate?.(thinkingText);
+                    } else {
+                        fullText += part.text;
+                    }
+                }
+            }
+        }
+
+        return JSON.parse(fullText || "{}");
     } catch (e) {
         console.error("One Shot Extraction Error", e);
         return { characters: [], locations: [], scenes: [] };

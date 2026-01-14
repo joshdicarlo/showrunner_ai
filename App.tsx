@@ -70,6 +70,7 @@ const App: React.FC = () => {
   const [enhancementOptions, setEnhancementOptions] = useState<string[]>([]);
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisThinking, setAnalysisThinking] = useState('');
   const [detectedItems, setDetectedItems] = useState<DetectedItem[]>([]);
   const [oneShotItems, setOneShotItems] = useState<OneShotItem[]>([]);
   const [analysisType, setAnalysisType] = useState<string>(''); 
@@ -1055,6 +1056,7 @@ const App: React.FC = () => {
   const handleOneShotBreakdown = async () => {
       if (!activeProject) return;
       setOneShotItems([]);
+      setAnalysisThinking('');
       setIsOneShotModalOpen(true);
       setIsAnalyzing(true);
 
@@ -1073,7 +1075,9 @@ const App: React.FC = () => {
               return;
           }
 
-          const rawData = await extractOneShotBreakdown(fullText);
+          const rawData = await extractOneShotBreakdown(fullText, (thinking) => {
+              setAnalysisThinking(thinking);
+          });
           const newItems: OneShotItem[] = [];
           
           rawData.characters.forEach((c: any) => newItems.push({ 
@@ -2170,6 +2174,7 @@ const App: React.FC = () => {
                 onExecute={handleExecuteOneShot}
                 onDiscover={handleOneShotBreakdown}
                 isLoading={isAnalyzing}
+                thinkingText={analysisThinking}
             />
         )}
         
