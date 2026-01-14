@@ -342,6 +342,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {}, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
+  const isProcessingRef = useRef(false); // Ref to prevent StrictMode double-execution
   const [progressMsg, setProgressMsg] = useState("");
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -514,6 +515,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   };
 
   const handleImageGen = async () => {
+    if (isProcessingRef.current) return; // Prevent double-execution
+    isProcessingRef.current = true;
     setIsProcessing(true);
     setProgressMsg("Dreaming...");
     setError(null);
@@ -567,6 +570,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     } catch (e) {
       setError("Image generation failed.");
     } finally {
+      isProcessingRef.current = false;
       setIsProcessing(false);
       setProgressMsg("");
     }
@@ -668,9 +672,13 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   useEffect(() => {
+    // Guard: only trigger if status is 'generating', not already processing, and no content exists
+    // Use a flag to prevent double-execution from React StrictMode
+    let cancelled = false;
+    
     if (node.data.status === 'generating' && !isProcessing) {
        if (node.type === NodeType.AI_IMAGE_GEN && !node.data.imageUrl) {
-           handleImageGen();
+           handleImageGen(); // Ref guard inside handleImageGen prevents double-execution
        } else if (node.type === NodeType.AI_TEXT_GEN && !node.data.text) {
            handleTextGen();
        }
