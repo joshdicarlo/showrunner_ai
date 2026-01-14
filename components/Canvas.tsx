@@ -76,6 +76,37 @@ export const Canvas: React.FC<CanvasProps> = ({
   const mousePosRef = useRef<{x: number, y: number}>({ x: 0, y: 0 });
   const canvasRef = useRef<HTMLDivElement>(null);
 
+  // Solves "passive event listener" error by using a non-passive listener manually
+  const stateRef = useRef({ scale, offset });
+  stateRef.current = { scale, offset };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      
+      const { scale, offset } = stateRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const zoomSensitivity = -0.001;
+      const delta = e.deltaY * zoomSensitivity;
+      
+      const oldScale = scale;
+      const newScale = Math.min(Math.max(0.1, oldScale + delta), 3);
+      const newOffsetX = mouseX - (mouseX - offset.x) * (newScale / oldScale);
+      const newOffsetY = mouseY - (mouseY - offset.y) * (newScale / oldScale);
+      
+      setScale(newScale);
+      setOffset({ x: newOffsetX, y: newOffsetY });
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
+
   // --- Smart Placement Helper ---
   const findSmartPosition = useCallback((preferredX: number, preferredY: number, width: number, height: number): Position => {
       const padding = 20;
@@ -370,7 +401,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (interactionMode === 'draggingNode' && dragTargetGroupId) { const targetGroup = nodes.find(n => n.id === dragTargetGroupId); if (targetGroup) { const nodesToDrop = selectedNodeIds.length > 0 ? selectedNodeIds : [draggingNodeId!]; const allChildrenIds = nodes.filter(n => n.parentId === dragTargetGroupId).map(n => n.id); const newMemberIds = nodesToDrop; const unionIds = [...new Set([...allChildrenIds, ...newMemberIds])]; const members = nodes.filter(n => unionIds.includes(n.id)); if (members.length > 0) { const padding = 40; const headerHeight = 50; const minX = Math.min(...members.map(n => n.position.x), targetGroup.position.x + padding); const minY = Math.min(...members.map(n => n.position.y), targetGroup.position.y + padding + headerHeight); const maxX = Math.max(...members.map(n => n.position.x + (n.width || 300)), targetGroup.position.x + (targetGroup.width || 400) - padding); const maxY = Math.max(...members.map(n => n.position.y + (n.height || 300)), targetGroup.position.x + (targetGroup.height || 400) - padding); setNodes(prev => prev.map(n => { if (n.id === dragTargetGroupId) { return { ...n, position: { x: minX - padding, y: minY - padding - headerHeight }, width: (maxX - minX) + (padding * 2), height: (maxY - minY) + (padding * 2) + headerHeight }; } if (newMemberIds.includes(n.id)) { return { ...n, parentId: dragTargetGroupId }; } return n; })); } } }
     setInteractionMode('none'); setSelectionBox(null); setDraggingNodeId(null); setDragTargetGroupId(null);
   };
-  const handleWheel = (e: React.WheelEvent) => { e.preventDefault(); const rect = canvasRef.current?.getBoundingClientRect(); if (!rect) return; const mouseX = e.clientX - rect.left; const mouseY = e.clientY - rect.top; const zoomSensitivity = -0.001; const delta = e.deltaY * zoomSensitivity; const oldScale = scale; const newScale = Math.min(Math.max(0.1, oldScale + delta), 3); const newOffsetX = mouseX - (mouseX - offset.x) * (newScale / oldScale); const newOffsetY = mouseY - (mouseY - offset.y) * (newScale / oldScale); setScale(newScale); setOffset({ x: newOffsetX, y: newOffsetY }); };
+  // Replaced with manual passive:false listener above
   const handleCanvasContextMenu = (e: React.MouseEvent) => { e.preventDefault(); if (interactionMode !== 'none') return; setContextMenu({ x: e.clientX, y: e.clientY, nodeId: null }); };
   const handleTabMenuKeyDown = (e: React.KeyboardEvent) => { if (!tabMenu) return; if (e.key === 'ArrowDown') { e.preventDefault(); setTabMenu(prev => prev ? {...prev, selectedIndex: Math.min(prev.selectedIndex + 1, filteredMenuNodes.length - 1)} : null); } else if (e.key === 'ArrowUp') { e.preventDefault(); setTabMenu(prev => prev ? {...prev, selectedIndex: Math.max(prev.selectedIndex - 1, 0)} : null); } else if (e.key === 'Enter') { e.preventDefault(); const item = filteredMenuNodes[tabMenu.selectedIndex]; if (item) { addNodeAtLocation(item.type, tabMenu.x, tabMenu.y); setTabMenu(null); } } else if (e.key === 'Escape') { setTabMenu(null); } };
   const filteredMenuNodes = tabMenu ? NODE_TYPES_MENU.filter(n => n.label.toLowerCase().includes(tabMenu.search.toLowerCase())) : [];
@@ -378,7 +409,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   return (
     <div className="w-full h-full bg-black relative overflow-hidden font-sans select-none" onContextMenu={handleCanvasContextMenu}>
         <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: `${20 * scale}px ${20 * scale}px`, transform: `translate(${offset.x % (20 * scale)}px, ${offset.y % (20 * scale)}px)` }} />
-        <div ref={canvasRef} className={`w-full h-full ${interactionMode === 'panning' || isSpacePressed ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onWheel={handleWheel} onMouseLeave={handleMouseUp}>
+        <div ref={canvasRef} className={`w-full h-full ${interactionMode === 'panning' || isSpacePressed ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
             <div className="origin-top-left w-full h-full absolute top-0 left-0 canvas-layer" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
                 {visibleNodes.map(node => (
                     <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onContextMenu={handleNodeContextMenu} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} />

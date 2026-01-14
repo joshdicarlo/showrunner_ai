@@ -26,6 +26,7 @@ export const MODELS = {
 export const IMAGE_MODELS_OPTIONS = [
     { value: "gemini-3-pro-image-preview", label: "Gemini 3 Pro (High Quality)" },
     { value: "gemini-2.5-flash-image", label: "Gemini 2.5 Flash (Fast)" },
+    { value: "luma-photon-1", label: "Luma Photon (High Quality)" },
     { value: "imagen-4.0-generate-001", label: "Imagen 4" },
 ];
 

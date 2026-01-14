@@ -153,8 +153,28 @@ export const generateLumaImage = async (
   }
 
   if (generation.state === 'failed') throw new Error(`Luma Failed: ${generation.failure_reason}`);
+  
+  // Fetch and convert image to Base64 to bypass CORS
+  let imageUri = generation.assets.image;
+  try {
+      console.log(`[Luma Service] Fetching image via proxy: ${imageUri}`);
+      const imageRes = await proxiedFetch(imageUri);
+      if (imageRes.ok) {
+          const blob = await imageRes.blob();
+          imageUri = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+          });
+          console.log(`[Luma Service] Image converted to Base64 (${imageUri.length} chars)`);
+      }
+  } catch (error) {
+      console.error("[Luma Service] Failed to proxy image, falling back to direct URL:", error);
+  }
+
   return { 
-    uri: generation.assets.image, 
+    uri: imageUri, 
     remoteUri: generation.assets.image, 
     prompt: fullPrompt,
     id: generationId
