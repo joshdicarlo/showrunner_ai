@@ -2034,6 +2034,7 @@ const App: React.FC = () => {
                             onRefineConcept={handleRefineConcept}
                             onGenerateTurntable={handleGalleryTurntable}
                             onGenerateExpressions={handleGalleryExpressions}
+                            onUpdateNode={handleUpdateNode}
                         />
                      )
                  )}

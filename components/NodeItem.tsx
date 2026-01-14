@@ -672,7 +672,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   useEffect(() => {
-    // Guard: only trigger if status is 'generating', not already processing, and no content exists
+    // Guard: only trigger if status is 'generating' (direct generation), not 'pending' (queue-managed)
+    // 'pending' nodes are processed by RenderQueue, not by this useEffect
     // Use a flag to prevent double-execution from React StrictMode
     let cancelled = false;
     
@@ -1085,7 +1086,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       if (node.data.status === 'approved') return "bg-green-900/40 border-green-800 text-green-200";
       if (node.data.status === 'review') return "bg-yellow-900/40 border-yellow-800 text-yellow-200";
       if (node.data.status === 'archived') return "bg-zinc-800/40 border-zinc-700 text-zinc-500";
-      if (node.data.status === 'generating') return "bg-purple-900/50 border-purple-700 text-white animate-pulse";
+      if (node.data.status === 'generating' || node.data.status === 'pending') return "bg-purple-900/50 border-purple-700 text-white animate-pulse";
 
       switch(node.type) {
           case NodeType.AI_TEXT_GEN: return "bg-blue-900/30 border-blue-800 text-blue-200";
@@ -1102,7 +1103,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       if (node.type === NodeType.GROUP) return "border-zinc-700 border-dashed";
       if (node.data.status === 'approved') return "border-green-600/50 ring-1 ring-green-900";
       if (node.data.status === 'review') return "border-yellow-600/50 ring-1 ring-yellow-900";
-      if (node.data.status === 'generating') return "border-purple-500/50 ring-1 ring-purple-900";
+      if (node.data.status === 'generating' || node.data.status === 'pending') return "border-purple-500/50 ring-1 ring-purple-900";
       return "border-zinc-700";
   }
 
@@ -1179,7 +1180,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
              <span className="text-xs font-bold tracking-wide flex items-center gap-2">
                 {!isGroup && node.data.status === 'approved' && <CheckCircle size={12}/>}
                 {!isGroup && node.data.status === 'review' && <Eye size={12}/>}
-                {!isGroup && node.data.status === 'generating' && <Sparkles size={12} className="animate-spin"/>}
+                {!isGroup && (node.data.status === 'generating' || node.data.status === 'pending') && <Sparkles size={12} className="animate-spin"/>}
                 {getTitle()}
             </span>
         </div>

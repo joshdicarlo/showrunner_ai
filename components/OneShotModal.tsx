@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { Modal, Button, Select } from './UI';
 import { OneShotItem } from '../types';
-import { MODELS } from '../constants';
+import { MODELS, IMAGE_MODELS_OPTIONS } from '../constants';
 import { Wand2, Check, User, MapPin, Layout, Clapperboard, Plus, ChevronRight, ChevronDown, CheckCircle, Circle, Play, Layers, Loader2, Search } from 'lucide-react';
 
 interface OneShotModalProps {
@@ -160,9 +160,9 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                                     onChange={(e) => updateItem(item.id, { model: e.target.value })}
                                     className="w-full text-[10px] py-1.5 pl-2 pr-6 h-8 bg-zinc-900 border border-zinc-700 hover:border-zinc-500 rounded text-zinc-300 appearance-none focus:ring-1 focus:ring-blue-500 transition-colors cursor-pointer outline-none"
                                 >
-                                    <option value={MODELS.IMAGE_GEN}>Imagine 3 Pro</option>
-                                    <option value={MODELS.IMAGE_FAST}>Gemini Flash</option>
-                                    <option value={MODELS.IMAGE_LUMA}>Luma Photon</option>
+                                    {IMAGE_MODELS_OPTIONS.map(m => (
+                                        <option key={m.value} value={m.value}>{m.label}</option>
+                                    ))}
                                 </select>
                                 <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
                                     <ChevronDown size={10} />
@@ -222,9 +222,9 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                         className="w-32 text-[10px] py-1 pl-2 pr-6 h-6 bg-zinc-900 border border-zinc-800 hover:border-zinc-600 rounded text-zinc-400 hover:text-zinc-200 appearance-none transition-colors cursor-pointer outline-none"
                     >
                         <option value="" disabled>Set Model...</option>
-                        <option value={MODELS.IMAGE_GEN}>Imagine 3 Pro</option>
-                        <option value={MODELS.IMAGE_FAST}>Gemini Flash</option>
-                        <option value={MODELS.IMAGE_LUMA}>Luma Photon</option>
+                        {IMAGE_MODELS_OPTIONS.map(m => (
+                            <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
                     </select>
                      <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-600">
                         <ChevronDown size={10} />

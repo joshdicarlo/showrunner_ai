@@ -16,6 +16,7 @@ interface GalleryViewProps {
   onRefineConcept?: (assetId: string, sourceImageUrl: string) => void;
   onGenerateTurntable?: (node: FlowNode) => void;
   onGenerateExpressions?: (node: FlowNode) => void;
+  onUpdateNode?: (nodeId: string, data: any) => void;
 }
 
 interface GalleryGroup {
@@ -28,7 +29,7 @@ interface GalleryGroup {
 
 export const GalleryView: React.FC<GalleryViewProps> = ({ 
     nodes, currentDept, currentAssetId, showArchived = false, onGenerateBatch,
-    onSetThumbnail, onRefineConcept, onGenerateTurntable, onGenerateExpressions
+    onSetThumbnail, onRefineConcept, onGenerateTurntable, onGenerateExpressions, onUpdateNode
 }) => {
   const [previewNode, setPreviewNode] = useState<FlowNode | null>(null);
   const [filterType, setFilterType] = useState<'ALL' | 'IMAGE' | 'VIDEO' | 'TEXT'>('ALL');
@@ -237,7 +238,31 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                                    {/* Status Below Image */}
                                    <div className="flex justify-between items-center px-1">
                                        <span className="text-[10px] text-zinc-500 font-mono">#{idx + 1}</span>
-                                       {renderStatusBadge(n.data.status)}
+                                       {onUpdateNode ? (
+                                           <div className="flex items-center gap-1">
+                                               <button
+                                                   onClick={(e) => { e.stopPropagation(); onUpdateNode(n.id, { ...n.data, status: 'approved' }); }}
+                                                   className={`p-1 rounded transition-colors ${n.data.status === 'approved' ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-green-400 hover:bg-zinc-700'}`}
+                                                   title="Approve"
+                                               >
+                                                   <CheckCircle size={12} />
+                                               </button>
+                                               <button
+                                                   onClick={(e) => { e.stopPropagation(); onUpdateNode(n.id, { ...n.data, status: 'review' }); }}
+                                                   className={`p-1 rounded transition-colors ${n.data.status === 'review' ? 'bg-yellow-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-yellow-400 hover:bg-zinc-700'}`}
+                                                   title="Mark for Review"
+                                               >
+                                                   <AlertCircle size={12} />
+                                               </button>
+                                               <button
+                                                   onClick={(e) => { e.stopPropagation(); onUpdateNode(n.id, { ...n.data, status: 'archived' }); }}
+                                                   className={`p-1 rounded transition-colors ${n.data.status === 'archived' ? 'bg-zinc-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700'}`}
+                                                   title="Archive"
+                                               >
+                                                   <Archive size={12} />
+                                               </button>
+                                           </div>
+                                       ) : renderStatusBadge(n.data.status)}
                                    </div>
                                </div>
                            ))}
@@ -261,7 +286,31 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                            </div>
                            <div className="flex justify-between items-center px-1">
                                <span className="text-[10px] text-zinc-500 font-mono">Single</span>
-                               {renderStatusBadge(mainNode.data.status)}
+                               {onUpdateNode ? (
+                                   <div className="flex items-center gap-1">
+                                       <button
+                                           onClick={(e) => { e.stopPropagation(); onUpdateNode(mainNode.id, { ...mainNode.data, status: 'approved' }); }}
+                                           className={`p-1 rounded transition-colors ${mainNode.data.status === 'approved' ? 'bg-green-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-green-400 hover:bg-zinc-700'}`}
+                                           title="Approve"
+                                       >
+                                           <CheckCircle size={12} />
+                                       </button>
+                                       <button
+                                           onClick={(e) => { e.stopPropagation(); onUpdateNode(mainNode.id, { ...mainNode.data, status: 'review' }); }}
+                                           className={`p-1 rounded transition-colors ${mainNode.data.status === 'review' ? 'bg-yellow-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-yellow-400 hover:bg-zinc-700'}`}
+                                           title="Mark for Review"
+                                       >
+                                           <AlertCircle size={12} />
+                                       </button>
+                                       <button
+                                           onClick={(e) => { e.stopPropagation(); onUpdateNode(mainNode.id, { ...mainNode.data, status: 'archived' }); }}
+                                           className={`p-1 rounded transition-colors ${mainNode.data.status === 'archived' ? 'bg-zinc-600 text-white' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700'}`}
+                                           title="Archive"
+                                       >
+                                           <Archive size={12} />
+                                       </button>
+                                   </div>
+                               ) : renderStatusBadge(mainNode.data.status)}
                            </div>
                        </div>
                    )}
