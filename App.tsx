@@ -179,14 +179,19 @@ const App: React.FC = () => {
 
               // 1. Create or update the flow node
               const newNodeId = task.config?.targetNodeId || `gen-node-${Date.now()}-${Math.random()}`;
+              const existingNode = task.config?.targetNodeId ? p.nodes.find(n => n.id === task.config!.targetNodeId) : null;
+              
               const newNode: FlowNode = {
                   id: newNodeId,
                   type: task.type === 'video' ? NodeType.AI_VIDEO_GEN : NodeType.AI_IMAGE_GEN,
                   department: asset ? asset.department : DepartmentType.WRITERS_ROOM,
                   assetId: asset?.id,
-                  parentId: undefined, 
-                  position: { x: 100, y: 100 }, 
+                  parentId: existingNode?.parentId ?? undefined, 
+                  position: existingNode?.position ?? { x: 100, y: 100 }, 
+                  width: existingNode?.width,
+                  height: existingNode?.height,
                   data: {
+                      ...(existingNode?.data || {}),
                       imageUrl: task.type === 'image' ? result : (task.startImage || result), 
                       videoUrl: task.type === 'video' ? result : undefined,
                       prompt: task.prompt,

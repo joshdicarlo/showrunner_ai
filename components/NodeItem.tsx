@@ -8,7 +8,7 @@ import { Button, Input, TextArea, Select } from './UI';
 import { ASPECT_RATIOS, IMAGE_MODELS_OPTIONS, MODELS, VIDEO_MODELS_OPTIONS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import * as GeminiService from '../services/geminiService';
 import * as FileService from '../services/fileService';
-import { generateLumaVideo } from '../services/lumaService';
+import { generateLumaVideo, generateLumaImage } from '../services/lumaService';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 import { StyleSelector } from './StyleSelector';
 
@@ -543,12 +543,19 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           );
       }
 
-      const result = await GeminiService.generateImage(
-          resolved,
-          node.data.aspectRatio || "16:9",
-          model,
-          refImages
-      );
+      let result: string;
+      if (model.includes('luma')) {
+          // Route to Luma API for Luma models
+          const lumaResult = await generateLumaImage(resolved, BatchType.STANDARD, "1024x1024");
+          result = lumaResult.uri;
+      } else {
+          result = await GeminiService.generateImage(
+              resolved,
+              node.data.aspectRatio || "16:9",
+              model,
+              refImages
+          );
+      }
       const newHistory = addToHistory('image', result);
       onUpdate(node.id, { 
           ...node.data, 

@@ -107,14 +107,7 @@ export const generateLumaImage = async (
 ): Promise<{ uri: string; remoteUri: string; prompt: string; id: string }> => {
   const key = apiKey || DEFAULT_LUMA_KEY;
   
-  let fullPrompt = '';
-  if (type === BatchType.PIXEL_ART) {
-    fullPrompt = `Professional pixel art, ${resolution}x${resolution}, ${prompt}. Sharp square pixels, vibrant 8-bit color palette, retro game aesthetic.`;
-  } else {
-    fullPrompt = `${prompt}. Master-piece hyper-realistic, High-end professional surrealist photography. The head must be entirely made of produce material, features formed from skin rind and pulp. Cinematic lighting, 8k detail. Strictly photographic style.`;
-  }
-
-  console.log(`[Luma Service] Submit Image Gen:`, { prompt: fullPrompt });
+  console.log(`[Luma Service] Submit Image Gen:`, { prompt });
 
   const response = await proxiedFetch(`${LUMA_API_BASE}/generations/image`, {
     method: 'POST',
@@ -123,7 +116,7 @@ export const generateLumaImage = async (
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      prompt: fullPrompt,
+      prompt,
       model: "photon-1",
       aspect_ratio: "1:1"
     })
@@ -176,7 +169,7 @@ export const generateLumaImage = async (
   return { 
     uri: imageUri, 
     remoteUri: generation.assets.image, 
-    prompt: fullPrompt,
+    prompt,
     id: generationId
   };
 };
@@ -208,22 +201,8 @@ export const generateLumaVideo = async (
 
   onStatusUpdate?.("Queuing Video...");
 
-  /**
-   * PIXEL ART MOTION ENFORCEMENT LAYER
-   * We wrap the original prompt with movement-specific instructions 
-   * that encourage "sprite-like" behavior and discourage Gaussian blur interpolation.
-   */
-  let animationStyle = "";
-  if (batchType === BatchType.PIXEL_ART) {
-    animationStyle = "Retro 8-bit video game sprite animation. Crisp frame-by-frame movement. Sharp square pixels. Static camera, high shutter speed, zero motion blur, pixel-perfect textures.";
-  } else {
-    animationStyle = "Cinematic character animation. Sharp focus, vivid organic textures, high shutter speed, clear fluid motion, professional studio lighting.";
-  }
-
-  const finalVideoPrompt = `${animationStyle} Character action: ${prompt}`.substring(0, 500);
-
   const payload = {
-    prompt: finalVideoPrompt,
+    prompt,
     model: "ray-2",
     keyframes: { 
       frame0
