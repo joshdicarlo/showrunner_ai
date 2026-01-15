@@ -9,9 +9,11 @@
  * - extractLocationsFromScript  
  * - extractStoryElementsFromScript
  * - extractOneShotBreakdown
+ * 
+ * Uses the geminiClient from the API layer for all AI operations.
  */
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { getGeminiClient, Type } from "./api";
 import { MODELS } from "../constants";
 
 // --- Types ---
@@ -103,16 +105,6 @@ Instructions:
 Example:
 ELYSIA, A young female mercenary appearing in her late twenties. She has a gaunt but strong build, notable for the sharp, synthetic silver tattoo covering her left eye. She wears a deep indigo, high-collared trench coat layered over dark leather armor, with a rusted pocket watch chained to her waist. Her most defining feature is a glowing, crystalline staff that emits soft purple smoke, which she carries always.
 `;
-
-// --- Helper ---
-
-const createAI = () => {
-    if (!process.env.API_KEY) {
-        console.error("API_KEY is missing from environment variables");
-        throw new Error("API Key missing");
-    }
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
-};
 
 // --- Schema Builders ---
 
@@ -272,7 +264,7 @@ export const discoverFromScript = async (
     scriptText: string,
     options: DiscoveryOptions = {}
 ): Promise<DiscoveryResult> => {
-    const ai = createAI();
+    const client = getGeminiClient();
     
     // Default to extracting everything if nothing specified
     const opts: DiscoveryOptions = {
@@ -307,57 +299,34 @@ export const discoverFromScript = async (
     try {
         opts.onProgress?.("Initializing AI analysis...", 0);
         
-        // Use streaming to capture thinking/progress
-        const stream = await ai.models.generateContentStream({
+        // Use streaming with the new client API
+        const result = await client.generateTextStream(prompt, {
             model: MODELS.TEXT_FAST,
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                thinkingConfig: {
-                    thinkingBudget: 8000,
-                    includeThoughts: true
-                },
-                responseSchema: schema
+            responseMimeType: "application/json",
+            responseSchema: schema,
+            thinkingBudget: 8000,
+            includeThoughts: true,
+            onThought: (thinking) => {
+                opts.onThinkingUpdate?.(thinking);
             }
         });
 
-        let fullText = '';
-        let thinkingText = '';
-        
-        opts.onProgress?.("Analyzing script...", 10);
-        
-        for await (const chunk of stream) {
-            if (chunk.candidates?.[0]?.content?.parts) {
-                for (const part of chunk.candidates[0].content.parts) {
-                    if (!part.text) continue;
-                    
-                    if (part.thought) {
-                        // Prepend new content so latest appears at top
-                        thinkingText = part.text + thinkingText;
-                        opts.onThinkingUpdate?.(thinkingText);
-                    } else {
-                        fullText += part.text;
-                    }
-                }
-            }
-        }
-        
         opts.onProgress?.("Processing results...", 90);
         
-        const result = JSON.parse(fullText || "{}");
+        const parsed = JSON.parse(result.text || "{}");
         
         opts.onProgress?.("Complete", 100);
         
         console.log("[DiscoveryService] Discovery complete:", {
-            characters: result.characters?.length ?? 0,
-            locations: result.locations?.length ?? 0,
-            scenes: result.scenes?.length ?? 0
+            characters: parsed.characters?.length ?? 0,
+            locations: parsed.locations?.length ?? 0,
+            scenes: parsed.scenes?.length ?? 0
         });
         
         return {
-            characters: result.characters ?? [],
-            locations: result.locations ?? [],
-            scenes: result.scenes ?? []
+            characters: parsed.characters ?? [],
+            locations: parsed.locations ?? [],
+            scenes: parsed.scenes ?? []
         };
         
     } catch (e) {

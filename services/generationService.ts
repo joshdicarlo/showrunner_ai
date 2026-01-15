@@ -8,13 +8,14 @@
  * This centralizes generation logic that was previously scattered across:
  * - NodeItem.tsx (handleImageGen, handleVideoGen)
  * - App.tsx (taskExecutor)
+ * 
+ * Uses API clients from the api layer for all provider interactions.
  */
 
-import { GoogleGenAI, Modality } from "@google/genai";
+import { getGeminiClient, getLumaClient } from "./api";
 import { MODELS } from "../constants";
-import { ProjectAsset, ProjectSettings, BatchType } from "../types";
+import { ProjectAsset, ProjectSettings } from "../types";
 import { resolvePrompt, resolveReferenceImages } from "../utils/promptUtils";
-import { generateLumaImage, generateLumaVideo } from "./lumaService";
 
 // --- Types ---
 
@@ -68,41 +69,6 @@ export interface GenerationResult {
     provider: 'gemini' | 'luma';
 }
 
-// --- Helper ---
-
-const createAI = () => {
-    if (!process.env.API_KEY) {
-        console.error("API_KEY is missing from environment variables");
-        throw new Error("API Key missing");
-    }
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
-};
-
-// --- Retry Logic ---
-
-const retryWithBackoff = async <T>(
-    fn: () => Promise<T>,
-    maxRetries = 3,
-    baseDelayMs = 1000
-): Promise<T> => {
-    let lastError: Error | null = null;
-    for (let i = 0; i < maxRetries; i++) {
-        try {
-            return await fn();
-        } catch (e: any) {
-            lastError = e;
-            const isRetryable = e.message?.includes('429') || 
-                               e.message?.includes('Too Many Requests') ||
-                               e.message?.includes('Recitation');
-            if (!isRetryable || i === maxRetries - 1) throw e;
-            const delay = Math.pow(2, i) * baseDelayMs;
-            console.warn(`[GenerationService] Retry ${i + 1}/${maxRetries} after ${delay}ms`);
-            await new Promise(r => setTimeout(r, delay));
-        }
-    }
-    throw lastError;
-};
-
 // --- Provider Detection ---
 
 const isLumaModel = (model: string): boolean => {
@@ -153,7 +119,11 @@ export const generateImage = async (
     
     // Route to appropriate provider
     if (isLumaModel(model)) {
-        const result = await generateLumaImage(resolved, BatchType.STANDARD, "1024x1024");
+        const lumaClient = getLumaClient();
+        const result = await lumaClient.generateImage({
+            prompt: resolved,
+            aspectRatio: options.aspectRatio || "1:1"
+        });
         return {
             url: result.uri,
             resolvedPrompt: resolved,
@@ -162,64 +132,36 @@ export const generateImage = async (
     }
     
     // Gemini/Imagen path
-    const ai = createAI();
+    const geminiClient = getGeminiClient();
     
-    return await retryWithBackoff(async () => {
-        if (isImagenModel(model)) {
-            // Imagen API
-            const response = await ai.models.generateImages({
-                model,
-                prompt: resolved,
-                config: {
-                    numberOfImages: 1,
-                    aspectRatio: options.aspectRatio || "16:9",
-                    outputMimeType: 'image/jpeg'
-                }
-            });
-            const b64 = response.generatedImages?.[0]?.image?.imageBytes;
-            if (!b64) throw new Error("No image data in response");
-            return {
-                url: `data:image/jpeg;base64,${b64}`,
-                resolvedPrompt: resolved,
-                provider: 'gemini' as const
-            };
-        } else {
-            // Gemini Image Gen
-            const parts: any[] = [];
-            refImages.forEach(img => {
-                const match = img.match(/^data:(.+);base64,(.+)$/);
-                if (match) parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
-            });
-            parts.push({ text: resolved });
+    // Parse reference images for Gemini
+    const referenceImages = refImages
+        .map(img => {
+            const match = img.match(/^data:(.+);base64,(.+)$/);
+            if (match) return { mimeType: match[1], data: match[2] };
+            return null;
+        })
+        .filter((ref): ref is { mimeType: string; data: string } => ref !== null);
 
-            const response = await ai.models.generateContent({
-                model,
-                contents: { parts },
-                config: {
-                    responseModalities: [Modality.TEXT, Modality.IMAGE],
-                    imageConfig: {
-                        aspectRatio: options.aspectRatio || "16:9",
-                        imageSize: model.includes('pro') ? "2K" : "1K"
-                    }
-                }
-            });
-            
-            // Extract from parts
-            if (response.candidates?.[0]?.content?.parts) {
-                for (const part of response.candidates[0].content.parts) {
-                    if (part.inlineData) {
-                        console.log(`[GenerationService] Image generation successful`);
-                        return {
-                            url: `data:image/png;base64,${part.inlineData.data}`,
-                            resolvedPrompt: resolved,
-                            provider: 'gemini' as const
-                        };
-                    }
-                }
-            }
-            throw new Error("No image data in Gemini response");
-        }
+    const result = await geminiClient.generateImages(resolved, {
+        model,
+        aspectRatio: options.aspectRatio || "16:9",
+        referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
+        imageSize: model.includes('pro') ? "2K" : "1K"
     });
+
+    if (result.images.length === 0) {
+        throw new Error("No image data in response");
+    }
+
+    const image = result.images[0];
+    console.log(`[GenerationService] Image generation successful`);
+    
+    return {
+        url: `data:${image.mimeType};base64,${image.data}`,
+        resolvedPrompt: resolved,
+        provider: 'gemini'
+    };
 };
 
 // --- Video Generation ---
@@ -234,117 +176,54 @@ export const generateVideo = async (
     options: VideoGenerationOptions
 ): Promise<GenerationResult> => {
     const model = options.model || MODELS.VIDEO_FAST;
-    const duration = options.duration || 5;
     
     console.log(`[GenerationService] Generating video with ${model}:`, options.prompt.substring(0, 50) + "...");
     
     // Route to appropriate provider
     if (isLumaModel(model)) {
-        const result = await generateLumaVideo(
-            options.startImage || "",
-            options.prompt,
-            BatchType.STANDARD,
-            undefined,
-            duration,
-            undefined,
-            (status) => {
-                const match = status.match(/\((\d+)%\)/);
-                const percent = match ? parseInt(match[1]) : 0;
-                options.onProgress?.(status, percent);
-            }
-        );
+        const lumaClient = getLumaClient();
+        const result = await lumaClient.generateVideo({
+            prompt: options.prompt,
+            startImage: options.startImage,
+            duration: options.duration,
+            onProgress: options.onProgress
+        });
         return {
-            url: result,
+            url: result.uri,
             resolvedPrompt: options.prompt,
             provider: 'luma'
         };
     }
     
     // Veo/Gemini Video path
-    const ai = createAI();
+    const geminiClient = getGeminiClient();
     
-    return await retryWithBackoff(async () => {
-        options.onProgress?.("Initializing video generation...", 0);
-        
-        // Build request parts
-        const parts: any[] = [];
-        
-        // Add start frame if provided
-        if (options.startImage) {
-            const match = options.startImage.match(/^data:(.+);base64,(.+)$/);
-            if (match) {
-                parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
-            }
-        }
-        
-        // Add prompt
-        parts.push({ text: options.prompt });
-        
-        // Add end frame if provided
-        if (options.endImage) {
-            const match = options.endImage.match(/^data:(.+);base64,(.+)$/);
-            if (match) {
-                parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
-            }
-        }
-
-        // Start generation
-        let operation = await ai.models.generateVideos({
+    const result = await geminiClient.generateVideo(
+        options.prompt,
+        {
             model,
-            prompt: options.prompt,
-            // Note: Image inputs for Veo would need different handling
-            config: {
-                aspectRatio: options.aspectRatio as any || "16:9",
-                numberOfVideos: 1,
-            }
-        });
+            aspectRatio: options.aspectRatio
+        },
+        (percent, status) => options.onProgress?.(status, percent)
+    );
 
-        // Poll for completion
-        const startTime = Date.now();
-        const maxWaitMs = 10 * 60 * 1000; // 10 minutes max
-        
-        while (!operation.done) {
-            if (Date.now() - startTime > maxWaitMs) {
-                throw new Error("Video generation timed out");
-            }
-            
-            await new Promise(r => setTimeout(r, 5000));
-            operation = await ai.operations.getVideosOperation({ operation });
-            
-            // Estimate progress based on time (Veo doesn't give real progress)
-            const elapsed = Date.now() - startTime;
-            const estimatedProgress = Math.min(90, Math.floor((elapsed / 120000) * 100));
-            options.onProgress?.(`Generating video...`, estimatedProgress);
-        }
-
-        options.onProgress?.("Finalizing...", 95);
-
-        // Extract result
-        if (operation.response?.generatedVideos?.[0]?.video?.uri) {
-            const videoUri = operation.response.generatedVideos[0].video.uri;
-            console.log(`[GenerationService] Video generation successful`);
-            
-            // Fetch and convert to data URI for consistency
-            const response = await fetch(videoUri);
-            const blob = await response.blob();
-            const reader = new FileReader();
-            const dataUri = await new Promise<string>((resolve, reject) => {
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            });
-            
-            options.onProgress?.("Complete", 100);
-            
-            return {
-                url: dataUri,
-                resolvedPrompt: options.prompt,
-                provider: 'gemini'
-            };
-        }
-        
-        throw new Error("No video data in response");
+    console.log(`[GenerationService] Video generation successful`);
+    
+    // Fetch and convert to data URI for consistency
+    const response = await fetch(result.videoUri);
+    const blob = await response.blob();
+    const reader = new FileReader();
+    const dataUri = await new Promise<string>((resolve, reject) => {
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
     });
+    
+    return {
+        url: dataUri,
+        resolvedPrompt: options.prompt,
+        provider: 'gemini'
+    };
 };
 
 // --- Image Editing ---
@@ -361,7 +240,7 @@ export const editImage = async (
         projectSettings?: ProjectSettings;
     }
 ): Promise<GenerationResult> => {
-    const ai = createAI();
+    const geminiClient = getGeminiClient();
     
     // Resolve prompt
     const { resolved } = resolvePrompt(
@@ -373,35 +252,23 @@ export const editImage = async (
     
     console.log(`[GenerationService] Editing image:`, resolved.substring(0, 50) + "...");
     
-    return await retryWithBackoff(async () => {
-        // Extract base64 from data URI
-        const match = imageUrl.match(/^data:(.+);base64,(.+)$/);
-        if (!match) throw new Error("Invalid image data URI");
-        
-        const response = await ai.models.generateContent({
-            model: MODELS.IMAGE_EDIT,
-            contents: {
-                parts: [
-                    { inlineData: { mimeType: match[1], data: match[2] } },
-                    { text: resolved }
-                ]
-            },
-            config: {
-                responseModalities: [Modality.TEXT, Modality.IMAGE]
-            }
-        });
-        
-        if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.inlineData) {
-                    return {
-                        url: `data:image/png;base64,${part.inlineData.data}`,
-                        resolvedPrompt: resolved,
-                        provider: 'gemini'
-                    };
-                }
-            }
-        }
+    // Extract base64 from data URI
+    const match = imageUrl.match(/^data:(.+);base64,(.+)$/);
+    if (!match) throw new Error("Invalid image data URI");
+    
+    const result = await geminiClient.editImage(
+        { mimeType: match[1], data: match[2] },
+        resolved
+    );
+
+    if (result.images.length === 0) {
         throw new Error("No image data in edit response");
-    });
+    }
+
+    const image = result.images[0];
+    return {
+        url: `data:${image.mimeType};base64,${image.data}`,
+        resolvedPrompt: resolved,
+        provider: 'gemini'
+    };
 };

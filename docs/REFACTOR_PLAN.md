@@ -15,7 +15,7 @@ This document outlines the 5-phase refactoring plan to address technical debt in
 1. [Current State Analysis](#current-state-analysis)
 2. [Phase 1: Unify Discovery](#phase-1-unify-discovery) ✅ Complete
 3. [Phase 2: Centralize Generation](#phase-2-centralize-generation) ✅ Complete
-4. [Phase 3: Service Layer Separation](#phase-3-service-layer-separation)
+4. [Phase 3: Service Layer Separation](#phase-3-service-layer-separation) ✅ Complete
 5. [Phase 4: Component Decomposition](#phase-4-component-decomposition)
 6. [Phase 5: State Management](#phase-5-state-management)
 7. [Implementation Notes](#implementation-notes)
@@ -220,30 +220,31 @@ onTaskComplete() updates node
 
 ## Phase 3: Service Layer Separation
 
-**Status:** 🔲 Not Started
+**Status:** ✅ Complete
 
 ### Objective
 Establish a clear separation between frontend presentation and backend API logic, preparing for potential future backend extraction.
 
-### Proposed Structure
+### Implemented Structure
 
 ```
 services/
 ├── api/                          # Low-level API clients
-│   ├── geminiClient.ts           # Gemini API wrapper
-│   ├── lumaClient.ts             # Luma API wrapper
-│   └── driveClient.ts            # Google Drive wrapper
+│   ├── index.ts                  # API layer exports
+│   ├── geminiClient.ts           # Gemini API wrapper (~370 lines)
+│   ├── lumaClient.ts             # Luma API wrapper (~320 lines)
+│   └── driveClient.ts            # Google Drive wrapper (~310 lines)
 │
-├── domain/                       # Business logic
-│   ├── discoveryService.ts       # Script analysis (exists)
-│   ├── generationService.ts      # Media generation (exists)
-│   ├── projectService.ts         # Project CRUD operations
-│   └── assetService.ts           # Asset management
+├── adapters/                     # React hooks
+│   ├── index.ts                  # Adapter exports
+│   ├── useDiscovery.ts           # Discovery hook (~190 lines)
+│   ├── useGeneration.ts          # Generation hook (~230 lines)
+│   └── useDrive.ts               # Drive operations hook (~210 lines)
 │
-└── adapters/                     # Frontend adapters
-    ├── useDiscovery.ts           # React hook for discovery
-    ├── useGeneration.ts          # React hook for generation
-    └── useProject.ts             # React hook for projects
+├── discoveryService.ts           # Script analysis (refactored)
+├── generationService.ts          # Media generation (refactored)
+├── index.ts                      # Main service exports
+└── ...                           # Other existing services
 ```
 
 ### Key Changes
@@ -258,12 +259,100 @@ services/
 - Clear dependency direction
 - Easier to extract to actual backend later
 
-### Migration Strategy
-1. Create `api/geminiClient.ts` with low-level methods
-2. Refactor `discoveryService.ts` to use client
-3. Refactor `generationService.ts` to use client
-4. Create React hooks in `adapters/`
-5. Update components to use hooks
+### API Client Layer (`services/api/`)
+
+**geminiClient.ts** - Singleton class wrapper around Google GenAI SDK:
+- `generateText()` - Text generation with schema support
+- `generateTextStream()` - Streaming text with thinking/reasoning callbacks
+- `generateImages()` - Image generation (Imagen + Gemini native)
+- `editImage()` - Image editing
+- `generateVideo()` - Video generation (Veo)
+- Built-in retry with exponential backoff for rate limits
+
+**lumaClient.ts** - Wrapper for Luma Labs Dream Machine API:
+- `generateImage()` - Luma Photon image generation
+- `generateVideo()` - Luma Ray video generation with progress callbacks
+- `getGenerationStatus()` - Poll generation status
+- CORS proxy handling built-in
+
+**driveClient.ts** - Google Drive and Sheets API wrapper:
+- `initialize()` - GAPI initialization
+- `signIn()` - OAuth flow with mock fallback
+- `findOrCreateFolder()` - Folder management
+- `uploadFile()` - File uploads
+- `createSpreadsheet()` / `updateSpreadsheet()` - Sheets operations
+- Full mock mode support for offline development
+
+### React Adapter Hooks (`services/adapters/`)
+
+**useDiscovery** - Script analysis state management:
+```typescript
+const { 
+    isLoading, thinking, progressPercent, result, error,
+    runFullDiscovery, runCharacterDiscovery, runLocationDiscovery,
+    runSceneDiscovery, runCustomDiscovery, reset
+} = useDiscovery();
+```
+
+**useGeneration** - Image/video generation state:
+```typescript
+const {
+    currentTask, isGenerating, taskHistory,
+    generateImageAsync, generateVideoAsync, editImageAsync,
+    cancel, clearHistory
+} = useGeneration();
+```
+
+**useDrive** - Google Drive operations:
+```typescript
+const {
+    isAuthenticated, isMockMode, isInitializing, isOperating, error,
+    initialize, signIn, enableMockMode, createProjectStructure,
+    uploadFile, syncAssetFolder, updateProjectDB
+} = useDrive();
+```
+
+### Migration Notes
+
+**Completed:**
+- Created `services/api/` with geminiClient, lumaClient, driveClient
+- Refactored `discoveryService.ts` to use `getGeminiClient()`
+- Refactored `generationService.ts` to use both `getGeminiClient()` and `getLumaClient()`
+- Created React hooks in `services/adapters/`
+- Created main `services/index.ts` for unified exports
+
+**Usage Pattern:**
+```typescript
+// For React components (preferred)
+import { useDiscovery, useGeneration, useDrive } from './services/adapters';
+
+// For non-React code or direct service access  
+import { discoverFromScript } from './services/discoveryService';
+import { generateImage } from './services/generationService';
+
+// For low-level client access (rare)
+import { getGeminiClient, getLumaClient } from './services/api';
+```
+
+**Backward Compatibility:**
+- Existing imports to `discoveryService` and `generationService` continue to work
+- Old `googleDriveService` still works but components can migrate to `useDrive` hook
+- Legacy `lumaService` functions still work but `generationService` now uses `getLumaClient()`
+
+### Files Created
+- `services/api/index.ts` - API layer exports
+- `services/api/geminiClient.ts` - Gemini SDK wrapper (~370 lines)
+- `services/api/lumaClient.ts` - Luma API wrapper (~320 lines)
+- `services/api/driveClient.ts` - Google Drive wrapper (~310 lines)
+- `services/adapters/index.ts` - Adapter exports
+- `services/adapters/useDiscovery.ts` - Discovery hook (~190 lines)
+- `services/adapters/useGeneration.ts` - Generation hook (~230 lines)
+- `services/adapters/useDrive.ts` - Drive hook (~210 lines)
+- `services/index.ts` - Main service exports with architecture docs
+
+### Files Modified
+- `services/discoveryService.ts` - Now uses `getGeminiClient()` instead of direct SDK
+- `services/generationService.ts` - Now uses `getGeminiClient()` and `getLumaClient()`
 
 ---
 
@@ -466,7 +555,7 @@ After all phases complete:
 |-------|--------|------------|---------------|
 | Phase 1: Unify Discovery | ✅ Complete | Jan 14, 2026 | Jan 14, 2026 |
 | Phase 2: Centralize Generation | ✅ Complete | Jan 14, 2026 | Jan 14, 2026 |
-| Phase 3: Service Layer | 🔲 Not Started | - | - |
+| Phase 3: Service Layer | ✅ Complete | Jan 15, 2026 | Jan 15, 2026 |
 | Phase 4: Component Decomposition | 🔲 Not Started | - | - |
 | Phase 5: State Management | 🔲 Not Started | - | - |
 
@@ -476,6 +565,8 @@ After all phases complete:
 
 - [discoveryService.ts](../services/discoveryService.ts) - Unified discovery implementation
 - [generationService.ts](../services/generationService.ts) - Unified generation implementation
+- [services/api/](../services/api/) - Low-level API clients
+- [services/adapters/](../services/adapters/) - React hooks for services
 - [NodeItem.tsx](../components/NodeItem.tsx) - GenerationRequest interface
 - [App.tsx](../App.tsx) - Main application file
 
