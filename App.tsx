@@ -10,17 +10,19 @@ import { EditorTimeline } from './components/EditorTimeline';
 import { SettingsModal } from './components/SettingsModal';
 import { RenderQueuePanel } from './components/RenderQueuePanel';
 import { Login } from './components/Login';
+import { GenerationRequest } from './components/NodeItem';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings, BatchType } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
-import { generateEnhancementOptions, generateSummary, extractCharactersFromScript, extractLocationsFromScript, extractStoryElementsFromScript, generateStorySeeds, extractShotsFromScene, extractOneShotBreakdown, generateImage, generateVideo } from './services/geminiService';
+import { generateEnhancementOptions, generateSummary, generateStorySeeds, extractShotsFromScene, generateImage, generateVideo, generateCreativeText } from './services/geminiService';
 import { generateLumaVideo, generateLumaImage } from './services/lumaService';
+import { discoverAll, discoverCharacters, discoverLocations, discoverScenes } from './services/discoveryService';
 import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search } from 'lucide-react';
 
 type View = 'dashboard' | 'project';
 
@@ -1053,6 +1055,82 @@ const App: React.FC = () => {
       });
   }
 
+  /**
+   * Handle generation requests from NodeItem components.
+   * Routes requests through the central render queue for proper management.
+   */
+  const handleNodeGenerationRequest = useCallback((request: GenerationRequest) => {
+      if (!currentProjectIdRef.current) return;
+      
+      const activeProj = projectsRef.current.find(p => p.id === currentProjectIdRef.current);
+      const node = activeProj?.nodes.find(n => n.id === request.nodeId);
+      if (!node) return;
+      
+      const batchId = `batch-node-${Date.now()}`;
+      const batchLabel = `Node: ${request.prompt?.substring(0, 20) || request.type}`;
+      
+      if (request.type === 'text') {
+          // For text generation, execute directly (not queued)
+          (async () => {
+              try {
+                  const { resolved } = resolvePrompt(
+                      request.prompt,
+                      activeProj?.assets,
+                      activeProj?.assets.find(a => a.id === node.assetId),
+                      activeProj?.settings || DEFAULT_PROJECT_SETTINGS,
+                      request.config?.styleId
+                  );
+                  const result = await generateCreativeText(resolved);
+                  setProjects(prev => prev.map(p => {
+                      if (p.id === currentProjectIdRef.current) {
+                          return {
+                              ...p,
+                              nodes: p.nodes.map(n => n.id === request.nodeId ? {
+                                  ...n,
+                                  data: { ...n.data, text: result, status: 'review' }
+                              } : n)
+                          };
+                      }
+                      return p;
+                  }));
+              } catch (e) {
+                  console.error("Text generation failed:", e);
+                  setProjects(prev => prev.map(p => {
+                      if (p.id === currentProjectIdRef.current) {
+                          return {
+                              ...p,
+                              nodes: p.nodes.map(n => n.id === request.nodeId ? {
+                                  ...n,
+                                  data: { ...n.data, status: 'draft' }
+                              } : n)
+                          };
+                      }
+                      return p;
+                  }));
+              }
+          })();
+          return;
+      }
+      
+      // Image and video generation go through the queue
+      queueService.add({
+          id: `task-node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          type: request.type,
+          prompt: request.prompt,
+          assetId: node.assetId || 'root',
+          status: 'pending',
+          startImage: request.config?.startImage,
+          config: {
+              model: request.config?.model,
+              aspectRatio: request.config?.aspectRatio,
+              styleId: request.config?.styleId,
+              targetNodeId: request.nodeId,
+          },
+          batchId,
+          batchLabel
+      });
+  }, []);
+
   const handleOneShotBreakdown = async () => {
       if (!activeProject) return;
       setOneShotItems([]);
@@ -1075,20 +1153,21 @@ const App: React.FC = () => {
               return;
           }
 
-          const rawData = await extractOneShotBreakdown(fullText, (thinking) => {
-              setAnalysisThinking(thinking);
+          // Use new unified discovery service
+          const rawData = await discoverAll(fullText, {
+              onThinking: (thinking) => setAnalysisThinking(thinking)
           });
           const newItems: OneShotItem[] = [];
           
-          rawData.characters.forEach((c: any) => newItems.push({ 
+          rawData.characters.forEach((c) => newItems.push({ 
               id: `char-${Math.random()}`, type: 'Character', name: c.name, description: c.description, summary: c.summary, selected: true, autoGenerate: true, autoApprove: false 
           }));
-          rawData.locations.forEach((l: any) => newItems.push({ 
+          rawData.locations.forEach((l) => newItems.push({ 
               id: `loc-${Math.random()}`, type: 'Location', name: l.name, description: l.description, selected: true, autoGenerate: true, autoApprove: false 
           }));
-          rawData.scenes.forEach((s: any) => {
+          rawData.scenes.forEach((s) => {
               const sceneId = `scene-${Math.random()}`;
-              const shots: OneShotItem[] = s.shots?.map((shot: any) => ({
+              const shots: OneShotItem[] = s.shots?.map((shot) => ({
                   id: `shot-${Math.random()}`, type: 'Shot', name: shot.title, description: shot.description, parentId: sceneId, selected: true, autoGenerate: false, autoApprove: false
               })) || [];
               
@@ -1276,6 +1355,7 @@ const App: React.FC = () => {
   const handleRunAnalysis = async () => {
     if (!activeProject) return;
     setIsAnalyzing(true);
+    setAnalysisThinking(''); // Reset thinking text
     try {
         const scriptNodes = activeProject.nodes.filter(n => n.department === DepartmentType.WRITERS_ROOM && (n.type === NodeType.AI_TEXT_GEN || n.type === NodeType.TEXT_INPUT) && n.data.text);
         const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
@@ -1286,14 +1366,15 @@ const App: React.FC = () => {
              return;
         }
 
+        // Use new unified discovery service with streaming thinking
+        const onThinking = (thinking: string) => setAnalysisThinking(thinking);
         let results: any[] = [];
         if (analysisType === 'Characters') {
-            results = await extractCharactersFromScript(fullText);
+            results = await discoverCharacters(fullText, onThinking);
         } else if (analysisType === 'Locations') {
-            results = await extractLocationsFromScript(fullText);
+            results = await discoverLocations(fullText, onThinking);
         } else if (analysisType === 'Story') {
-            const knownChars = activeProject.assets.filter(a => a.department === DepartmentType.CASTING_WARDROBE).map(a => a.title);
-            results = await extractStoryElementsFromScript(fullText, knownChars, autoFindShots);
+            results = await discoverScenes(fullText, autoFindShots, undefined, onThinking);
         }
         
         const items: DetectedItem[] = results.map((r: any) => ({
@@ -2023,6 +2104,7 @@ const App: React.FC = () => {
                             projectSettings={activeProject?.settings}
                             onGenerateVideo={handleGenerateVideoFromNode} 
                             assetThumbnails={assetThumbnails}
+                            onRequestGeneration={handleNodeGenerationRequest}
                          />
                      ) : (
                         <GalleryView 
@@ -2116,11 +2198,25 @@ const App: React.FC = () => {
              <Modal title={`Analyze for ${analysisType}`} onClose={() => setIsAnalyzeModalOpen(false)} maxWidth="max-w-2xl">
                  <div className="flex flex-col h-[60vh]">
                      <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                        {detectedItems.length === 0 ? (
+                        {isAnalyzing ? (
+                            <div className="flex flex-col items-center justify-center h-full gap-4 p-6">
+                                <Loader2 size={48} className="animate-spin text-blue-500" />
+                                <p className="text-zinc-400 animate-pulse">Analyzing script for {analysisType.toLowerCase()}...</p>
+                                {analysisThinking && (
+                                    <div className="w-full max-w-xl mt-4">
+                                        <p className="text-xs text-zinc-500 mb-2 font-medium">AI Reasoning:</p>
+                                        <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto">
+                                            <pre className="text-xs text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">{analysisThinking}</pre>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ) : detectedItems.length === 0 ? (
                             <div className="h-full flex flex-col items-center justify-center text-zinc-500 gap-4">
-                                <p>Analyze scripts in the Writers Room to automatically detect {analysisType}.</p>
-                                <Button onClick={handleRunAnalysis} disabled={isAnalyzing}>
-                                    {isAnalyzing ? "Analyzing..." : "Start Analysis"}
+                                <Search size={48} className="opacity-20" />
+                                <p>Analyze scripts in the Writers Room to automatically detect {analysisType.toLowerCase()}.</p>
+                                <Button onClick={handleRunAnalysis}>
+                                    <Sparkles size={16} /> Start Analysis
                                 </Button>
                             </div>
                         ) : (

@@ -21,6 +21,23 @@ interface Suggestion {
     iconClass: string;
 }
 
+/** Request for generation to be routed through App.tsx */
+export interface GenerationRequest {
+    nodeId: string;
+    type: 'image' | 'video' | 'text';
+    prompt: string;
+    config?: {
+        model?: string;
+        aspectRatio?: string;
+        styleId?: string;
+        duration?: string;
+        withAudio?: boolean;
+        startImage?: string;
+        endImage?: string;
+        referenceImages?: string[];
+    };
+}
+
 interface NodeItemProps {
     node: FlowNode;
     isSelected: boolean;
@@ -29,6 +46,8 @@ interface NodeItemProps {
     onUpdate: (id: string, data: any) => void;
     onDragStart: (e: React.MouseEvent, id: string) => void;
     onContextMenu?: (e: React.MouseEvent, id: string) => void;
+    /** Callback to request generation through the central queue */
+    onRequestGeneration?: (request: GenerationRequest) => void;
     activeAsset?: ProjectAsset;
     isThumbnail?: boolean;
     isDragOver?: boolean;
@@ -338,7 +357,7 @@ const MarkdownToolbar: React.FC<{
 );
 
 const NodeItemComponent: React.FC<NodeItemProps> = ({ 
-    node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, 
+    node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, onRequestGeneration,
     activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {}, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -498,6 +517,19 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   };
 
   const handleTextGen = async () => {
+    // Route through central generation if callback provided
+    if (onRequestGeneration) {
+      onUpdate(node.id, { ...node.data, status: 'pending' });
+      onRequestGeneration({
+        nodeId: node.id,
+        type: 'text',
+        prompt: node.data.prompt || "",
+        config: { styleId: node.data.styleId }
+      });
+      return;
+    }
+    
+    // Fallback: Direct generation (legacy path)
     setIsProcessing(true);
     setProgressMsg("Writing...");
     setError(null);
@@ -516,12 +548,40 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
 
   const handleImageGen = async () => {
     if (isProcessingRef.current) return; // Prevent double-execution
+    
+    const rawPrompt = node.data.prompt || (activeAsset ? `@${activeAsset.title}` : "A cinematic shot");
+    
+    // Route through central generation if callback provided
+    if (onRequestGeneration) {
+      let refImages: string[] = [];
+      if (node.data.referenceImageUrl) {
+        refImages = [node.data.referenceImageUrl];
+      } else {
+        const { matchedAssets } = resolvePrompt(rawPrompt, projectAssets, activeAsset, projectSettings, node.data.styleId);
+        refImages = resolveReferenceImages(rawPrompt, projectAssets, activeAsset, refinedImagesMap, approvedImagesMap, assetThumbnails, matchedAssets);
+      }
+      
+      onUpdate(node.id, { ...node.data, status: 'pending' });
+      onRequestGeneration({
+        nodeId: node.id,
+        type: 'image',
+        prompt: rawPrompt,
+        config: {
+          model: node.data.model || MODELS.IMAGE_GEN,
+          aspectRatio: node.data.aspectRatio || "16:9",
+          styleId: node.data.styleId,
+          referenceImages: refImages
+        }
+      });
+      return;
+    }
+    
+    // Fallback: Direct generation (legacy path)
     isProcessingRef.current = true;
     setIsProcessing(true);
     setProgressMsg("Dreaming...");
     setError(null);
     try {
-      const rawPrompt = node.data.prompt || (activeAsset ? `@${activeAsset.title}` : "A cinematic shot");
       const { resolved, matchedAssets } = resolvePrompt(
           rawPrompt, 
           projectAssets, 
@@ -601,11 +661,41 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   }
 
   const handleVideoGen = async () => {
+      const rawPrompt = node.data.prompt || "A video scene";
+      const model = node.data.model || MODELS.VIDEO_FAST;
+      
+      // Route through central generation if callback provided
+      if (onRequestGeneration) {
+        let startImage = node.data.imageUrl;
+        if (!startImage) {
+          const { matchedAssets } = resolvePrompt(rawPrompt, projectAssets, activeAsset, projectSettings, node.data.styleId);
+          const images = resolveReferenceImages(rawPrompt, projectAssets, activeAsset, refinedImagesMap, approvedImagesMap, assetThumbnails, matchedAssets);
+          if (images.length > 0) startImage = images[0];
+        }
+        
+        onUpdate(node.id, { ...node.data, status: 'pending' });
+        onRequestGeneration({
+          nodeId: node.id,
+          type: 'video',
+          prompt: rawPrompt,
+          config: {
+            model,
+            aspectRatio: node.data.aspectRatio || "16:9",
+            styleId: node.data.styleId,
+            duration: node.data.duration || "5",
+            withAudio: node.data.withAudio,
+            startImage,
+            endImage: node.data.lastFrameImageUrl
+          }
+        });
+        return;
+      }
+      
+      // Fallback: Direct generation (legacy path)
       setIsProcessing(true);
       setProgressMsg("Starting...");
       setError(null);
       try {
-          const rawPrompt = node.data.prompt || "A video scene";
           const { resolved, matchedAssets } = resolvePrompt(
               rawPrompt, 
               projectAssets, 
@@ -613,7 +703,6 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
               projectSettings,
               node.data.styleId 
           );
-          const model = node.data.model || MODELS.VIDEO_FAST;
           
           let refImage = node.data.imageUrl;
           if (!refImage) {

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData, ProjectSettings } from '../types';
-import { NodeItem } from './NodeItem';
+import { NodeItem, GenerationRequest } from './NodeItem';
 import { Button, Input, Modal, ToggleGroup } from './UI';
 import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
@@ -25,6 +25,8 @@ interface CanvasProps {
   // New prop for video generation triggers
   onGenerateVideo?: (node: FlowNode, model: string) => void;
   assetThumbnails?: Record<string, string>;
+  /** Callback for routing generation requests through central queue */
+  onRequestGeneration?: (request: GenerationRequest) => void;
 }
 
 // Available Nodes for Tab Menu
@@ -43,7 +45,7 @@ interface HistoryState {
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
-    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings, onGenerateVideo, assetThumbnails = {}
+    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings, onGenerateVideo, assetThumbnails = {}, onRequestGeneration
 }) => {
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
@@ -460,7 +462,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         <div ref={canvasRef} className={`w-full h-full ${interactionMode === 'panning' || isSpacePressed ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
             <div className="origin-top-left w-full h-full absolute top-0 left-0 canvas-layer" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
                 {visibleNodes.map(node => (
-                    <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onContextMenu={handleNodeContextMenu} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} />
+                    <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onContextMenu={handleNodeContextMenu} onRequestGeneration={onRequestGeneration} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} />
                 ))}
             </div>
         </div>
