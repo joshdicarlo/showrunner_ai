@@ -12,7 +12,7 @@ import { RenderQueuePanel } from './components/RenderQueuePanel';
 import { Login } from './components/Login';
 import { GenerationRequest } from './components/NodeItem';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings, BatchType } from './types';
-import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS } from './constants';
+import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS, IMAGE_MODELS_OPTIONS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
 import { generateEnhancementOptions, generateSummary, generateStorySeeds, extractShotsFromScene, generateImage, generateVideo, generateCreativeText } from './services/geminiService';
 import { generateLumaVideo, generateLumaImage } from './services/lumaService';
@@ -22,17 +22,21 @@ import { createRenderQueue } from './services/renderQueue';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search, User, MapPin, Clapperboard, CheckCircle, Circle, ChevronDown, ChevronRight, Play } from 'lucide-react';
 
 type View = 'dashboard' | 'project';
 
 interface DetectedItem {
+    id: string;
     name: string;
     description: string;
     summary?: string;
     type: string;
     selected: boolean;
     isDuplicate?: boolean;
+    autoGenerate: boolean;
+    autoApprove: boolean;
+    model?: string;
     children?: DetectedItem[]; 
 }
 
@@ -1377,22 +1381,37 @@ const App: React.FC = () => {
             results = await discoverScenes(fullText, autoFindShots, undefined, onThinking);
         }
         
-        const items: DetectedItem[] = results.map((r: any) => ({
-             name: r.name || r.title,
-             description: r.description,
-             summary: r.summary, 
-             type: r.type || r.role || analysisType, 
-             selected: true,
-             children: r.shots ? r.shots.map((s:any) => ({
-                 name: s.title, description: s.description, type: 'Shot', selected: true
-             })) : undefined
-        }));
+        const items: DetectedItem[] = results.map((r: any, idx: number) => {
+             const itemId = `detected-${Date.now()}-${idx}`;
+             return {
+                 id: itemId,
+                 name: r.name || r.title,
+                 description: r.description,
+                 summary: r.summary, 
+                 type: r.type || r.role || analysisType, 
+                 selected: true,
+                 autoGenerate: true,
+                 autoApprove: false,
+                 model: MODELS.IMAGE_GEN,
+                 children: r.shots ? r.shots.map((s: any, sIdx: number) => ({
+                     id: `detected-shot-${Date.now()}-${idx}-${sIdx}`,
+                     name: s.title, 
+                     description: s.description, 
+                     type: 'Shot', 
+                     selected: true,
+                     autoGenerate: false,
+                     autoApprove: false,
+                     model: MODELS.IMAGE_GEN
+                 })) : undefined
+             };
+        });
 
         const existingTitles = new Set(activeProject.assets.map(a => a.title.toLowerCase()));
         items.forEach(i => {
             if (existingTitles.has(i.name.toLowerCase())) {
                 i.isDuplicate = true;
                 i.selected = false;
+                i.autoGenerate = false;
             }
         });
 
@@ -1405,44 +1424,123 @@ const App: React.FC = () => {
   };
 
   const handleApproveAnalysis = () => {
-    if (!currentProjectId) return;
+    if (!currentProjectId || !activeProject) return;
     
     const newAssets: ProjectAsset[] = [];
+    const tasks: RenderTask[] = [];
+    const batchId = `batch-analysis-${Date.now()}`;
+    const batchLabel = `${analysisType} Discovery`;
+    
     detectedItems.filter(i => i.selected).forEach(item => {
-        const assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
-        const asset: ProjectAsset = {
-            id: assetId,
-            department: currentDept,
-            title: item.name,
-            description: item.description,
-            visualStyle: 'Cinematic',
-            summary: item.summary || 'Auto-detected', 
-            status: 'active'
-        };
-        newAssets.push(asset);
+        let assetId: string;
+        
+        // Check if this is a duplicate/existing asset
+        if (item.isDuplicate) {
+            // Find the existing asset and use its ID
+            const existingAsset = activeProject.assets.find(
+                a => a.title.toLowerCase() === item.name.toLowerCase()
+            );
+            if (existingAsset) {
+                assetId = existingAsset.id;
+            } else {
+                // Fallback: create new if not found (shouldn't happen)
+                assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
+            }
+        } else {
+            // Create new asset
+            assetId = `asset-${Date.now()}-${Math.random().toString(36).substr(2,9)}`;
+            const asset: ProjectAsset = {
+                id: assetId,
+                department: currentDept,
+                title: item.name,
+                description: item.description,
+                visualStyle: 'Cinematic',
+                summary: item.summary || 'Auto-detected', 
+                status: 'active'
+            };
+            newAssets.push(asset);
+        }
+
+        // Queue generation task if autoGenerate is enabled
+        if (item.autoGenerate) {
+            tasks.push({
+                id: `task-${Date.now()}-${Math.random().toString(36).substr(2,9)}`,
+                type: 'image',
+                prompt: `@${item.name}`,
+                assetId: assetId,
+                status: 'pending',
+                config: {
+                    model: item.model || MODELS.IMAGE_GEN,
+                    autoApprove: item.autoApprove
+                },
+                batchId,
+                batchLabel
+            });
+        }
 
         if (item.children) {
             item.children.filter(c => c.selected).forEach(child => {
-                newAssets.push({
-                    id: `asset-${Date.now()}-${Math.random()}`,
-                    department: DepartmentType.PRODUCTION,
-                    title: child.name,
-                    description: child.description,
-                    parentId: assetId,
-                    visualStyle: 'Shot',
-                    summary: 'Auto-detected shot',
-                    status: 'active'
-                });
+                let childAssetId: string;
+                
+                // Check if child is a duplicate
+                if (child.isDuplicate) {
+                    const existingChild = activeProject.assets.find(
+                        a => a.title.toLowerCase() === child.name.toLowerCase() && a.parentId === assetId
+                    );
+                    if (existingChild) {
+                        childAssetId = existingChild.id;
+                    } else {
+                        childAssetId = `asset-${Date.now()}-${Math.random()}`;
+                    }
+                } else {
+                    childAssetId = `asset-${Date.now()}-${Math.random()}`;
+                    newAssets.push({
+                        id: childAssetId,
+                        department: DepartmentType.PRODUCTION,
+                        title: child.name,
+                        description: child.description,
+                        parentId: assetId,
+                        visualStyle: 'Shot',
+                        summary: 'Auto-detected shot',
+                        status: 'active'
+                    });
+                }
+                
+                // Queue generation for child if autoGenerate enabled
+                if (child.autoGenerate) {
+                    tasks.push({
+                        id: `task-${Date.now()}-${Math.random().toString(36).substr(2,9)}`,
+                        type: 'image',
+                        prompt: `@${item.name}.${child.name}`,
+                        assetId: childAssetId,
+                        status: 'pending',
+                        config: {
+                            model: child.model || MODELS.IMAGE_GEN,
+                            autoApprove: child.autoApprove
+                        },
+                        batchId,
+                        batchLabel
+                    });
+                }
             });
         }
     });
 
-    setProjects(prev => prev.map(p => {
-        if (p.id === currentProjectId) {
-            return { ...p, assets: [...p.assets, ...newAssets] };
-        }
-        return p;
-    }));
+    // Update projects with new assets (only non-duplicates)
+    if (newAssets.length > 0) {
+        setProjects(prev => prev.map(p => {
+            if (p.id === currentProjectId) {
+                return { ...p, assets: [...p.assets, ...newAssets] };
+            }
+            return p;
+        }));
+    }
+    
+    // Queue all generation tasks
+    if (tasks.length > 0) {
+        tasks.forEach(task => queueService.add(task));
+    }
+    
     setIsAnalyzeModalOpen(false);
   };
 
@@ -2220,44 +2318,138 @@ const App: React.FC = () => {
                                 </Button>
                             </div>
                         ) : (
-                            <div>
-                                <div className="flex items-center justify-between mb-2 px-2">
-                                    <span className="text-xs font-bold text-zinc-500 uppercase">{detectedItems.length} Items Detected</span>
-                                </div>
-                                {detectedItems.map((item, idx) => (
-                                    <div key={idx} className={`flex items-start gap-3 p-3 rounded border ${item.isDuplicate ? 'bg-yellow-900/10 border-yellow-900/30' : 'bg-zinc-900 border-zinc-800'}`}>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={item.selected} 
-                                            onChange={(e) => {
-                                                const newItems = [...detectedItems];
-                                                newItems[idx].selected = e.target.checked;
-                                                setDetectedItems(newItems);
-                                            }}
-                                            className="mt-1"
-                                        />
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-2">
-                                                <span className="font-bold text-sm text-zinc-200">{item.name}</span>
-                                                {item.isDuplicate && <span className="text-[9px] bg-yellow-900 text-yellow-500 px-1.5 rounded">Existing</span>}
-                                            </div>
-                                            <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{item.description}</p>
-                                            {item.children && (
-                                                <div className="mt-2 pl-2 border-l border-zinc-700">
-                                                    <span className="text-[10px] text-zinc-500">{item.children.length} Shots Detected</span>
-                                                </div>
-                                            )}
-                                        </div>
+                            <div className="bg-zinc-900/50">
+                                <div className="flex items-center justify-between px-4 py-2 bg-zinc-950 border-b border-zinc-800 sticky top-0 z-10">
+                                    <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">{detectedItems.length} {analysisType} Detected</span>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => setDetectedItems(prev => prev.map(i => ({...i, selected: true})))} className="text-[10px] text-zinc-500 hover:text-white px-1">All</button>
+                                        <button onClick={() => setDetectedItems(prev => prev.map(i => ({...i, selected: false})))} className="text-[10px] text-zinc-500 hover:text-white px-1">None</button>
+                                        <div className="w-[1px] h-3 bg-zinc-800 mx-1"/>
+                                        <button onClick={() => setDetectedItems(prev => prev.map(i => ({...i, autoGenerate: true})))} className="text-[10px] text-blue-500 hover:text-blue-400 px-1">Auto-Gen All</button>
                                     </div>
-                                ))}
+                                </div>
+                                {detectedItems.map((item, idx) => {
+                                    const iconEl = item.type === 'Character' || item.type === 'Characters' ? <User size={14} className="text-purple-400"/> :
+                                                   item.type === 'Location' || item.type === 'Locations' ? <MapPin size={14} className="text-green-400"/> :
+                                                   item.type === 'Scene' || item.type === 'Story' ? <Layout size={14} className="text-yellow-400"/> :
+                                                   <Clapperboard size={14} className="text-blue-400"/>;
+                                    return (
+                                        <div key={item.id} className={`flex items-center gap-3 p-2 border-b border-zinc-800/50 hover:bg-zinc-800/50 transition-colors ${item.selected ? 'bg-zinc-900/30' : 'opacity-50'}`}>
+                                            {/* Import Checkbox */}
+                                            <div className="w-8 flex justify-center shrink-0 pl-3">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={item.selected} 
+                                                    onChange={(e) => {
+                                                        const newItems = [...detectedItems];
+                                                        newItems[idx].selected = e.target.checked;
+                                                        if (!e.target.checked) {
+                                                            newItems[idx].autoGenerate = false;
+                                                            newItems[idx].autoApprove = false;
+                                                        }
+                                                        setDetectedItems(newItems);
+                                                    }}
+                                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-900 focus:ring-blue-500 cursor-pointer"
+                                                />
+                                            </div>
+
+                                            {/* Name & Desc */}
+                                            <div className="flex-1 min-w-0 flex items-center gap-3">
+                                                <div className="p-1.5 rounded bg-zinc-900 border border-zinc-800 shrink-0">
+                                                    {iconEl}
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-sm font-medium truncate ${item.selected ? 'text-zinc-200' : 'text-zinc-500'}`}>{item.name}</span>
+                                                        {item.isDuplicate && <span className="text-[9px] bg-zinc-800 text-zinc-500 px-1.5 rounded border border-zinc-700">Existing</span>}
+                                                    </div>
+                                                    <div className="text-[10px] text-zinc-500 truncate max-w-[200px]">
+                                                        {item.summary || item.description}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Model Selector */}
+                                            <div className="w-28 shrink-0 px-2 flex justify-end">
+                                                {item.autoGenerate && item.selected ? (
+                                                    <div className="relative w-full">
+                                                        <select 
+                                                            value={item.model || MODELS.IMAGE_GEN} 
+                                                            onChange={(e) => {
+                                                                const newItems = [...detectedItems];
+                                                                newItems[idx].model = e.target.value;
+                                                                setDetectedItems(newItems);
+                                                            }}
+                                                            className="w-full text-[10px] py-1.5 pl-2 pr-6 h-8 bg-zinc-900 border border-zinc-700 hover:border-zinc-500 rounded text-zinc-300 appearance-none focus:ring-1 focus:ring-blue-500 transition-colors cursor-pointer outline-none"
+                                                        >
+                                                            {IMAGE_MODELS_OPTIONS.map(m => (
+                                                                <option key={m.value} value={m.value}>{m.label}</option>
+                                                            ))}
+                                                        </select>
+                                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
+                                                            <ChevronDown size={10} />
+                                                        </div>
+                                                    </div>
+                                                ) : <div className="w-full h-8" />}
+                                            </div>
+
+                                            {/* Controls */}
+                                            <div className="flex items-center gap-2 pr-4">
+                                                {/* Auto Generate Toggle */}
+                                                <button 
+                                                    onClick={() => {
+                                                        const newItems = [...detectedItems];
+                                                        newItems[idx].autoGenerate = !newItems[idx].autoGenerate;
+                                                        if (!newItems[idx].autoGenerate) newItems[idx].autoApprove = false;
+                                                        setDetectedItems(newItems);
+                                                    }}
+                                                    disabled={!item.selected}
+                                                    className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-24 justify-center font-medium h-8
+                                                        ${!item.selected ? 'opacity-20 cursor-not-allowed border-transparent' : 
+                                                          item.autoGenerate ? 'bg-blue-900/20 text-blue-300 border-blue-800 hover:bg-blue-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
+                                                    `}
+                                                >
+                                                    <Wand2 size={12} className={item.autoGenerate ? "text-blue-400" : "text-zinc-500"} />
+                                                    {item.autoGenerate ? "Auto-Gen" : "Manual"}
+                                                </button>
+
+                                                {/* Auto Approve Toggle */}
+                                                <button 
+                                                    onClick={() => {
+                                                        const newItems = [...detectedItems];
+                                                        newItems[idx].autoApprove = !newItems[idx].autoApprove;
+                                                        setDetectedItems(newItems);
+                                                    }}
+                                                    disabled={!item.selected || !item.autoGenerate}
+                                                    className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-24 justify-center font-medium h-8
+                                                        ${!item.selected || !item.autoGenerate ? 'opacity-20 cursor-not-allowed border-transparent' : 
+                                                          item.autoApprove ? 'bg-green-900/20 text-green-300 border-green-800 hover:bg-green-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
+                                                    `}
+                                                >
+                                                    {item.autoApprove ? <CheckCircle size={12} className="text-green-400"/> : <Circle size={12} className="text-zinc-500"/>}
+                                                    {item.autoApprove ? "Approved" : "Review"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                      </div>
-                     <div className="p-4 border-t border-zinc-800 flex justify-end gap-2 bg-zinc-900">
-                         <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
-                         <Button onClick={handleApproveAnalysis} disabled={detectedItems.filter(i => i.selected).length === 0}>
-                             Import Selected
-                         </Button>
+                     <div className="p-4 border-t border-zinc-800 flex justify-between items-center gap-2 bg-zinc-900">
+                         <div className="text-xs text-zinc-500">
+                             {detectedItems.filter(i => i.selected && i.autoGenerate).length > 0 && (
+                                 <span className="text-blue-400">
+                                     {detectedItems.filter(i => i.selected && i.autoGenerate).length} will auto-generate
+                                 </span>
+                             )}
+                         </div>
+                         <div className="flex gap-2">
+                             <Button variant="ghost" onClick={() => setIsAnalyzeModalOpen(false)}>Cancel</Button>
+                             <Button onClick={handleApproveAnalysis} disabled={detectedItems.filter(i => i.selected).length === 0}>
+                                 <Play size={16} className="fill-current"/> Import & Execute
+                             </Button>
+                         </div>
                      </div>
                  </div>
              </Modal>

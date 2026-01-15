@@ -92,21 +92,37 @@ discoverAll(scriptText, options?): Promise<DiscoveryResult>
 
 ### UI Unification
 
-The Find Characters/Locations/Story modal was also updated to match the One Shot Discovery UI:
+The Find Characters/Locations/Story modal was updated to fully match the One Shot Discovery UI:
 
 **Before:**
 - Simple "Analyzing..." button text during discovery
 - No visibility into AI reasoning process
+- Basic checkbox + text list for detected items
+- Only "Import Selected" functionality (no generation)
 
 **After:**
 - Animated spinner with descriptive loading message
 - Live streaming "AI Reasoning" panel showing model's thought process
-- Consistent visual design with OneShotModal
+- Full OneShotModal-style row rendering with:
+  - Type-specific icons (User/MapPin/Layout/Clapperboard)
+  - Model selector dropdown per item
+  - Auto-Generate toggle (Manual/Auto-Gen)
+  - Auto-Approve toggle (Review/Approved)
+  - Bulk actions header (All/None/Auto-Gen All)
+- "Import & Execute" button that creates assets AND queues generation tasks
 
 **Changes:**
-- Updated `handleRunAnalysis()` to pass `onThinking` callback to discovery functions
-- Updated analysis modal JSX with loading state UI matching `OneShotModal`
-- Added `Search` icon import for empty state
+- Updated `DetectedItem` interface to match `OneShotItem` (added `id`, `autoGenerate`, `autoApprove`, `model`)
+- Updated `handleRunAnalysis()` to:
+  - Pass `onThinking` callback to discovery functions
+  - Assign unique IDs and default generation settings to items
+- Replaced simple item list UI with OneShotModal-style row components
+- Updated `handleApproveAnalysis()` to:
+  - Create assets for selected items
+  - Queue `RenderTask` for items with `autoGenerate: true`
+  - Use `autoApprove` and `model` settings from each item
+- Added missing icon imports (`User`, `MapPin`, `Clapperboard`, `CheckCircle`, `Circle`, `ChevronDown`, `Play`)
+- Added `IMAGE_MODELS_OPTIONS` import for model selector
 
 ---
 
