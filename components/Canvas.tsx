@@ -259,6 +259,54 @@ export const Canvas: React.FC<CanvasProps> = ({
       setNodes(prev => [...prev, newNode]); setSelectedNodeIds([newNode.id]);
   };
 
+  // Add node from toolbar - places below existing nodes and focuses on it
+  const addNodeFromToolbar = (type: NodeType, initialData?: Partial<NodeData>) => {
+      const visible = nodes.filter(n => n.department === currentDept && n.assetId === (currentAssetId || undefined) && !n.parentId);
+      
+      let newY = 50; // Default starting position
+      let newX = 50;
+      
+      if (visible.length > 0) {
+          // Find the lowest point of existing nodes
+          const lowestY = Math.max(...visible.map(n => n.position.y + (n.height || 400)));
+          newY = lowestY + 40; // Add some spacing below
+          
+          // Center horizontally based on existing nodes
+          const avgX = visible.reduce((sum, n) => sum + n.position.x, 0) / visible.length;
+          newX = avgX;
+      }
+      
+      let defaultRatio = undefined;
+      if (type === NodeType.AI_IMAGE_GEN || type === NodeType.AI_VIDEO_GEN) {
+          defaultRatio = "16:9";
+          if (currentDept === DepartmentType.CASTING_WARDROBE) defaultRatio = "1:1";
+      }
+      
+      const newNode: FlowNode = {
+          id: `node-${Date.now()}`, type, department: currentDept, assetId: currentAssetId || undefined, 
+          position: { x: newX, y: newY },
+          data: { status: 'draft', prompt: activeAsset && type === NodeType.AI_IMAGE_GEN ? `@${activeAsset.title}` : undefined, aspectRatio: defaultRatio, ...initialData }
+      };
+      
+      setNodes(prev => [...prev, newNode]); 
+      setSelectedNodeIds([newNode.id]);
+      
+      // Pan canvas to focus on the new node
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (rect) {
+          const viewportCenterX = rect.width / 2;
+          const viewportCenterY = rect.height / 2;
+          const nodeWidth = 300;
+          const nodeHeight = 400;
+          
+          // Calculate offset to center the new node in viewport
+          const newOffsetX = viewportCenterX - (newX + nodeWidth / 2) * scale;
+          const newOffsetY = viewportCenterY - (newY + nodeHeight / 2) * scale;
+          
+          setOffset({ x: newOffsetX, y: newOffsetY });
+      }
+  };
+
   const handleNodeSelect = useCallback((e: React.MouseEvent, id: string) => { if (isDraggingRef.current) return; if (e.shiftKey) return; setSelectedNodeIds([id]); }, []);
   const onNodeDragStart = useCallback((e: React.MouseEvent, id: string) => { 
       e.stopPropagation(); setContextMenu(null); setTabMenu(null); saveHistory(); isDraggingRef.current = false; setInteractionMode('draggingNode'); setDraggingNodeId(id);
@@ -469,15 +517,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                     </>
                 ) : (
                     <>
-                         <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Canvas Actions</div>
-                         {currentDept === DepartmentType.WRITERS_ROOM && (
-                             <>
-                                <button onClick={() => { addNodeAtLocation(NodeType.AI_TEXT_GEN, contextMenu.x, contextMenu.y, { prompt: activeAsset ? `Detailed outline for @${activeAsset.title}` : "Detailed story outline" }); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-blue-900/30 text-blue-200 flex items-center gap-2"><FileText size={12} /> Generate Outline</button>
-                                <button onClick={() => { addNodeAtLocation(NodeType.AI_IMAGE_GEN, contextMenu.x, contextMenu.y, { prompt: activeAsset ? `Concept art for @${activeAsset.title}` : "Cinematic concept art" }); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-200 flex items-center gap-2"><ImageIcon size={12} /> Generate Concept</button>
-                                <div className="h-[1px] bg-zinc-800 my-1 mx-2" />
-                             </>
-                         )}
-                         <button onClick={() => { addNodeAtLocation(NodeType.TEXT_INPUT, contextMenu.x, contextMenu.y); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-300 flex items-center gap-2"><Type size={12} /> Add Note</button>
+                         <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Add Node</div>
+                         <button onClick={() => { addNodeAtLocation(NodeType.TEXT_INPUT, contextMenu.x, contextMenu.y); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-300 flex items-center gap-2"><Type size={12} /> Note / Script</button>
+                         <button onClick={() => { addNodeAtLocation(NodeType.AI_TEXT_GEN, contextMenu.x, contextMenu.y, { prompt: activeAsset ? `Detailed outline for @${activeAsset.title}` : "Detailed story outline" }); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-blue-900/30 text-blue-200 flex items-center gap-2"><Sparkles size={12} /> AI Writer</button>
+                         <button onClick={() => { addNodeAtLocation(NodeType.AI_IMAGE_GEN, contextMenu.x, contextMenu.y, { prompt: activeAsset ? `@${activeAsset.title}` : "" }); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-purple-900/30 text-purple-200 flex items-center gap-2"><ImageIcon size={12} /> Image Generator</button>
+                         <button onClick={() => { addNodeAtLocation(NodeType.AI_IMAGE_EDIT, contextMenu.x, contextMenu.y); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-pink-900/30 text-pink-200 flex items-center gap-2"><Sparkles size={12} /> Image Editor</button>
+                         <button onClick={() => { addNodeAtLocation(NodeType.AI_VIDEO_GEN, contextMenu.x, contextMenu.y); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/30 text-red-200 flex items-center gap-2"><Video size={12} /> Video Generator</button>
+                         <div className="h-[1px] bg-zinc-800 my-1 mx-2" />
+                         <div className="px-3 py-2 border-b border-zinc-800 text-[10px] font-bold text-zinc-500 uppercase">Canvas</div>
                         {selectedNodeIds.length > 0 && ( <button onClick={handleGroupSelected} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-300 flex items-center gap-2"><FolderPlus size={12} /> Group Selected</button> )}
                         <button onClick={() => { frameSelection([]); setContextMenu(null); }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-800 text-zinc-300 flex items-center gap-2"><Scan size={12} /> Reset View</button>
                     </>
@@ -486,7 +533,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         )}
         {/* ... TabMenu, Toolbar, Hints, DebugModal (Same) ... */}
         {tabMenu && ( <div className="fixed z-50 flex flex-col bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-64 overflow-hidden animate-in fade-in zoom-in-95 duration-100" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(e) => e.stopPropagation()}> <div className="p-2 border-b border-zinc-800 flex items-center gap-2"> <Search size={14} className="text-zinc-500" /> <input autoFocus className="bg-transparent text-sm text-white focus:outline-none w-full placeholder-zinc-600" placeholder="Search nodes..." value={tabMenu.search} onChange={(e) => setTabMenu({...tabMenu, search: e.target.value, selectedIndex: 0})} onKeyDown={handleTabMenuKeyDown} /> </div> <div className="max-h-60 overflow-y-auto p-1"> {filteredMenuNodes.map((item, idx) => ( <button key={item.type} onClick={() => { addNodeAtLocation(item.type, tabMenu.x, tabMenu.y); setTabMenu(null); }} className={`w-full text-left px-3 py-2 rounded flex items-center gap-3 transition-colors ${idx === tabMenu.selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`} > <item.icon size={16} className={idx === tabMenu.selectedIndex ? 'text-white' : 'text-zinc-500'} /> <div> <div className="text-xs font-bold">{item.label}</div> <div className={`text-[10px] ${idx === tabMenu.selectedIndex ? 'text-blue-200' : 'text-zinc-500'}`}>{item.desc}</div> </div> </button> ))} {filteredMenuNodes.length === 0 && ( <div className="p-3 text-xs text-zinc-500 text-center">No matching nodes</div> )} </div> <div className="bg-zinc-950 px-2 py-1 text-[9px] text-zinc-600 border-t border-zinc-800 flex justify-between"> <span>Create: ⏎</span> <span>Navigate: ↑↓</span> </div> </div> )}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.TEXT_INPUT, window.innerWidth/2, window.innerHeight/2)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.AI_TEXT_GEN, window.innerWidth/2, window.innerHeight/2)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.AI_IMAGE_GEN, window.innerWidth/2, window.innerHeight/2)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.AI_IMAGE_EDIT, window.innerWidth/2, window.innerHeight/2)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeAtLocation(NodeType.AI_VIDEO_GEN, window.innerWidth/2, window.innerHeight/2)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.TEXT_INPUT)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_TEXT_GEN)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_GEN)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_EDIT)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_VIDEO_GEN)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
         <div className="absolute top-4 right-4 flex flex-col items-end gap-1 pointer-events-none opacity-50"> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">TAB for Menu</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">F to Frame</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">Ctrl+Z Undo</div> </div>
         {showDebugModal && debugTrace && ( <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl"> <div className="flex flex-col gap-4 h-[70vh] overflow-hidden"> <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800 shrink-0"> <button onClick={() => setDebugView('trace')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'trace' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Trace & Data</button> <button onClick={() => setDebugView('js')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'js' ? 'bg-zinc-800 text-yellow-400' : 'text-zinc-500 hover:text-zinc-300'}`}>JavaScript</button> <button onClick={() => setDebugView('python')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'python' ? 'bg-zinc-800 text-blue-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Python</button> <button onClick={() => setDebugView('submitted')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'submitted' ? 'bg-zinc-800 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Submitted Prompt</button> </div> {debugView === 'submitted' ? ( <div className="flex-1 flex flex-col min-h-0"> <div className="bg-zinc-950 p-4 rounded border border-zinc-800 h-full flex flex-col"> <div className="text-xs font-bold text-zinc-500 mb-2">EXACT PROMPT SENT TO API</div> {debugTrace.submittedPrompt ? ( <div className="flex-1 overflow-y-auto custom-scrollbar font-mono text-sm text-green-300 whitespace-pre-wrap select-text"> {debugTrace.submittedPrompt} </div> ) : ( <div className="flex-1 flex items-center justify-center text-zinc-600 italic text-sm"> No submitted prompt recorded for this item. Try regenerating. </div> )} {debugTrace.submittedPrompt && ( <div className="mt-4 flex justify-end"> <button onClick={() => navigator.clipboard.writeText(debugTrace.submittedPrompt || '')} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs flex items-center gap-2 transition-colors" > <Copy size={14} /> Copy to Clipboard </button> </div> )} </div> </div> ) : debugView === 'trace' ? ( <div className="flex-1 flex flex-col min-h-0 gap-4"> <div className="bg-zinc-950 p-4 rounded border border-zinc-800 relative group shrink-0"> <div className="text-xs font-bold text-zinc-500 mb-1">PREVIEW RESOLVED PROMPT</div> <div className="font-mono text-sm text-green-400 whitespace-pre-wrap select-text max-h-[150px] overflow-y-auto custom-scrollbar">{debugTrace.resolved}</div> <button onClick={() => navigator.clipboard.writeText(debugTrace.resolved)} className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity" title="Copy Prompt" > <Copy size={14} /> </button> </div> <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2 select-text custom-scrollbar"> <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div> {debugTrace.trace.map((line, i) => ( <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div> ))} </div> {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && ( <div className="bg-zinc-950 p-4 rounded border border-zinc-800 shrink-0"> <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div> <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar"> {debugTrace.referenceImages.map((img, i) => ( <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group"> <img src={img} className="w-full h-full object-cover" /> <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white p-1 text-center truncate">Ref #{i+1}</div> </div> ))} </div> </div> )} </div> ) : ( <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black flex flex-col"> <textarea readOnly value={getCodeSnippet(debugView as 'js' | 'python')} className="flex-1 w-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none select-text custom-scrollbar" /> <button onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView as 'js' | 'python'))} className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2 z-10" > <CodeIcon size={14}/> Copy Code </button> </div> )} </div> </Modal> )}
     </div>
