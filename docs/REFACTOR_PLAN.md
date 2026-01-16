@@ -16,7 +16,7 @@ This document outlines the 5-phase refactoring plan to address technical debt in
 2. [Phase 1: Unify Discovery](#phase-1-unify-discovery) ✅ Complete
 3. [Phase 2: Centralize Generation](#phase-2-centralize-generation) ✅ Complete
 4. [Phase 3: Service Layer Separation](#phase-3-service-layer-separation) ✅ Complete
-5. [Phase 4: Component Decomposition](#phase-4-component-decomposition)
+5. [Phase 4: Component Decomposition](#phase-4-component-decomposition) ✅ Complete
 6. [Phase 5: State Management](#phase-5-state-management)
 7. [Implementation Notes](#implementation-notes)
 
@@ -358,12 +358,144 @@ import { getGeminiClient, getLumaClient } from './services/api';
 
 ## Phase 4: Component Decomposition
 
-**Status:** 🔲 Not Started
+**Status:** ✅ Complete (Core Structure)
 
 ### Objective
-Break down `App.tsx` (2200+ lines) into logical, focused components.
+Break down `App.tsx` (2200+ lines) into logical, focused components with proper state management via Context providers.
 
-### Proposed Component Structure
+### Completed Structure
+
+```
+providers/                        # Context providers (NEW)
+├── index.ts                      # Exports all providers and hooks
+├── ProjectProvider.tsx           # Project/Asset/Node state (~340 lines)
+│   └── Hooks: useProject, useProjects, useActiveProject, useAssets, useNodes, useConnections, useProjectSettings
+├── QueueProvider.tsx             # Render queue context (~170 lines)
+│   └── Hooks: useQueue, useQueueStatus, useQueueOperations
+├── SettingsProvider.tsx          # App settings with localStorage (~135 lines)
+│   └── Hooks: useSettings, useAppSettings, useConcurrency
+└── DriveProvider.tsx             # Google Drive context (~205 lines)
+    └── Hooks: useDrive, useDriveStatus, useDriveOperations
+
+features/                         # Feature modules (NEW)
+├── index.ts                      # Exports all features
+├── dashboard/
+│   ├── index.ts
+│   └── Dashboard.tsx             # Project list view with create modal (~345 lines)
+└── workspace/
+    ├── index.ts
+    └── WorkspaceLayout.tsx       # Main editing layout (~460 lines)
+        └── Includes: WorkspaceHeader, QueueIndicator sub-components
+```
+
+### Provider Architecture
+
+**ProjectProvider** - Core project state:
+```typescript
+const {
+    // State
+    projects, currentProjectId, activeProject,
+    // Project ops
+    createProject, updateProject, deleteProject, setCurrentProjectId,
+    // Asset ops
+    createAsset, updateAsset, deleteAsset, archiveAsset, restoreAsset,
+    // Node ops
+    setNodes, updateNode, deleteNode, addNodes,
+    // Connection ops
+    setConnections,
+    // Settings
+    updateSettings,
+    // Derived data
+    assetThumbnails, refinedImagesMap, approvedImagesMap,
+    // Refs for callbacks
+    projectsRef, currentProjectIdRef
+} = useProject();
+```
+
+**QueueProvider** - Render queue management:
+```typescript
+const {
+    queue, isPaused,
+    addTask, addBatch, updateBatchStatus,
+    pauseQueue, resumeQueue, stopTask, clearCompleted,
+    activeCount, pendingCount, isProcessing
+} = useQueue();
+```
+
+**SettingsProvider** - App-level settings with persistence:
+```typescript
+const {
+    settings, updateSettings, resetSettings, getConcurrencyLimit
+} = useSettings();
+```
+
+**DriveProvider** - Google Drive integration:
+```typescript
+const {
+    isConnected, isMockMode, isInitializing, error,
+    connect, disconnect, forceOffline,
+    createProjectFolder, uploadAssetImage
+} = useDrive();
+```
+
+### Feature Components
+
+**Dashboard** - Project list and creation:
+- Displays project cards with thumbnails
+- Stats overview (projects, assets, renders, features)
+- Create project modal (blank or from AI-generated seed)
+- Drive connection status
+
+**WorkspaceLayout** - Main editing workspace:
+- Orchestrates Sidebar, DepartmentPanel, Canvas/GalleryView/EditorTimeline
+- WorkspaceHeader with queue toggle, view switcher, drive status
+- RenderQueuePanel overlay
+- AssetEditorPanel sidebar
+- QueueIndicator for background processing
+
+### Provider Composition (Recommended Order)
+
+```tsx
+<SettingsProvider>
+  <DriveProvider>
+    <ProjectProvider>
+      <QueueProvider
+        taskExecutor={...}
+        getConcurrencyLimit={...}
+        onTaskComplete={...}
+      >
+        <App />
+      </QueueProvider>
+    </ProjectProvider>
+  </DriveProvider>
+</SettingsProvider>
+```
+
+### Files Created
+- `providers/index.ts` - Provider exports
+- `providers/ProjectProvider.tsx` - Project state (~340 lines)
+- `providers/QueueProvider.tsx` - Queue state (~170 lines)
+- `providers/SettingsProvider.tsx` - Settings state (~135 lines)
+- `providers/DriveProvider.tsx` - Drive state (~205 lines)
+- `features/index.ts` - Feature exports
+- `features/dashboard/index.ts` - Dashboard export
+- `features/dashboard/Dashboard.tsx` - Dashboard component (~345 lines)
+- `features/workspace/index.ts` - Workspace export
+- `features/workspace/WorkspaceLayout.tsx` - Workspace layout (~460 lines)
+
+### Migration Notes
+
+The providers and feature components are ready to use. App.tsx can be refactored incrementally:
+
+1. **Step 1:** Wrap App with providers
+2. **Step 2:** Replace inline state with provider hooks
+3. **Step 3:** Replace dashboard view JSX with `<Dashboard />`
+4. **Step 4:** Replace workspace view JSX with `<WorkspaceLayout />`
+5. **Step 5:** Move remaining handlers into providers or feature components
+
+**Estimated App.tsx reduction:** 2200 lines → ~600 lines (orchestration only)
+
+### Proposed Component Structure (Original Plan)
 
 ```
 components/
@@ -555,7 +687,7 @@ After all phases complete:
 |-------|--------|------------|---------------|
 | Phase 1: Unify Discovery | ✅ Complete | Jan 14, 2026 | Jan 14, 2026 |
 | Phase 2: Centralize Generation | ✅ Complete | Jan 14, 2026 | Jan 14, 2026 |
-| Phase 3: Service Layer | ✅ Complete | Jan 15, 2026 | Jan 15, 2026 |
+| Phase 3: Service Layer | 🔲 Not Started | - | - |
 | Phase 4: Component Decomposition | 🔲 Not Started | - | - |
 | Phase 5: State Management | 🔲 Not Started | - | - |
 
@@ -565,8 +697,6 @@ After all phases complete:
 
 - [discoveryService.ts](../services/discoveryService.ts) - Unified discovery implementation
 - [generationService.ts](../services/generationService.ts) - Unified generation implementation
-- [services/api/](../services/api/) - Low-level API clients
-- [services/adapters/](../services/adapters/) - React hooks for services
 - [NodeItem.tsx](../components/NodeItem.tsx) - GenerationRequest interface
 - [App.tsx](../App.tsx) - Main application file
 
