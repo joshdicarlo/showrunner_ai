@@ -1,34 +1,57 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LogIn, Sparkles, CloudOff, Loader2, ShieldCheck } from 'lucide-react';
 import { Button } from './UI';
-import * as GoogleDriveService from '../services/googleDriveService';
+import { useStorage } from '../services/storage';
 
 interface LoginProps {
     onLoginSuccess: (isMock: boolean) => void;
 }
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(true); // Start loading for session restore
     const [error, setError] = useState<string | null>(null);
+    
+    const storage = useStorage();
+
+    // Try to restore session on mount
+    useEffect(() => {
+        const tryRestoreSession = async () => {
+            try {
+                await storage.initialize('google-drive');
+                const restored = await storage.restoreSession();
+                
+                if (restored) {
+                    // Session restored, proceed to app
+                    onLoginSuccess(storage.isMockMode);
+                } else {
+                    // No session, show login screen
+                    setIsLoading(false);
+                }
+            } catch (e) {
+                console.warn('Session restore failed:', e);
+                setIsLoading(false);
+            }
+        };
+        
+        tryRestoreSession();
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleGoogleLogin = async () => {
         setIsLoading(true);
         setError(null);
         try {
-            await GoogleDriveService.signIn();
-            const isMock = GoogleDriveService.isMockMode();
-            onLoginSuccess(isMock);
+            await storage.authenticate();
+            onLoginSuccess(storage.isMockMode);
         } catch (e) {
             console.error("Login Error", e);
-            setError("Failed to connect to Google. Please check your connection or try Mock Mode.");
-        } finally {
+            setError("Failed to connect to Google. Please check your connection or try Offline Mode.");
             setIsLoading(false);
         }
     };
 
     const handleMockLogin = () => {
-        GoogleDriveService.enableMockMode();
+        storage.enableMockMode();
         onLoginSuccess(true);
     };
 
@@ -83,7 +106,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                                 className="w-full h-12 bg-zinc-800/50 hover:bg-zinc-800 border-zinc-700 text-zinc-300 font-medium"
                                 icon={CloudOff}
                             >
-                                Continue in Mock Mode
+                                Continue Offline
                             </Button>
                         </div>
 

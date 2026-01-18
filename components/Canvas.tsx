@@ -3,9 +3,19 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData, ProjectSettings } from '../types';
 import { NodeItem, GenerationRequest } from './NodeItem';
 import { Button, Input, Modal, ToggleGroup } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus } from 'lucide-react';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus, HardDrive, Cloud, CloudOff, Database } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
+
+interface StorageDebugInfo {
+  isConnected: boolean;
+  isMockMode: boolean;
+  providerType: string | null;
+  userEmail: string | null;
+  projectFolderId?: string;
+  projectDbFileId?: string;
+  folderMap: Record<string, string>;
+}
 
 interface CanvasProps {
   nodes: FlowNode[];
@@ -27,6 +37,8 @@ interface CanvasProps {
   assetThumbnails?: Record<string, string>;
   /** Callback for routing generation requests through central queue */
   onRequestGeneration?: (request: GenerationRequest) => void;
+  /** Storage debug information */
+  storageDebug?: StorageDebugInfo;
 }
 
 // Available Nodes for Tab Menu
@@ -45,7 +57,7 @@ interface HistoryState {
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
-    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings, onGenerateVideo, assetThumbnails = {}, onRequestGeneration
+    nodes, connections, setNodes, setConnections, currentDept, currentAssetId, activeAsset, focusNodes, onSetThumbnail, projectAssets, onRefineConcept, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings, onGenerateVideo, assetThumbnails = {}, onRequestGeneration, storageDebug
 }) => {
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
@@ -69,8 +81,19 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // Debug State
   const [showDebugModal, setShowDebugModal] = useState(false);
-  const [debugTrace, setDebugTrace] = useState<{resolved: string, trace: string[], referenceImages: string[], model: string, submittedPrompt?: string, nodeType?: string} | null>(null);
-  const [debugView, setDebugView] = useState<'trace' | 'js' | 'python' | 'submitted'>('trace');
+  const [debugTrace, setDebugTrace] = useState<{
+      resolved: string;
+      trace: string[];
+      referenceImages: string[];
+      model: string;
+      submittedPrompt?: string;
+      nodeType?: string;
+      storageInfo?: StorageDebugInfo;
+      nodeId?: string;
+      imageUrl?: string;
+      videoUrl?: string;
+  } | null>(null);
+  const [debugView, setDebugView] = useState<'trace' | 'js' | 'python' | 'submitted' | 'storage'>('trace');
 
   // State Tracking
   const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -394,7 +417,11 @@ export const Canvas: React.FC<CanvasProps> = ({
           referenceImages, 
           model: node.data.model || 'default-model', 
           submittedPrompt: node.data.submittedPrompt,
-          nodeType: node.type
+          nodeType: node.type,
+          storageInfo: storageDebug,
+          nodeId: node.id,
+          imageUrl: node.data.imageUrl,
+          videoUrl: node.data.videoUrl,
       }); 
       setShowDebugModal(true); 
   }
@@ -537,7 +564,190 @@ export const Canvas: React.FC<CanvasProps> = ({
         {tabMenu && ( <div className="fixed z-50 flex flex-col bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-64 overflow-hidden animate-in fade-in zoom-in-95 duration-100" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(e) => e.stopPropagation()}> <div className="p-2 border-b border-zinc-800 flex items-center gap-2"> <Search size={14} className="text-zinc-500" /> <input autoFocus className="bg-transparent text-sm text-white focus:outline-none w-full placeholder-zinc-600" placeholder="Search nodes..." value={tabMenu.search} onChange={(e) => setTabMenu({...tabMenu, search: e.target.value, selectedIndex: 0})} onKeyDown={handleTabMenuKeyDown} /> </div> <div className="max-h-60 overflow-y-auto p-1"> {filteredMenuNodes.map((item, idx) => ( <button key={item.type} onClick={() => { addNodeAtLocation(item.type, tabMenu.x, tabMenu.y); setTabMenu(null); }} className={`w-full text-left px-3 py-2 rounded flex items-center gap-3 transition-colors ${idx === tabMenu.selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`} > <item.icon size={16} className={idx === tabMenu.selectedIndex ? 'text-white' : 'text-zinc-500'} /> <div> <div className="text-xs font-bold">{item.label}</div> <div className={`text-[10px] ${idx === tabMenu.selectedIndex ? 'text-blue-200' : 'text-zinc-500'}`}>{item.desc}</div> </div> </button> ))} {filteredMenuNodes.length === 0 && ( <div className="p-3 text-xs text-zinc-500 text-center">No matching nodes</div> )} </div> <div className="bg-zinc-950 px-2 py-1 text-[9px] text-zinc-600 border-t border-zinc-800 flex justify-between"> <span>Create: ⏎</span> <span>Navigate: ↑↓</span> </div> </div> )}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.TEXT_INPUT)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_TEXT_GEN)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_GEN)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_EDIT)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_VIDEO_GEN)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
         <div className="absolute top-4 right-4 flex flex-col items-end gap-1 pointer-events-none opacity-50"> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">TAB for Menu</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">F to Frame</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">Ctrl+Z Undo</div> </div>
-        {showDebugModal && debugTrace && ( <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl"> <div className="flex flex-col gap-4 h-[70vh] overflow-hidden"> <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800 shrink-0"> <button onClick={() => setDebugView('trace')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'trace' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Trace & Data</button> <button onClick={() => setDebugView('js')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'js' ? 'bg-zinc-800 text-yellow-400' : 'text-zinc-500 hover:text-zinc-300'}`}>JavaScript</button> <button onClick={() => setDebugView('python')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'python' ? 'bg-zinc-800 text-blue-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Python</button> <button onClick={() => setDebugView('submitted')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'submitted' ? 'bg-zinc-800 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Submitted Prompt</button> </div> {debugView === 'submitted' ? ( <div className="flex-1 flex flex-col min-h-0"> <div className="bg-zinc-950 p-4 rounded border border-zinc-800 h-full flex flex-col"> <div className="text-xs font-bold text-zinc-500 mb-2">EXACT PROMPT SENT TO API</div> {debugTrace.submittedPrompt ? ( <div className="flex-1 overflow-y-auto custom-scrollbar font-mono text-sm text-green-300 whitespace-pre-wrap select-text"> {debugTrace.submittedPrompt} </div> ) : ( <div className="flex-1 flex items-center justify-center text-zinc-600 italic text-sm"> No submitted prompt recorded for this item. Try regenerating. </div> )} {debugTrace.submittedPrompt && ( <div className="mt-4 flex justify-end"> <button onClick={() => navigator.clipboard.writeText(debugTrace.submittedPrompt || '')} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs flex items-center gap-2 transition-colors" > <Copy size={14} /> Copy to Clipboard </button> </div> )} </div> </div> ) : debugView === 'trace' ? ( <div className="flex-1 flex flex-col min-h-0 gap-4"> <div className="bg-zinc-950 p-4 rounded border border-zinc-800 relative group shrink-0"> <div className="text-xs font-bold text-zinc-500 mb-1">PREVIEW RESOLVED PROMPT</div> <div className="font-mono text-sm text-green-400 whitespace-pre-wrap select-text max-h-[150px] overflow-y-auto custom-scrollbar">{debugTrace.resolved}</div> <button onClick={() => navigator.clipboard.writeText(debugTrace.resolved)} className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity" title="Copy Prompt" > <Copy size={14} /> </button> </div> <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2 select-text custom-scrollbar"> <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div> {debugTrace.trace.map((line, i) => ( <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div> ))} </div> {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && ( <div className="bg-zinc-950 p-4 rounded border border-zinc-800 shrink-0"> <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div> <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar"> {debugTrace.referenceImages.map((img, i) => ( <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group"> <img src={img} className="w-full h-full object-cover" /> <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white p-1 text-center truncate">Ref #{i+1}</div> </div> ))} </div> </div> )} </div> ) : ( <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black flex flex-col"> <textarea readOnly value={getCodeSnippet(debugView as 'js' | 'python')} className="flex-1 w-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none select-text custom-scrollbar" /> <button onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView as 'js' | 'python'))} className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2 z-10" > <CodeIcon size={14}/> Copy Code </button> </div> )} </div> </Modal> )}
+        {showDebugModal && debugTrace && ( 
+            <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl"> 
+                <div className="flex flex-col gap-4 h-[70vh] overflow-hidden"> 
+                    <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800 shrink-0"> 
+                        <button onClick={() => setDebugView('trace')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'trace' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>Trace & Data</button> 
+                        <button onClick={() => setDebugView('storage')} className={`flex-1 py-1.5 text-xs font-bold rounded flex items-center justify-center gap-1 ${debugView === 'storage' ? 'bg-zinc-800 text-cyan-400' : 'text-zinc-500 hover:text-zinc-300'}`}><HardDrive size={12}/>Storage</button>
+                        <button onClick={() => setDebugView('js')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'js' ? 'bg-zinc-800 text-yellow-400' : 'text-zinc-500 hover:text-zinc-300'}`}>JavaScript</button> 
+                        <button onClick={() => setDebugView('python')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'python' ? 'bg-zinc-800 text-blue-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Python</button> 
+                        <button onClick={() => setDebugView('submitted')} className={`flex-1 py-1.5 text-xs font-bold rounded ${debugView === 'submitted' ? 'bg-zinc-800 text-green-400' : 'text-zinc-500 hover:text-zinc-300'}`}>Submitted Prompt</button> 
+                    </div> 
+                    
+                    {debugView === 'storage' ? (
+                        <div className="flex-1 overflow-y-auto custom-scrollbar">
+                            <div className="space-y-4">
+                                {/* Connection Status */}
+                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                    <div className="text-xs font-bold text-zinc-500 mb-3 flex items-center gap-2">
+                                        {debugTrace.storageInfo?.isConnected ? <Cloud size={14} className="text-green-400"/> : <CloudOff size={14} className="text-red-400"/>}
+                                        STORAGE CONNECTION
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Status</div>
+                                            <div className={`text-sm font-mono ${debugTrace.storageInfo?.isConnected ? 'text-green-400' : 'text-red-400'}`}>
+                                                {debugTrace.storageInfo?.isConnected ? 'Connected' : 'Disconnected'}
+                                            </div>
+                                        </div>
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Mode</div>
+                                            <div className={`text-sm font-mono ${debugTrace.storageInfo?.isMockMode ? 'text-yellow-400' : 'text-cyan-400'}`}>
+                                                {debugTrace.storageInfo?.isMockMode ? 'OFFLINE (Mock)' : 'ONLINE (Google Drive)'}
+                                            </div>
+                                        </div>
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Provider</div>
+                                            <div className="text-sm font-mono text-zinc-300">{debugTrace.storageInfo?.providerType || 'none'}</div>
+                                        </div>
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">User</div>
+                                            <div className="text-sm font-mono text-zinc-300 truncate">{debugTrace.storageInfo?.userEmail || 'Not logged in'}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Drive Folder Structure */}
+                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                    <div className="text-xs font-bold text-zinc-500 mb-3 flex items-center gap-2">
+                                        <Database size={14}/>
+                                        DRIVE FOLDER STRUCTURE
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Project Folder ID</div>
+                                            <div className="text-sm font-mono text-cyan-400 break-all">{debugTrace.storageInfo?.projectFolderId || 'Not created'}</div>
+                                        </div>
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Project Data File (project.json)</div>
+                                            <div className="text-sm font-mono text-cyan-400 break-all">{debugTrace.storageInfo?.projectDbFileId || 'Not created'}</div>
+                                        </div>
+                                        {debugTrace.storageInfo?.folderMap && Object.keys(debugTrace.storageInfo.folderMap).length > 0 && (
+                                            <div className="bg-black p-3 rounded border border-zinc-800">
+                                                <div className="text-[10px] text-zinc-500 uppercase mb-2">Department Folders</div>
+                                                <div className="space-y-1">
+                                                    {Object.entries(debugTrace.storageInfo.folderMap).map(([name, id]) => (
+                                                        <div key={name} className="flex justify-between text-xs">
+                                                            <span className="text-zinc-400">{name}/</span>
+                                                            <span className="font-mono text-zinc-600 truncate ml-2">{id}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Current Node Media */}
+                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                    <div className="text-xs font-bold text-zinc-500 mb-3">CURRENT NODE MEDIA LOCATION</div>
+                                    <div className="space-y-2">
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Node ID</div>
+                                            <div className="text-sm font-mono text-zinc-300">{debugTrace.nodeId || 'Unknown'}</div>
+                                        </div>
+                                        <div className="bg-black p-3 rounded border border-zinc-800">
+                                            <div className="text-[10px] text-zinc-500 uppercase">Image URL Type</div>
+                                            <div className="text-sm font-mono">
+                                                {debugTrace.imageUrl ? (
+                                                    debugTrace.imageUrl.startsWith('data:') ? (
+                                                        <span className="text-yellow-400">Base64 (In Memory Only - NOT saved to Drive)</span>
+                                                    ) : debugTrace.imageUrl.startsWith('https://drive.google.com') || debugTrace.imageUrl.startsWith('https://lh3.googleusercontent.com') ? (
+                                                        <span className="text-green-400">Google Drive URL ✓</span>
+                                                    ) : debugTrace.imageUrl.startsWith('https://') ? (
+                                                        <span className="text-cyan-400">External URL (API Response)</span>
+                                                    ) : (
+                                                        <span className="text-zinc-400">Unknown format</span>
+                                                    )
+                                                ) : (
+                                                    <span className="text-zinc-600">No image generated</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {debugTrace.imageUrl && (
+                                            <div className="bg-black p-3 rounded border border-zinc-800">
+                                                <div className="text-[10px] text-zinc-500 uppercase">Image URL (truncated)</div>
+                                                <div className="text-xs font-mono text-zinc-400 break-all">
+                                                    {debugTrace.imageUrl.startsWith('data:') 
+                                                        ? `${debugTrace.imageUrl.substring(0, 50)}... [${Math.round(debugTrace.imageUrl.length / 1024)}KB base64]`
+                                                        : debugTrace.imageUrl
+                                                    }
+                                                </div>
+                                            </div>
+                                        )}
+                                        {debugTrace.videoUrl && (
+                                            <div className="bg-black p-3 rounded border border-zinc-800">
+                                                <div className="text-[10px] text-zinc-500 uppercase">Video URL</div>
+                                                <div className="text-xs font-mono text-zinc-400 break-all">{debugTrace.videoUrl}</div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Storage Warning */}
+                                <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-4">
+                                    <div className="text-xs font-bold text-yellow-500 mb-2">⚠️ IMPORTANT: Image Storage Behavior</div>
+                                    <div className="text-xs text-yellow-600/80 space-y-1">
+                                        <p>• Images from Gemini/Imagen are returned as <strong>base64 data URLs</strong></p>
+                                        <p>• Base64 images are stored in <strong>browser memory only</strong></p>
+                                        <p>• They are <strong>NOT automatically uploaded to Google Drive</strong></p>
+                                        <p>• localStorage saves are stripped of base64 to prevent quota errors</p>
+                                        <p>• To persist images: Export to file or manually upload to Drive</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ) : debugView === 'submitted' ? ( 
+                        <div className="flex-1 flex flex-col min-h-0"> 
+                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800 h-full flex flex-col"> 
+                                <div className="text-xs font-bold text-zinc-500 mb-2">EXACT PROMPT SENT TO API</div> 
+                                {debugTrace.submittedPrompt ? ( 
+                                    <div className="flex-1 overflow-y-auto custom-scrollbar font-mono text-sm text-green-300 whitespace-pre-wrap select-text"> {debugTrace.submittedPrompt} </div> 
+                                ) : ( 
+                                    <div className="flex-1 flex items-center justify-center text-zinc-600 italic text-sm"> No submitted prompt recorded for this item. Try regenerating. </div> 
+                                )} 
+                                {debugTrace.submittedPrompt && ( 
+                                    <div className="mt-4 flex justify-end"> 
+                                        <button onClick={() => navigator.clipboard.writeText(debugTrace.submittedPrompt || '')} className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs flex items-center gap-2 transition-colors" > <Copy size={14} /> Copy to Clipboard </button> 
+                                    </div> 
+                                )} 
+                            </div> 
+                        </div> 
+                    ) : debugView === 'trace' ? ( 
+                        <div className="flex-1 flex flex-col min-h-0 gap-4"> 
+                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800 relative group shrink-0"> 
+                                <div className="text-xs font-bold text-zinc-500 mb-1">PREVIEW RESOLVED PROMPT</div> 
+                                <div className="font-mono text-sm text-green-400 whitespace-pre-wrap select-text max-h-[150px] overflow-y-auto custom-scrollbar">{debugTrace.resolved}</div> 
+                                <button onClick={() => navigator.clipboard.writeText(debugTrace.resolved)} className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity" title="Copy Prompt" > <Copy size={14} /> </button> 
+                            </div> 
+                            <div className="flex-1 overflow-y-auto border border-zinc-800 rounded bg-black p-4 font-mono text-xs text-zinc-300 space-y-2 select-text custom-scrollbar"> 
+                                <div className="text-zinc-500 font-bold border-b border-zinc-800 pb-2 mb-2">RESOLUTION TRACE</div> 
+                                {debugTrace.trace.map((line, i) => ( <div key={i} className="whitespace-pre-wrap border-l-2 border-zinc-800 pl-2">{line}</div> ))} 
+                            </div> 
+                            {debugTrace.referenceImages && debugTrace.referenceImages.length > 0 && ( 
+                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800 shrink-0"> 
+                                    <div className="text-xs font-bold text-zinc-500 mb-2">RESOLVED REFERENCE IMAGES ({debugTrace.referenceImages.length})</div> 
+                                    <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar"> 
+                                        {debugTrace.referenceImages.map((img, i) => ( 
+                                            <div key={i} className="w-24 h-24 rounded border border-zinc-700 overflow-hidden bg-black shrink-0 relative group"> 
+                                                <img src={img} className="w-full h-full object-cover" /> 
+                                                <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-[9px] text-white p-1 text-center truncate">Ref #{i+1}</div> 
+                                            </div> 
+                                        ))} 
+                                    </div> 
+                                </div> 
+                            )} 
+                        </div> 
+                    ) : ( 
+                        <div className="flex-1 overflow-hidden relative border border-zinc-800 rounded bg-black flex flex-col"> 
+                            <textarea readOnly value={getCodeSnippet(debugView as 'js' | 'python')} className="flex-1 w-full bg-black p-4 font-mono text-xs text-zinc-300 resize-none focus:outline-none select-text custom-scrollbar" /> 
+                            <button onClick={() => navigator.clipboard.writeText(getCodeSnippet(debugView as 'js' | 'python'))} className="absolute top-2 right-2 bg-zinc-800 text-zinc-400 hover:text-white p-2 rounded text-xs flex items-center gap-2 z-10" > <CodeIcon size={14}/> Copy Code </button> 
+                        </div> 
+                    )} 
+                </div> 
+            </Modal> 
+        )}
     </div>
   );
 };

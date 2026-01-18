@@ -185,43 +185,57 @@ class GeminiClient {
         const ai = this.getClient();
         const model = options.model || this.config.defaultModel || MODELS.TEXT_FAST;
         
-        const stream = await ai.models.generateContentStream({
-            model,
-            contents: prompt,
-            config: {
-                systemInstruction: options.systemInstruction,
-                maxOutputTokens: options.maxOutputTokens,
-                temperature: options.temperature,
-                stopSequences: options.stopSequences,
-                responseMimeType: options.responseMimeType,
-                responseSchema: options.responseSchema,
-                thinkingConfig: options.thinkingBudget ? {
-                    thinkingBudget: options.thinkingBudget,
-                    includeThoughts: options.includeThoughts ?? true
-                } : undefined
-            }
-        });
+        try {
+            const stream = await ai.models.generateContentStream({
+                model,
+                contents: prompt,
+                config: {
+                    systemInstruction: options.systemInstruction,
+                    maxOutputTokens: options.maxOutputTokens,
+                    temperature: options.temperature,
+                    stopSequences: options.stopSequences,
+                    responseMimeType: options.responseMimeType,
+                    responseSchema: options.responseSchema,
+                    thinkingConfig: options.thinkingBudget ? {
+                        thinkingBudget: options.thinkingBudget,
+                        includeThoughts: options.includeThoughts ?? true
+                    } : undefined
+                }
+            });
 
-        let fullText = '';
-        let thinkingText = '';
-        
-        for await (const chunk of stream) {
-            if (chunk.candidates?.[0]?.content?.parts) {
-                for (const part of chunk.candidates[0].content.parts) {
-                    if (!part.text) continue;
-                    
-                    if (part.thought) {
-                        thinkingText = part.text + thinkingText;
-                        options.onThought?.(thinkingText);
-                    } else {
-                        fullText += part.text;
-                        options.onText?.(fullText);
+            let fullText = '';
+            let thinkingText = '';
+            
+            try {
+                for await (const chunk of stream) {
+                    if (chunk.candidates?.[0]?.content?.parts) {
+                        for (const part of chunk.candidates[0].content.parts) {
+                            if (!part.text) continue;
+                            
+                            if (part.thought) {
+                                thinkingText += part.text;
+                                options.onThought?.(thinkingText);
+                            } else {
+                                fullText += part.text;
+                                options.onText?.(fullText);
+                            }
+                        }
                     }
                 }
+            } catch (streamError) {
+                console.error('[GeminiClient] Stream processing error:', streamError);
+                // Return whatever we have so far
+                if (fullText) {
+                    return { text: fullText };
+                }
+                throw streamError;
             }
-        }
 
-        return { text: fullText };
+            return { text: fullText };
+        } catch (error) {
+            console.error('[GeminiClient] generateTextStream error:', error);
+            throw error;
+        }
     }
 
     // --- Image Generation ---

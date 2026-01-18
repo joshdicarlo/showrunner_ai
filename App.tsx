@@ -19,6 +19,7 @@ import { generateLumaVideo, generateLumaImage } from './services/lumaService';
 import { discoverAll, discoverCharacters, discoverLocations, discoverScenes } from './services/discoveryService';
 import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
+import { useStorage, storageManager } from './services/storage';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
@@ -90,12 +91,88 @@ const App: React.FC = () => {
   const [renderQueue, setRenderQueue] = useState<RenderTask[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
   
+  // Storage hook for Google Drive/future storage backends
+  const storage = useStorage();
+  
+  const activeProject = projects.find(p => p.id === currentProjectId);
+  
   const projectsRef = useRef(projects);
   const currentProjectIdRef = useRef(currentProjectId);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
   useEffect(() => { currentProjectIdRef.current = currentProjectId; }, [currentProjectId]);
 
-  const activeProject = projects.find(p => p.id === currentProjectId);
+  // Persist projects to localStorage for offline access
+  // Note: We strip base64 image data to avoid hitting localStorage quota (~5MB limit)
+  const PROJECTS_STORAGE_KEY = 'showrunner-projects';
+  
+  useEffect(() => {
+      if (projects.length > 0) {
+          try {
+              // Strip large base64 data from nodes before saving to localStorage
+              const projectsForStorage = projects.map(p => ({
+                  ...p,
+                  nodes: p.nodes.map(n => ({
+                      ...n,
+                      data: {
+                          ...n.data,
+                          // Keep image URLs but strip inline base64 data (starts with 'data:')
+                          imageUrl: n.data.imageUrl?.startsWith('data:') ? undefined : n.data.imageUrl,
+                          videoUrl: n.data.videoUrl?.startsWith('data:') ? undefined : n.data.videoUrl,
+                      }
+                  }))
+              }));
+              localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projectsForStorage));
+          } catch (e: any) {
+              if (e.name === 'QuotaExceededError') {
+                  console.warn('[App] localStorage quota exceeded, clearing old data');
+                  // Try to save just project metadata without nodes
+                  try {
+                      const minimalProjects = projects.map(p => ({
+                          ...p,
+                          nodes: [],
+                          assets: p.assets.map(a => ({ ...a, thumbnailUrl: undefined }))
+                      }));
+                      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(minimalProjects));
+                  } catch {
+                      console.error('[App] Failed to save even minimal project data');
+                  }
+              } else {
+                  console.error('[App] Failed to persist projects:', e);
+              }
+          }
+      }
+  }, [projects]);
+
+  // Load projects from localStorage on mount
+  useEffect(() => {
+      const stored = localStorage.getItem(PROJECTS_STORAGE_KEY);
+      if (stored) {
+          try {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                  setProjects(parsed);
+              }
+          } catch (e) {
+              console.error('Failed to parse stored projects:', e);
+          }
+      }
+  }, []);
+  
+  // Sync active project to storage when it changes
+  useEffect(() => {
+      if (activeProject && storage.isAuthenticated && !storage.isMockMode) {
+          const syncTimer = setTimeout(() => {
+              storage.syncProject(activeProject).catch(console.error);
+          }, 3000); // Debounce by 3 seconds
+          return () => clearTimeout(syncTimer);
+      }
+  }, [activeProject, storage.isAuthenticated, storage.isMockMode, storage.syncProject]);
+
+  // Keep isDriveConnected in sync with storage state
+  useEffect(() => {
+      setIsDriveConnected(storage.isAuthenticated);
+      setIsMockDrive(storage.isMockMode);
+  }, [storage.isAuthenticated, storage.isMockMode]);
 
   const handleTaskExecution = async (task: RenderTask): Promise<string> => {
       const activeProj = projectsRef.current.find(p => p.id === currentProjectIdRef.current);
@@ -391,10 +468,38 @@ const App: React.FC = () => {
       return map;
   }, [activeProject?.nodes, activeProject?.assets]);
 
-  const handleLoginSuccess = (isMock: boolean) => {
+  const handleLoginSuccess = async (isMock: boolean) => {
       setIsMockDrive(isMock);
       setIsDriveConnected(true);
       setIsAuthenticated(true);
+      
+      // Load projects from cloud storage if connected (not mock mode)
+      if (!isMock) {
+          try {
+              console.log('[App] Loading projects from cloud storage...');
+              // Use storageManager directly since hook state won't be updated yet
+              const cloudProjects = await storageManager.loadProjects();
+              console.log(`[App] Found ${cloudProjects.length} cloud projects`);
+              
+              if (cloudProjects.length > 0) {
+                  // Merge cloud projects with local projects (cloud wins for conflicts)
+                  setProjects(prev => {
+                      const localProjectIds = new Set(prev.map(p => p.id));
+                      const newFromCloud = cloudProjects.filter(cp => !localProjectIds.has(cp.id));
+                      const updatedProjects = prev.map(localProj => {
+                          const cloudVersion = cloudProjects.find(cp => cp.id === localProj.id);
+                          if (cloudVersion && new Date(cloudVersion.updatedAt) > new Date(localProj.updatedAt)) {
+                              return cloudVersion;
+                          }
+                          return localProj;
+                      });
+                      return [...updatedProjects, ...newFromCloud];
+                  });
+              }
+          } catch (e) {
+              console.error('Failed to load projects from storage:', e);
+          }
+      }
   };
 
   const handleConnectDrive = async () => {
@@ -420,19 +525,9 @@ const App: React.FC = () => {
       setIsDriveConnected(true);
   }
 
-  const syncToDrive = useCallback(async (project: Project) => {
-      if (!isDriveConnected || !project.driveDbId) return;
-      await GoogleDriveService.updateProjectDB(project.driveDbId, project.assets);
-  }, [isDriveConnected]);
-
-  useEffect(() => {
-      if (activeProject && isDriveConnected) {
-          const timer = setTimeout(() => {
-              syncToDrive(activeProject);
-          }, 3000); 
-          return () => clearTimeout(timer);
-      }
-  }, [activeProject?.assets, isDriveConnected, syncToDrive]);
+  // Legacy sync DISABLED - now using new storage system
+  // The old Sheets-based sync was causing 400 errors
+  // Projects now sync via GoogleDriveStorage.saveProject() which uses project.json files
 
   const resetProjectModal = () => {
       setNewProjectTitle('');
@@ -525,14 +620,27 @@ const App: React.FC = () => {
       }
 
       let driveData = {};
-      if (isDriveConnected) {
+      if (isDriveConnected && !isMockDrive) {
           try {
-              const struct = await GoogleDriveService.createProjectDriveStructure(title);
-              driveData = {
-                  driveFolderId: struct.projectId,
-                  driveDbId: struct.dbId
+              // Use new storage system to create project structure
+              const tempProject: Project = {
+                  id: `p-${Date.now()}`,
+                  title,
+                  summary,
+                  type,
+                  assets: initialAssets,
+                  nodes: initialNodes,
+                  connections: [],
+                  updatedAt: new Date(),
+                  settings: DEFAULT_PROJECT_SETTINGS,
               };
-              setDriveFolderMap(struct.folders); 
+              const structure = await storage.createProjectInStorage(tempProject);
+              if (structure) {
+                  driveData = {
+                      driveFolderId: structure.rootId,
+                      driveDbId: structure.dbFileId
+                  };
+              }
           } catch(e) {
               console.error("Failed to create Drive structure", e);
           }
@@ -1154,12 +1262,19 @@ const App: React.FC = () => {
           if (!fullText) {
               alert("No approved scripts found to analyze. Please mark a script as 'Approved' in the Writers Room.");
               setIsOneShotModalOpen(false);
+              setIsAnalyzing(false);
               return;
           }
 
           // Use new unified discovery service
           const rawData = await discoverAll(fullText, {
-              onThinking: (thinking) => setAnalysisThinking(thinking)
+              onThinking: (thinking) => {
+                  try {
+                      setAnalysisThinking(thinking);
+                  } catch (e) {
+                      console.warn('Failed to update thinking state:', e);
+                  }
+              }
           });
           const newItems: OneShotItem[] = [];
           
@@ -1190,8 +1305,10 @@ const App: React.FC = () => {
           });
 
           setOneShotItems(newItems);
-      } catch(e) {
-          console.error("One Shot Error", e);
+      } catch(e: any) {
+          console.error("One Shot Error:", e);
+          setAnalysisThinking(`Error: ${e?.message || 'Discovery failed. Please try again.'}`);
+          // Don't close the modal so user can see the error
       } finally {
           setIsAnalyzing(false);
       }
@@ -2203,6 +2320,15 @@ const App: React.FC = () => {
                             onGenerateVideo={handleGenerateVideoFromNode} 
                             assetThumbnails={assetThumbnails}
                             onRequestGeneration={handleNodeGenerationRequest}
+                            storageDebug={{
+                                isConnected: storage.isAuthenticated,
+                                isMockMode: storage.isMockMode,
+                                providerType: storage.providerType,
+                                userEmail: storage.authState?.userEmail || null,
+                                projectFolderId: activeProject?.id ? storage.getProjectStructure(activeProject.id)?.rootId : undefined,
+                                projectDbFileId: activeProject?.id ? storage.getProjectStructure(activeProject.id)?.dbFileId : undefined,
+                                folderMap: activeProject?.id ? (storage.getProjectStructure(activeProject.id)?.folders || {}) : {},
+                            }}
                          />
                      ) : (
                         <GalleryView 
