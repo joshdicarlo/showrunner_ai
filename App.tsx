@@ -1405,12 +1405,19 @@ const App: React.FC = () => {
 
       itemsToProcess.forEach(item => processItem(item));
 
-      setProjects(prev => prev.map(p => {
-          if (p.id === currentProjectIdRef.current) {
-              return { ...p, assets: [...p.assets, ...newAssets] };
-          }
-          return p;
-      }));
+      // Update state and ref synchronously before queuing tasks
+      // This ensures resolvePrompt can find the newly created assets
+      setProjects(prev => {
+          const updated = prev.map(p => {
+              if (p.id === currentProjectIdRef.current) {
+                  return { ...p, assets: [...p.assets, ...newAssets] };
+              }
+              return p;
+          });
+          // Sync the ref immediately so queue executor has access to new assets
+          projectsRef.current = updated;
+          return updated;
+      });
 
       if (primaryTasks.length > 0) {
           primaryTasks.forEach(t => queueService.add(t));
