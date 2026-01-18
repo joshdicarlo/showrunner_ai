@@ -92,12 +92,13 @@ export const signIn = (): Promise<string> => {
             return;
         }
 
-        // Setup a short timeout. If popup is blocked or user closes it on error, we fallback.
+        // Setup a longer timeout. Multiple consent screens can take time.
+        // 2 minutes should be plenty for even the slowest consent flow.
         const timeout = setTimeout(() => {
             console.warn("Sign-in timed out. Falling back to Mock Mode.");
             enableMockMode();
             resolve("mock-token-timeout");
-        }, 8000); // 8 seconds
+        }, 120000); // 2 minutes
 
         try {
             // Override callback for this specific request
@@ -200,7 +201,8 @@ export const createProjectDriveStructure = async (projectName: string): Promise<
     }
 
     // Real API Implementation
-    const rootId = await findOrCreateFolder("Showrunner-AI");
+    const appDataId = await findOrCreateFolder("AppData");
+    const rootId = await findOrCreateFolder("Showrunner-AI", appDataId);
     const projectId = await findOrCreateFolder(projectName, rootId);
 
     const folders: Record<string, string> = {};

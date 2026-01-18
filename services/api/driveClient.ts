@@ -143,11 +143,12 @@ class DriveClient {
         }
 
         return new Promise((resolve) => {
+            // 2 minutes timeout - multiple consent screens can take time
             const timeout = setTimeout(() => {
                 console.warn("[DriveClient] Sign-in timed out. Falling back to Mock Mode.");
                 this.enableMockMode();
                 resolve("mock-token-timeout");
-            }, 8000);
+            }, 120000);
 
             try {
                 this.tokenClient.callback = (resp: any) => {

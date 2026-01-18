@@ -114,7 +114,8 @@ export const useDrive = (): UseDriveReturn => {
         setError(null);
         
         try {
-            const rootId = await client.findOrCreateFolder("Showrunner-AI");
+            const appDataId = await client.findOrCreateFolder("AppData");
+            const rootId = await client.findOrCreateFolder("Showrunner-AI", appDataId);
             const projectId = await client.findOrCreateFolder(projectName, rootId);
 
             const folders: Record<string, string> = {};
