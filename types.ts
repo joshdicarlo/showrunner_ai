@@ -144,6 +144,7 @@ export interface Project {
   title: string;
   summary: string;
   type: 'Series' | 'Feature' | 'Short';
+  status?: 'active' | 'archived'; // Project status - archived projects are hidden by default
   assets: ProjectAsset[];
   nodes: FlowNode[];
   connections: FlowConnection[];
@@ -176,7 +177,7 @@ export interface DriveConfig {
 // --- Render Queue Types ---
 export interface RenderTask {
     id: string;
-    type: 'image' | 'video';
+    type: 'image' | 'video' | 'text';
     prompt: string;
     assetId: string;
     // Added 'waiting' status for dependency management, 'stopped' for user cancellation

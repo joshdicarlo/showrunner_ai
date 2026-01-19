@@ -263,6 +263,32 @@ class StorageManager implements IStorageManager {
         }
     }
     
+    async deleteProject(projectId: string): Promise<boolean> {
+        if (!this.provider || !this.provider.isAuthenticated()) {
+            return false;
+        }
+        
+        const structure = this.getProjectStructure(projectId);
+        if (!structure) {
+            console.warn('[StorageManager] No structure found for project, cannot delete from cloud:', projectId);
+            return false;
+        }
+        
+        try {
+            await this.provider.deleteProject(projectId, structure);
+            
+            // Remove from local cache
+            this.projectStructures.delete(projectId);
+            this.saveProjectStructures();
+            
+            console.log('[StorageManager] Project deleted from cloud:', projectId);
+            return true;
+        } catch (e) {
+            console.error('[StorageManager] Failed to delete project:', e);
+            return false;
+        }
+    }
+    
     async loadProjects(): Promise<Project[]> {
         if (!this.provider || !this.provider.isAuthenticated()) {
             return [];

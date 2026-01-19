@@ -23,7 +23,7 @@ import { useStorage, storageManager } from './services/storage';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search, User, MapPin, Clapperboard, CheckCircle, Circle, ChevronDown, ChevronRight, Play, Edit3, GitBranch, RefreshCw, FileText } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search, User, MapPin, Clapperboard, CheckCircle, Circle, ChevronDown, ChevronRight, Play, Edit3, GitBranch, RefreshCw, FileText, Archive, Trash2, MoreVertical, ArchiveRestore, Eye, EyeOff } from 'lucide-react';
 
 type View = 'dashboard' | 'project';
 
@@ -60,6 +60,12 @@ const App: React.FC = () => {
   const [isOneShotModalOpen, setIsOneShotModalOpen] = useState(false);
   const [isRenderQueueOpen, setIsRenderQueueOpen] = useState(false); 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  
+  // Project management
+  const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
+  const [projectToArchive, setProjectToArchive] = useState<string | null>(null);
+  const [openProjectMenu, setOpenProjectMenu] = useState<string | null>(null);
   
   const [creationMode, setCreationMode] = useState<'blank' | 'seed'>('blank');
   const [newProjectTitle, setNewProjectTitle] = useState('');
@@ -222,6 +228,10 @@ const App: React.FC = () => {
               matchedAssets
           );
           return await generateImage(resolved, task.config?.aspectRatio || "16:9", task.config?.model, refImages);
+      } else if (task.type === 'text') {
+          // Text generation (Writer nodes)
+          const result = await generateCreativeText(resolved);
+          return result;
       } else if (task.type === 'video') {
           const startImage = task.startImage; 
           const duration = 5; 
@@ -269,7 +279,21 @@ const App: React.FC = () => {
               // Basic validation for node creation
               if (!asset && !task.config?.targetNodeId) return p;
 
-              // 1. Create or update the flow node
+              // Handle text generation completion separately
+              if (task.type === 'text' && task.config?.targetNodeId) {
+                  const updatedNodes = p.nodes.map(n => {
+                      if (n.id === task.config!.targetNodeId) {
+                          return {
+                              ...n,
+                              data: { ...n.data, text: result, status: 'review' as const }
+                          };
+                      }
+                      return n;
+                  });
+                  return { ...p, nodes: updatedNodes };
+              }
+
+              // 1. Create or update the flow node for image/video
               const newNodeId = task.config?.targetNodeId || `gen-node-${Date.now()}-${Math.random()}`;
               const existingNode = task.config?.targetNodeId ? p.nodes.find(n => n.id === task.config!.targetNodeId) : null;
               
@@ -612,6 +636,40 @@ const App: React.FC = () => {
           ...root,
           children: generatedSeeds.filter(s => s.parentId === root.id)
       }));
+  };
+
+  // Project Management Handlers
+  const handleArchiveProject = (projectId: string) => {
+      setProjects(prev => prev.map(p => 
+          p.id === projectId ? { ...p, status: 'archived' as const } : p
+      ));
+      setProjectToArchive(null);
+      if (currentProjectId === projectId) {
+          setCurrentProjectId(null);
+          setView('dashboard');
+      }
+  };
+
+  const handleUnarchiveProject = (projectId: string) => {
+      setProjects(prev => prev.map(p => 
+          p.id === projectId ? { ...p, status: 'active' as const } : p
+      ));
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+      // Delete from cloud storage first (if synced)
+      const project = projects.find(p => p.id === projectId);
+      if (project?.driveFolderId) {
+          await storage.deleteProjectFromStorage(projectId);
+      }
+      
+      // Remove from local state
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+      setProjectToDelete(null);
+      if (currentProjectId === projectId) {
+          setCurrentProjectId(null);
+          setView('dashboard');
+      }
   };
 
   const handleRollDice = async () => {
@@ -1349,50 +1407,7 @@ const App: React.FC = () => {
       const batchId = `batch-node-${Date.now()}`;
       const batchLabel = `Node: ${request.prompt?.substring(0, 20) || request.type}`;
       
-      if (request.type === 'text') {
-          // For text generation, execute directly (not queued)
-          (async () => {
-              try {
-                  const { resolved } = resolvePrompt(
-                      request.prompt,
-                      activeProj?.assets,
-                      activeProj?.assets.find(a => a.id === node.assetId),
-                      activeProj?.settings || DEFAULT_PROJECT_SETTINGS,
-                      request.config?.styleId
-                  );
-                  const result = await generateCreativeText(resolved);
-                  setProjects(prev => prev.map(p => {
-                      if (p.id === currentProjectIdRef.current) {
-                          return {
-                              ...p,
-                              nodes: p.nodes.map(n => n.id === request.nodeId ? {
-                                  ...n,
-                                  data: { ...n.data, text: result, status: 'review' }
-                              } : n)
-                          };
-                      }
-                      return p;
-                  }));
-              } catch (e) {
-                  console.error("Text generation failed:", e);
-                  setProjects(prev => prev.map(p => {
-                      if (p.id === currentProjectIdRef.current) {
-                          return {
-                              ...p,
-                              nodes: p.nodes.map(n => n.id === request.nodeId ? {
-                                  ...n,
-                                  data: { ...n.data, status: 'draft' }
-                              } : n)
-                          };
-                      }
-                      return p;
-                  }));
-              }
-          })();
-          return;
-      }
-      
-      // Image and video generation go through the queue
+      // All generation types (text, image, video) go through the queue
       queueService.add({
           id: `task-node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           type: request.type,
@@ -2271,47 +2286,138 @@ const App: React.FC = () => {
                  <div className="flex items-center justify-between mb-8">
                      <h3 className="text-sm font-black text-zinc-500 uppercase tracking-[0.2em]">Recent Productions</h3>
                      <div className="h-[1px] flex-1 bg-white/5 mx-6" />
+                     <button
+                         onClick={() => setShowArchivedProjects(!showArchivedProjects)}
+                         className={`flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full transition-colors ${
+                             showArchivedProjects 
+                                 ? 'bg-zinc-700 text-zinc-200' 
+                                 : 'bg-zinc-800/50 text-zinc-500 hover:text-zinc-300'
+                         }`}
+                     >
+                         {showArchivedProjects ? <Eye size={12} /> : <EyeOff size={12} />}
+                         {showArchivedProjects ? 'Showing Archived' : 'Show Archived'}
+                     </button>
                  </div>
                  
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6">
-                     {projects.map(project => (
+                 <div 
+                     className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6"
+                     onClick={() => setOpenProjectMenu(null)}
+                 >
+                     {projects
+                         .filter(p => showArchivedProjects || p.status !== 'archived')
+                         .map(project => (
                          <div 
                             key={project.id}
-                            onClick={() => { setCurrentProjectId(project.id); setView('project'); }}
-                            className="bg-zinc-900/40 backdrop-blur-md border border-white/5 rounded-2xl p-6 hover:border-blue-500/50 transition-all cursor-pointer group hover:shadow-2xl hover:shadow-blue-500/10 relative overflow-hidden"
+                            className={`bg-zinc-900/40 backdrop-blur-md border rounded-2xl p-6 transition-all cursor-pointer group hover:shadow-2xl relative overflow-hidden ${
+                                project.status === 'archived' 
+                                    ? 'border-zinc-700/50 opacity-60 hover:opacity-100 hover:border-zinc-600' 
+                                    : 'border-white/5 hover:border-blue-500/50 hover:shadow-blue-500/10'
+                            }`}
                          >
                              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 rounded-full blur-3xl -mr-16 -mt-16 group-hover:bg-blue-600/10 transition-colors" />
                              
-                             <div className="flex justify-between items-start mb-6 relative z-10">
-                                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-900/40 to-purple-900/40 border border-white/10 flex items-center justify-center text-white font-black text-xl group-hover:scale-110 transition-transform">
-                                     {project.title.substring(0, 2).toUpperCase()}
-                                 </div>
-                                 <div className="flex flex-col items-end gap-2">
-                                     <span className="text-[10px] font-black uppercase tracking-widest bg-zinc-800 text-zinc-400 px-3 py-1 rounded-full border border-white/5">
-                                         {project.type}
-                                     </span>
-                                     {project.driveDbId && !isMockDrive && (
-                                         <div className="text-green-500" title="Synced to Cloud">
-                                             <Cloud size={14} />
+                             {/* Project actions dropdown */}
+                             <div 
+                                 className="absolute top-4 right-4 z-30"
+                                 onClick={(e) => e.stopPropagation()}
+                             >
+                                 <div className="relative">
+                                     <button 
+                                         onClick={(e) => { 
+                                             e.stopPropagation(); 
+                                             e.preventDefault();
+                                             setOpenProjectMenu(openProjectMenu === project.id ? null : project.id);
+                                         }}
+                                         className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-white transition-colors"
+                                     >
+                                         <MoreVertical size={16} />
+                                     </button>
+                                     {openProjectMenu === project.id && (
+                                         <div 
+                                             className="absolute top-full right-0 mt-1 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl min-w-[140px] z-50"
+                                             onClick={(e) => e.stopPropagation()}
+                                         >
+                                             {project.status === 'archived' ? (
+                                                 <button
+                                                     onClick={(e) => { 
+                                                         e.stopPropagation(); 
+                                                         e.preventDefault();
+                                                         setOpenProjectMenu(null); 
+                                                         handleUnarchiveProject(project.id); 
+                                                     }}
+                                                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 rounded-t-lg"
+                                                 >
+                                                     <ArchiveRestore size={14} /> Unarchive
+                                                 </button>
+                                             ) : (
+                                                 <button
+                                                     onClick={(e) => { 
+                                                         e.stopPropagation(); 
+                                                         e.preventDefault();
+                                                         setOpenProjectMenu(null); 
+                                                         setProjectToArchive(project.id); 
+                                                     }}
+                                                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 rounded-t-lg"
+                                                 >
+                                                     <Archive size={14} /> Archive
+                                                 </button>
+                                             )}
+                                             <button
+                                                 onClick={(e) => { 
+                                                     e.stopPropagation(); 
+                                                     e.preventDefault();
+                                                     setOpenProjectMenu(null); 
+                                                     setProjectToDelete(project.id); 
+                                                 }}
+                                                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-900/30 rounded-b-lg"
+                                             >
+                                                 <Trash2 size={14} /> Delete
+                                             </button>
                                          </div>
                                      )}
                                  </div>
                              </div>
-
-                             <h3 className="font-bold text-xl text-white mb-3 group-hover:text-blue-400 transition-colors line-clamp-1">{project.title}</h3>
-                             <p className="text-sm text-zinc-500 line-clamp-2 leading-relaxed mb-6 h-10">{project.summary || "No description provided."}</p>
                              
-                             <div className="mt-auto pt-6 border-t border-white/5 flex justify-between items-center text-[10px] font-bold text-zinc-600 uppercase tracking-wider relative z-10">
-                                 <div className="flex items-center gap-4">
-                                     <span className="flex items-center gap-1.5"><Layout size={12}/> {project.assets.length}</span>
-                                     <span className="flex items-center gap-1.5"><Clock size={12}/> {project.updatedAt.toLocaleDateString()}</span>
+                             <div 
+                                 onClick={() => { setCurrentProjectId(project.id); setView('project'); }}
+                                 className="relative z-10"
+                             >
+                                 <div className="flex justify-between items-start mb-6">
+                                     <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-900/40 to-purple-900/40 border border-white/10 flex items-center justify-center text-white font-black text-xl group-hover:scale-110 transition-transform">
+                                         {project.title.substring(0, 2).toUpperCase()}
+                                     </div>
+                                     <div className="flex flex-col items-end gap-2 mr-8">
+                                         <span className="text-[10px] font-black uppercase tracking-widest bg-zinc-800 text-zinc-400 px-3 py-1 rounded-full border border-white/5">
+                                             {project.type}
+                                         </span>
+                                         {project.status === 'archived' && (
+                                             <span className="text-[10px] font-bold text-zinc-500 flex items-center gap-1">
+                                                 <Archive size={10} /> Archived
+                                             </span>
+                                         )}
+                                         {project.driveDbId && !isMockDrive && (
+                                             <div className="text-green-500" title="Synced to Cloud">
+                                                 <Cloud size={14} />
+                                             </div>
+                                         )}
+                                     </div>
                                  </div>
-                                 <ArrowRight size={16} className="text-zinc-700 group-hover:text-blue-500 group-hover:translate-x-1 transition-all" />
+
+                                 <h3 className="font-bold text-xl text-white mb-3 group-hover:text-blue-400 transition-colors line-clamp-1">{project.title}</h3>
+                                 <p className="text-sm text-zinc-500 line-clamp-2 leading-relaxed mb-6 h-10">{project.summary || "No description provided."}</p>
+                                 
+                                 <div className="mt-auto pt-6 border-t border-white/5 flex justify-between items-center text-[10px] font-bold text-zinc-600 uppercase tracking-wider">
+                                     <div className="flex items-center gap-4">
+                                         <span className="flex items-center gap-1.5"><Layout size={12}/> {project.assets.length}</span>
+                                         <span className="flex items-center gap-1.5"><Clock size={12}/> {project.updatedAt.toLocaleDateString()}</span>
+                                     </div>
+                                     <ArrowRight size={16} className="text-zinc-700 group-hover:text-blue-500 group-hover:translate-x-1 transition-all" />
+                                 </div>
                              </div>
                          </div>
                      ))}
                      
-                     {projects.length === 0 && (
+                     {projects.filter(p => showArchivedProjects || p.status !== 'archived').length === 0 && (
                          <div 
                              onClick={() => setIsCreateProjectOpen(true)}
                              className="border-2 border-dashed border-white/5 rounded-2xl p-8 flex flex-col items-center justify-center text-center hover:border-blue-500/50 hover:bg-blue-500/5 transition-all cursor-pointer group"
@@ -2615,6 +2721,52 @@ const App: React.FC = () => {
                      </div>
                  </div>
              </Modal>
+        )}
+
+        {/* Archive Project Confirmation - Dashboard View */}
+        {projectToArchive && (
+            <Modal title="Archive Project" onClose={() => setProjectToArchive(null)}>
+                <div className="space-y-4">
+                    <p className="text-zinc-300">
+                        Are you sure you want to archive <span className="font-bold text-white">"{projects.find(p => p.id === projectToArchive)?.title}"</span>?
+                    </p>
+                    <p className="text-sm text-zinc-500">
+                        Archived projects will be hidden from your dashboard but can be restored at any time.
+                    </p>
+                    <div className="flex justify-end gap-3 pt-4">
+                        <Button variant="ghost" onClick={() => setProjectToArchive(null)}>Cancel</Button>
+                        <Button onClick={() => handleArchiveProject(projectToArchive)}>
+                            <Archive size={16} /> Archive Project
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+        )}
+
+        {/* Delete Project Confirmation - Dashboard View */}
+        {projectToDelete && (
+            <Modal title="Delete Project" onClose={() => setProjectToDelete(null)}>
+                <div className="space-y-4">
+                    <p className="text-zinc-300">
+                        Are you sure you want to permanently delete <span className="font-bold text-red-400">"{projects.find(p => p.id === projectToDelete)?.title}"</span>?
+                    </p>
+                    <div className="bg-red-900/20 border border-red-800/50 rounded-lg p-3">
+                        <p className="text-sm text-red-300 flex items-start gap-2">
+                            <Trash2 size={16} className="flex-shrink-0 mt-0.5" />
+                            <span>This action cannot be undone. All assets, nodes, and settings will be permanently removed.</span>
+                        </p>
+                    </div>
+                    <div className="flex justify-end gap-3 pt-4">
+                        <Button variant="ghost" onClick={() => setProjectToDelete(null)}>Cancel</Button>
+                        <button 
+                            onClick={() => handleDeleteProject(projectToDelete)}
+                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors"
+                        >
+                            <Trash2 size={16} /> Delete Permanently
+                        </button>
+                    </div>
+                </div>
+            </Modal>
         )}
       </div>
     );
@@ -3019,6 +3171,52 @@ const App: React.FC = () => {
                 projectSettings={activeProject?.settings} 
                 onRemoveRef={handleRemoveRef} 
             />
+        )}
+
+        {/* Archive Project Confirmation */}
+        {projectToArchive && (
+            <Modal title="Archive Project" onClose={() => setProjectToArchive(null)}>
+                <div className="space-y-4">
+                    <p className="text-zinc-300">
+                        Are you sure you want to archive <span className="font-bold text-white">"{projects.find(p => p.id === projectToArchive)?.title}"</span>?
+                    </p>
+                    <p className="text-sm text-zinc-500">
+                        Archived projects will be hidden from your dashboard but can be restored at any time.
+                    </p>
+                    <div className="flex justify-end gap-3 pt-4">
+                        <Button variant="ghost" onClick={() => setProjectToArchive(null)}>Cancel</Button>
+                        <Button onClick={() => handleArchiveProject(projectToArchive)}>
+                            <Archive size={16} /> Archive Project
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+        )}
+
+        {/* Delete Project Confirmation */}
+        {projectToDelete && (
+            <Modal title="Delete Project" onClose={() => setProjectToDelete(null)}>
+                <div className="space-y-4">
+                    <p className="text-zinc-300">
+                        Are you sure you want to permanently delete <span className="font-bold text-red-400">"{projects.find(p => p.id === projectToDelete)?.title}"</span>?
+                    </p>
+                    <div className="bg-red-900/20 border border-red-800/50 rounded-lg p-3">
+                        <p className="text-sm text-red-300 flex items-start gap-2">
+                            <Trash2 size={16} className="flex-shrink-0 mt-0.5" />
+                            <span>This action cannot be undone. All assets, nodes, and settings will be permanently removed.</span>
+                        </p>
+                    </div>
+                    <div className="flex justify-end gap-3 pt-4">
+                        <Button variant="ghost" onClick={() => setProjectToDelete(null)}>Cancel</Button>
+                        <button 
+                            onClick={() => handleDeleteProject(projectToDelete)}
+                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors"
+                        >
+                            <Trash2 size={16} /> Delete Permanently
+                        </button>
+                    </div>
+                </div>
+            </Modal>
         )}
         
     </div>

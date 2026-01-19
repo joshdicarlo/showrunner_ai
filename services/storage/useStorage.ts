@@ -43,6 +43,7 @@ export interface UseStorageResult {
     createProjectInStorage: (project: Project) => Promise<ProjectStructure | null>;
     getProjectStructure: (projectId: string) => ProjectStructure | null;
     uploadMedia: (projectId: string, assetId: string, mediaUrl: string) => Promise<string | null>;
+    deleteProjectFromStorage: (projectId: string) => Promise<boolean>;
 }
 
 // ============================================================================
@@ -229,6 +230,10 @@ export function useStorage(): UseStorageResult {
         return await storageManager.uploadMedia(projectId, assetId, mediaUrl);
     }, []);
     
+    const deleteProjectFromStorage = useCallback(async (projectId: string): Promise<boolean> => {
+        return await storageManager.deleteProject(projectId);
+    }, []);
+    
     // ========================================================================
     // Return
     // ========================================================================
@@ -257,6 +262,7 @@ export function useStorage(): UseStorageResult {
         createProjectInStorage,
         getProjectStructure,
         uploadMedia,
+        deleteProjectFromStorage,
     };
 }
 
