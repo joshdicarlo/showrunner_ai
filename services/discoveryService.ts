@@ -193,16 +193,24 @@ const buildPrompt = (scriptText: string, options: DiscoveryOptions): string => {
     
     sections.push("You are a professional breakdown artist. Analyze the following script/story text and extract the requested elements.");
     sections.push("");
+    sections.push("CRITICAL CONSISTENCY REQUIREMENT:");
+    sections.push("You MUST be deterministic and consistent. If you analyze the same script twice, you MUST extract the exact same elements both times.");
+    sections.push("Do NOT randomly include or exclude characters, locations, or scenes between analyses.");
+    sections.push("");
     sections.push("REQUIREMENTS:");
     sections.push("");
     
     if (options.extractCharacters) {
-        sections.push(`1. CHARACTERS:
-   - Extract main characters only (ignore minor background characters)
+        sections.push(`1. CHARACTERS & CAST MEMBERS:
+   - Extract ALL speaking or significant on-screen characters from the script
+   - INCLUDE: humans, creatures, animals, robots, aliens, AI entities, and any character with dialogue or significant screen presence
+   - DO NOT exclude non-human characters - they are essential cast members
+   - ONLY ignore true background extras (e.g., "crowd", "pedestrians", "soldiers" without names/distinction)
    - Description MUST use this MANDATORY NATURAL LANGUAGE PARAGRAPH format:
    ${CHARACTER_PROMPT_TEMPLATE}
    - Provide a 'summary' field (1 short sentence) for the character header.
-   - Include a 'role' field (protagonist, antagonist, supporting, etc.)
+   - Include a 'role' field (protagonist, antagonist, supporting, creature, animal, etc.)
+   - CRITICAL: Ensure consistency - if you extract a character once, always extract them again in subsequent analyses
 `);
     }
     
@@ -305,12 +313,14 @@ export const discoverFromScript = async (
         opts.onProgress?.("Initializing AI analysis...", 0);
         
         // Use streaming with the new client API
+        // Use low temperature for consistency and determinism
         const result = await client.generateTextStream(prompt, {
             model: MODELS.TEXT_FAST,
             responseMimeType: "application/json",
             responseSchema: schema,
             thinkingBudget: 8000,
             includeThoughts: true,
+            temperature: 0.1, // Low temperature for consistent, deterministic results
             onThought: (thinking) => {
                 opts.onThinkingUpdate?.(thinking);
             }

@@ -1480,6 +1480,18 @@ const App: React.FC = () => {
           );
           const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
           
+          // Log which nodes are being analyzed for debugging
+          console.log(`[One-Shot Discovery] Analyzing ${scriptNodes.length} APPROVED script node(s):`, 
+              scriptNodes.map(n => ({
+                  id: n.id,
+                  type: n.type,
+                  status: n.data.status,
+                  label: n.data.label || 'Unlabeled',
+                  textLength: n.data.text?.length || 0
+              }))
+          );
+          console.log(`[One-Shot Discovery] Total script text length: ${fullText.length} characters`);
+          
           if (!fullText) {
               alert("No approved scripts found to analyze. Please mark a script as 'Approved' in the Writers Room.");
               setIsOneShotModalOpen(false);
@@ -1488,6 +1500,7 @@ const App: React.FC = () => {
           }
 
           // Use new unified discovery service
+          console.log('[One-Shot Discovery] Starting full breakdown...');
           const rawData = await discoverAll(fullText, {
               onThinking: (thinking) => {
                   try {
@@ -1497,6 +1510,15 @@ const App: React.FC = () => {
                   }
               }
           });
+          
+          console.log('[One-Shot Discovery] Results:', {
+              characters: rawData.characters.length,
+              locations: rawData.locations.length,
+              scenes: rawData.scenes.length
+          });
+          console.log('[One-Shot Discovery] Characters found:', rawData.characters.map(c => c.name));
+          console.log('[One-Shot Discovery] Locations found:', rawData.locations.map(l => l.name));
+          
           const newItems: OneShotItem[] = [];
           
           rawData.characters.forEach((c) => newItems.push({ 
@@ -1722,9 +1744,22 @@ const App: React.FC = () => {
         const scriptNodes = activeProject.nodes.filter(n => n.department === DepartmentType.WRITERS_ROOM && (n.type === NodeType.AI_TEXT_GEN || n.type === NodeType.TEXT_INPUT) && n.data.text);
         const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
         
+        // Log which nodes are being analyzed for debugging
+        console.log(`[Discovery] Analyzing ${scriptNodes.length} script node(s):`, 
+            scriptNodes.map(n => ({
+                id: n.id,
+                type: n.type,
+                status: n.data.status,
+                label: n.data.label || 'Unlabeled',
+                textLength: n.data.text?.length || 0
+            }))
+        );
+        console.log(`[Discovery] Total script text length: ${fullText.length} characters`);
+        
         if (!fullText) {
              alert("No scripts found in Writers Room to analyze.");
              setIsAnalyzeModalOpen(false);
+             setIsAnalyzing(false);
              return;
         }
 
@@ -1732,11 +1767,17 @@ const App: React.FC = () => {
         const onThinking = (thinking: string) => setAnalysisThinking(thinking);
         let results: any[] = [];
         if (analysisType === 'Characters') {
+            console.log('[Discovery] Extracting characters...');
             results = await discoverCharacters(fullText, onThinking);
+            console.log(`[Discovery] Found ${results.length} character(s):`, results.map(r => r.name));
         } else if (analysisType === 'Locations') {
+            console.log('[Discovery] Extracting locations...');
             results = await discoverLocations(fullText, onThinking);
+            console.log(`[Discovery] Found ${results.length} location(s):`, results.map(r => r.name));
         } else if (analysisType === 'Story') {
+            console.log('[Discovery] Extracting scenes...');
             results = await discoverScenes(fullText, autoFindShots, undefined, onThinking);
+            console.log(`[Discovery] Found ${results.length} scene(s):`, results.map(r => r.title));
         }
         
         const items: DetectedItem[] = results.map((r: any, idx: number) => {
