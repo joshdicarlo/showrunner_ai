@@ -7,24 +7,37 @@ const VIDEO_ONLY_FIELDS = ['Action', 'Camera_Motion', 'Dialogue', 'Audio'];
 /**
  * Strips video-only fields from a structured shot prompt.
  * These fields (Action, Camera_Motion, Dialogue, Audio) are only relevant for video generation.
+ * 
+ * Handles multiple formats:
+ * - Field: [bracketed content]
+ * - Field: content without brackets
+ * - Multi-line field values
  */
 export const stripVideoOnlyFields = (text: string): string => {
     let result = text;
     
     for (const field of VIDEO_ONLY_FIELDS) {
-        // Match field patterns like "Action: [content]" or "Action: content until next field or end"
-        // Pattern 1: Field with bracketed content
-        const bracketPattern = new RegExp(`${field}:\\s*\\[[^\\]]*\\]\\s*`, 'gi');
+        // Pattern 1: Match "FieldName: [content including newlines]"
+        // Uses [\s\S] to match across newlines
+        const bracketPattern = new RegExp(
+            `${field}:\\s*\\[[\\s\\S]*?\\]`,
+            'gi'
+        );
         result = result.replace(bracketPattern, '');
         
-        // Pattern 2: Field with content until next known field or end of string
-        // This handles cases where the content isn't in brackets
-        const linePattern = new RegExp(`^${field}:.*$`, 'gim');
-        result = result.replace(linePattern, '');
+        // Pattern 2: Match "FieldName: content until next field or double newline"
+        // This handles unbracketed content on single or multiple lines
+        // Matches until we hit another known field name or end of section
+        const unbracketedPattern = new RegExp(
+            `${field}:\\s*[^\\[\\n][^\\n]*(?:\\n(?!\\s*(?:Visual|Set|Lighting|Camera|Style|Action|Camera_Motion|Dialogue|Audio|---):)[^\\n]*)*`,
+            'gi'
+        );
+        result = result.replace(unbracketedPattern, '');
     }
     
-    // Clean up any leftover "--- VIDEO ONLY ---" section headers
-    result = result.replace(/---\s*VIDEO ONLY[^-]*---/gi, '');
+    // Clean up any leftover "--- VIDEO ONLY ---" section headers and content
+    // Match from "--- VIDEO ONLY" to the next "---" or end of that section
+    result = result.replace(/---\s*VIDEO ONLY[^-]*?---[\s\S]*?(?=---|$)/gi, '');
     
     // Clean up excessive whitespace/newlines
     result = result.replace(/\n{3,}/g, '\n\n').trim();
@@ -54,8 +67,19 @@ export const resolvePrompt = (
         if (generationType === 'image') {
             const before = resolved;
             resolved = stripVideoOnlyFields(resolved);
-            if (debug && before !== resolved) {
-                trace.push(`[Video Fields] Stripped Action, Camera_Motion, Dialogue, Audio for image generation`);
+            
+            // Always log when stripping occurs (not just in debug mode)
+            if (before !== resolved) {
+                const removedLength = before.length - resolved.length;
+                console.log(`[stripVideoOnlyFields] Removed ${removedLength} characters from prompt for image generation`);
+                console.log(`[stripVideoOnlyFields] Before (${before.length} chars):`, before.substring(0, 500));
+                console.log(`[stripVideoOnlyFields] After (${resolved.length} chars):`, resolved.substring(0, 500));
+                
+                if (debug) {
+                    trace.push(`[Video Fields] Stripped ${removedLength} characters (Action, Camera_Motion, Dialogue, Audio)`);
+                }
+            } else {
+                console.log(`[stripVideoOnlyFields] No video-only fields found to strip`);
             }
         }
 
