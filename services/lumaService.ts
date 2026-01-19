@@ -5,18 +5,81 @@ const LUMA_API_BASE = "https://api.lumalabs.ai/dream-machine/v1";
 const DEFAULT_LUMA_KEY = "luma-b73d7ee4-4d84-424d-b143-fde73d3a2e34-f25a6871-8710-46bc-bbdf-75005f5168d6";
 
 /**
- * Prioritized list of proxies. 
- * corsproxy.io is chosen as primary because it handles the 'Authorization' header correctly in preflight.
+ * Prioritized list of CORS proxies with multiple fallbacks.
+ * Each proxy has different reliability characteristics.
  */
 const PROXY_GENERATORS = [
+  // Primary: cors-anywhere style proxies
   (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  // Backup 1: thingproxy (handles auth headers well)
+  (url: string) => `https://thingproxy.freeboard.io/fetch/${url}`,
+  // Backup 2: cors.sh (reliable for API calls)
+  (url: string) => `https://proxy.cors.sh/${url}`,
+  // Backup 3: allorigins (works for simple GET requests)
   (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
 ];
 
+// Track proxy health to avoid repeatedly hitting dead proxies
+const proxyHealthMap: Map<number, { failures: number; lastFailed: number }> = new Map();
+const PROXY_COOLDOWN_MS = 30000; // 30 second cooldown after failures
+const MAX_FAILURES_BEFORE_COOLDOWN = 3;
+
 /**
- * Resilient fetch wrapper with strict header management.
+ * Get healthy proxies, filtering out ones that are in cooldown
  */
-const proxiedFetch = async (url: string, options: RequestInit = {}, useCacheBuster = false) => {
+const getHealthyProxyIndices = (): number[] => {
+  const now = Date.now();
+  const healthy: number[] = [];
+  
+  for (let i = 0; i < PROXY_GENERATORS.length; i++) {
+    const health = proxyHealthMap.get(i);
+    if (!health) {
+      healthy.push(i);
+    } else if (now - health.lastFailed > PROXY_COOLDOWN_MS) {
+      // Cooldown expired, give it another chance
+      proxyHealthMap.delete(i);
+      healthy.push(i);
+    } else if (health.failures < MAX_FAILURES_BEFORE_COOLDOWN) {
+      healthy.push(i);
+    }
+  }
+  
+  // If all proxies are unhealthy, reset and try all
+  if (healthy.length === 0) {
+    proxyHealthMap.clear();
+    return PROXY_GENERATORS.map((_, i) => i);
+  }
+  
+  return healthy;
+};
+
+/**
+ * Record a proxy failure
+ */
+const recordProxyFailure = (index: number) => {
+  const existing = proxyHealthMap.get(index) || { failures: 0, lastFailed: 0 };
+  proxyHealthMap.set(index, {
+    failures: existing.failures + 1,
+    lastFailed: Date.now()
+  });
+};
+
+/**
+ * Record a proxy success (reset failure count)
+ */
+const recordProxySuccess = (index: number) => {
+  proxyHealthMap.delete(index);
+};
+
+/**
+ * Resilient fetch wrapper with proxy rotation and retry logic.
+ */
+const proxiedFetch = async (
+  url: string, 
+  options: RequestInit = {}, 
+  useCacheBuster = false,
+  maxRetries = 2
+): Promise<Response> => {
   let finalUrl = url;
   if (useCacheBuster) {
     const separator = url.includes('?') ? '&' : '?';
@@ -34,31 +97,62 @@ const proxiedFetch = async (url: string, options: RequestInit = {}, useCacheBust
   }
 
   let lastError: any = null;
-  for (const getProxyUrl of PROXY_GENERATORS) {
-    const proxyUrl = getProxyUrl(finalUrl);
-    try {
-      const isAllOrigins = proxyUrl.includes('allorigins');
-      const headers = new Headers(options.headers);
+  const healthyIndices = getHealthyProxyIndices();
+  
+  for (let retry = 0; retry <= maxRetries; retry++) {
+    for (const proxyIndex of healthyIndices) {
+      const getProxyUrl = PROXY_GENERATORS[proxyIndex];
+      const proxyUrl = getProxyUrl(finalUrl);
       
-      if (isAllOrigins) {
-        headers.delete('Cache-Control');
-        headers.delete('Pragma');
-        headers.delete('Expires');
-        if (url.includes('lumalabs.ai')) continue; 
-      }
+      try {
+        const headers = new Headers(options.headers);
+        const isAllOrigins = proxyUrl.includes('allorigins');
+        const isCorssh = proxyUrl.includes('cors.sh');
+        
+        // allorigins doesn't handle auth headers well for POST
+        if (isAllOrigins && options.method && options.method !== 'GET') {
+          continue;
+        }
+        
+        // cors.sh requires their API key for some endpoints
+        if (isCorssh) {
+          headers.set('x-cors-api-key', 'temp_' + Math.random().toString(36).slice(2));
+        }
 
-      const response = await fetch(proxyUrl, {
-        ...options,
-        headers
-      });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-      if (response.ok || (response.status >= 400 && response.status < 500)) {
-        return response;
+        const response = await fetch(proxyUrl, {
+          ...options,
+          headers,
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+
+        if (response.ok || (response.status >= 400 && response.status < 500)) {
+          recordProxySuccess(proxyIndex);
+          return response;
+        }
+        
+        // 5xx errors or other issues - record failure
+        recordProxyFailure(proxyIndex);
+        lastError = new Error(`Proxy returned status ${response.status}`);
+      } catch (e: any) {
+        recordProxyFailure(proxyIndex);
+        lastError = e;
+        
+        // If aborted due to timeout, continue to next proxy
+        if (e.name === 'AbortError') {
+          console.warn(`[Luma] Proxy ${proxyIndex} timed out, trying next...`);
+          continue;
+        }
       }
-      
-      lastError = new Error(`Proxy ${proxyUrl} returned status ${response.status}`);
-    } catch (e) {
-      lastError = e;
+    }
+    
+    // Brief delay before retry cycle
+    if (retry < maxRetries) {
+      await new Promise(r => setTimeout(r, 1000 * (retry + 1)));
     }
   }
 
@@ -133,15 +227,33 @@ export const generateLumaImage = async (
   console.log(`[Luma Service] Image Job Created: ${generationId}`);
 
   let attempts = 0;
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 10;
+  
   while (generation.state !== 'completed' && generation.state !== 'failed' && attempts < 100) {
     await new Promise(resolve => setTimeout(resolve, 4000));
     attempts++;
-    const pollRes = await proxiedFetch(`${LUMA_API_BASE}/generations/${generationId}`, {
-      headers: { 'Authorization': `Bearer ${key}` }
-    }, true);
-    if (pollRes.ok) {
+    
+    try {
+      const pollRes = await proxiedFetch(`${LUMA_API_BASE}/generations/${generationId}`, {
+        headers: { 'Authorization': `Bearer ${key}` }
+      }, true);
+      
+      if (pollRes.ok) {
         generation = await pollRes.json();
+        consecutiveFailures = 0; // Reset on success
         console.log(`[Luma Service] Polling Image ${generationId}: ${generation.state}`);
+      } else {
+        consecutiveFailures++;
+        console.warn(`[Luma Service] Poll returned ${pollRes.status}, attempt ${attempts}`);
+      }
+    } catch (e) {
+      consecutiveFailures++;
+      console.warn(`[Luma Service] Poll failed, attempt ${attempts}:`, e);
+    }
+    
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      throw new Error(`Lost connection to Luma API after ${MAX_CONSECUTIVE_FAILURES} consecutive failures`);
     }
   }
 
@@ -228,6 +340,8 @@ export const generateLumaVideo = async (
   
   let attempts = 0;
   let lastState = "";
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 10;
 
   while (generation.state !== 'completed' && generation.state !== 'failed' && attempts < 500) {
     await new Promise(resolve => setTimeout(resolve, 5000));
@@ -240,6 +354,7 @@ export const generateLumaVideo = async (
       
       if (pollRes.ok) {
         generation = await pollRes.json();
+        consecutiveFailures = 0; // Reset on success
         const progress = generation.progress || 0;
         const currentLog = `${generation.state}_${progress}`;
         
@@ -247,9 +362,19 @@ export const generateLumaVideo = async (
           lastState = currentLog;
           onStatusUpdate?.(`Animating (${progress}%)`);
         }
+      } else {
+        consecutiveFailures++;
+        console.warn(`[Luma Video] Poll returned ${pollRes.status}, attempt ${attempts}`);
+        onStatusUpdate?.(`Reconnecting... (${consecutiveFailures})`);
       }
     } catch (e) {
-      // Polling transient errors are normal via proxies
+      consecutiveFailures++;
+      console.warn(`[Luma Video] Poll failed, attempt ${attempts}:`, e);
+      onStatusUpdate?.(`Reconnecting... (${consecutiveFailures})`);
+    }
+    
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      throw new Error(`Lost connection to Luma API after ${MAX_CONSECUTIVE_FAILURES} consecutive failures`);
     }
   }
 
