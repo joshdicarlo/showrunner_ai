@@ -111,8 +111,29 @@ const App: React.FC = () => {
   // Note: We strip base64 image data to avoid hitting localStorage quota (~5MB limit)
   const PROJECTS_STORAGE_KEY = 'showrunner-projects';
   
+  // Circuit breaker to prevent infinite save loops when localStorage is full
+  const saveFailureCount = useRef(0);
+  const lastSaveAttempt = useRef(0);
+  const SAVE_DEBOUNCE_MS = 1000; // Only save once per second max
+  const MAX_SAVE_FAILURES = 3; // Stop trying after 3 consecutive failures
+  
   useEffect(() => {
-      if (projects.length > 0) {
+      // Circuit breaker: Stop attempting saves if we've failed too many times
+      if (saveFailureCount.current >= MAX_SAVE_FAILURES) {
+          return; // Permanently disable localStorage saves for this session
+      }
+      
+      if (projects.length === 0) return;
+      
+      // Debounce: Don't save more than once per second
+      const now = Date.now();
+      if (now - lastSaveAttempt.current < SAVE_DEBOUNCE_MS) {
+          return;
+      }
+      lastSaveAttempt.current = now;
+      
+      // Debounce the actual save operation
+      const timeoutId = setTimeout(() => {
           try {
               // Strip large base64 data from nodes before saving to localStorage
               const projectsForStorage = projects.map(p => ({
@@ -127,26 +148,60 @@ const App: React.FC = () => {
                       }
                   }))
               }));
-              localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projectsForStorage));
+              
+              const serialized = JSON.stringify(projectsForStorage);
+              localStorage.setItem(PROJECTS_STORAGE_KEY, serialized);
+              saveFailureCount.current = 0; // Reset failure count on success
           } catch (e: any) {
+              saveFailureCount.current++;
+              
               if (e.name === 'QuotaExceededError') {
-                  console.warn('[App] localStorage quota exceeded, clearing old data');
-                  // Try to save just project metadata without nodes
-                  try {
-                      const minimalProjects = projects.map(p => ({
-                          ...p,
-                          nodes: [],
-                          assets: p.assets.map(a => ({ ...a, thumbnailUrl: undefined }))
-                      }));
-                      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(minimalProjects));
-                  } catch {
-                      console.error('[App] Failed to save even minimal project data');
+                  console.warn(`[App] localStorage quota exceeded (failure ${saveFailureCount.current}/${MAX_SAVE_FAILURES})`);
+                  
+                  // On first failure, try to clear and save minimal data
+                  if (saveFailureCount.current === 1) {
+                      try {
+                          // Clear the existing key first to free up space
+                          localStorage.removeItem(PROJECTS_STORAGE_KEY);
+                          
+                          // Try to save just project metadata without nodes
+                          const minimalProjects = projects.map(p => ({
+                              id: p.id,
+                              title: p.title,
+                              summary: p.summary,
+                              type: p.type,
+                              status: p.status,
+                              updatedAt: p.updatedAt,
+                              nodes: [], // No nodes to save space
+                              assets: p.assets.map(a => ({ 
+                                  id: a.id, 
+                                  title: a.title, 
+                                  department: a.department,
+                                  description: '',
+                                  parentId: a.parentId,
+                                  status: a.status,
+                              })),
+                              connections: [],
+                              settings: p.settings
+                          }));
+                          localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(minimalProjects));
+                          console.log('[App] Saved minimal project metadata only');
+                      } catch {
+                          console.error('[App] Failed to save even minimal project data');
+                      }
+                  }
+                  
+                  // After MAX_SAVE_FAILURES, give up to prevent infinite loops
+                  if (saveFailureCount.current >= MAX_SAVE_FAILURES) {
+                      console.error('[App] localStorage persistently failing - disabling automatic saves. Use Google Drive for project persistence.');
                   }
               } else {
                   console.error('[App] Failed to persist projects:', e);
               }
           }
-      }
+      }, 500); // 500ms debounce delay
+      
+      return () => clearTimeout(timeoutId);
   }, [projects]);
 
   // Load projects from localStorage on mount

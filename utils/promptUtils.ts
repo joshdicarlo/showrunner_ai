@@ -14,6 +14,7 @@ const VIDEO_ONLY_FIELDS = ['Action', 'Camera_Motion', 'Dialogue', 'Audio'];
  * - Multi-line field values
  */
 export const stripVideoOnlyFields = (text: string): string => {
+    const originalLength = text.length;
     let result = text;
     
     for (const field of VIDEO_ONLY_FIELDS) {
@@ -41,6 +42,16 @@ export const stripVideoOnlyFields = (text: string): string => {
     
     // Clean up excessive whitespace/newlines
     result = result.replace(/\n{3,}/g, '\n\n').trim();
+    
+    const removedChars = originalLength - result.length;
+    if (removedChars > 0) {
+        console.log(`[stripVideoOnlyFields] Removed ${removedChars} characters from prompt for image generation`);
+        console.log(`[stripVideoOnlyFields] Before (${originalLength} chars):`, text.substring(0, 150) + '...');
+        console.log(`[stripVideoOnlyFields] After (${result.length} chars):`, result.substring(0, 150) + '...');
+    } else if (originalLength > 100) {
+        // Only warn if the text was long enough to potentially have video fields
+        console.warn('[stripVideoOnlyFields] No video-only fields found in prompt - format may not match expected template');
+    }
     
     return result;
 };
