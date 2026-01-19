@@ -389,16 +389,30 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   // --- Debug Logic ---
   const handleDebug = () => { 
-      if (selectedNodeIds.length === 0) { alert("Select a node."); return; } 
+      if (selectedNodeIds.length === 0) { 
+          alert("Select a node first to debug its prompt resolution."); 
+          return; 
+      } 
       const node = nodes.find(n => n.id === selectedNodeIds[0]); 
-      if (!node) return; 
+      if (!node) {
+          alert("Selected node not found.");
+          return;
+      }
       
       // Determine generation type based on node type
       const genType = node.type === NodeType.AI_VIDEO_GEN ? 'video' : 
                       node.type === NodeType.AI_TEXT_GEN ? 'text' : 'image';
       
       const rawPrompt = node.data.prompt || node.data.text || ""; 
-      const { resolved, matchedAssets, trace } = resolvePrompt(rawPrompt, projectAssets, activeAsset, projectSettings, node.data.styleId, true, genType); 
+      const { resolved, matchedAssets, trace } = resolvePrompt(
+          rawPrompt, 
+          projectAssets || [], 
+          activeAsset, 
+          projectSettings, 
+          node.data.styleId, 
+          true, 
+          genType
+      ); 
       
       let referenceImages: string[] = []; 
       if (node.data.referenceImageUrl) { 
@@ -406,11 +420,11 @@ export const Canvas: React.FC<CanvasProps> = ({
       } else { 
           referenceImages = resolveReferenceImages(
               rawPrompt, 
-              projectAssets, 
+              projectAssets || [], 
               activeAsset, 
               refinedImagesMap, 
               approvedImagesMap, 
-              assetThumbnails, // Pass assetThumbnails here
+              assetThumbnails,
               matchedAssets
           ); 
       } 

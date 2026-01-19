@@ -14,7 +14,7 @@ import { GenerationRequest } from './components/NodeItem';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings, BatchType } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS, IMAGE_MODELS_OPTIONS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
-import { generateEnhancementOptions, generateSummary, generateStorySeeds, extractShotsFromScene, generateImage, generateVideo, generateCreativeText, refineSeed, enhanceProjectDescription, generateBeatSheet, generateScriptFromBeatSheet } from './services/geminiService';
+import { generateEnhancementOptions, generateSummary, generateStorySeeds, extractShotsFromScene, generateImage, generateVideo, generateCreativeText, refineSeed, enhanceProjectDescription, generateBeatSheet, generateOutlineFromBeatSheet, generateScriptFromOutline, generateScriptFromBeatSheet } from './services/geminiService';
 import { generateLumaVideo, generateLumaImage } from './services/lumaService';
 import { discoverAll, discoverCharacters, discoverLocations, discoverScenes } from './services/discoveryService';
 import * as GoogleDriveService from './services/googleDriveService';
@@ -735,10 +735,11 @@ const App: React.FC = () => {
           });
       }
 
-      // Auto-generate beat sheet and script nodes (for both blank and seed modes)
+      // Auto-generate beat sheet, outline, and script nodes (for both blank and seed modes)
       if (autoGenAssets && seedData) {
          const groupId = `group-seed-${Date.now()}`;
          const beatNodeId = `seed-beat-${Date.now()}`;
+         const outlineNodeId = `seed-outline-${Date.now()}`;
          const scriptNodeId = `seed-script-${Date.now()}`;
          
          initialNodes.push({
@@ -746,9 +747,9 @@ const App: React.FC = () => {
             type: NodeType.GROUP,
             department: DepartmentType.WRITERS_ROOM,
             position: {x: 100, y: 100},
-            width: 950,
+            width: 1350,
             height: 550,
-            data: { label: "Seed Generation", collapsed: false }
+            data: { label: "Story Development", collapsed: false }
          });
          initialNodes.push({
              id: beatNodeId,
@@ -756,7 +757,7 @@ const App: React.FC = () => {
              department: DepartmentType.WRITERS_ROOM,
              parentId: groupId,
              position: { x: 120, y: 160 },
-             width: 400,
+             width: 380,
              height: 400,
              data: {
                  prompt: `Beat Sheet for "${title}"`,
@@ -765,15 +766,29 @@ const App: React.FC = () => {
              }
          });
          initialNodes.push({
+             id: outlineNodeId,
+             type: NodeType.AI_TEXT_GEN,
+             department: DepartmentType.WRITERS_ROOM,
+             parentId: groupId,
+             position: { x: 520, y: 160 },
+             width: 380,
+             height: 400,
+             data: {
+                 prompt: `Scene Outline for "${title}"`,
+                 status: 'pending',
+                 label: 'Scene Outline'
+             }
+         });
+         initialNodes.push({
              id: scriptNodeId,
              type: NodeType.AI_TEXT_GEN,
              department: DepartmentType.WRITERS_ROOM,
              parentId: groupId,
-             position: { x: 540, y: 160 },
-             width: 400,
+             position: { x: 920, y: 160 },
+             width: 380,
              height: 400,
              data: {
-                 prompt: `Opening Sequence Script for "${title}"`,
+                 prompt: `Opening Script for "${title}"`,
                  status: 'pending',
                  label: 'Opening Script'
              }
@@ -825,24 +840,45 @@ const App: React.FC = () => {
       setView('project');
       resetProjectModal();
 
-      // Auto-generate beat sheet and script if enabled
+      // Auto-generate beat sheet, outline, and script if enabled
       if (autoGenAssets && seedData && creationMode === 'seed') {
           const beatNodeId = initialNodes.find(n => n.data.label === 'Beat Sheet')?.id;
+          const outlineNodeId = initialNodes.find(n => n.data.label === 'Scene Outline')?.id;
           const scriptNodeId = initialNodes.find(n => n.data.label === 'Opening Script')?.id;
           
-          if (beatNodeId && scriptNodeId) {
-              // Generate beat sheet first
+          if (beatNodeId && outlineNodeId && scriptNodeId) {
               try {
+                  // Step 1: Generate beat sheet
                   const beatSheet = await generateBeatSheet(title, seedData.genre, seedData.logline);
                   
-                  // Update beat sheet node
                   setProjects(prev => prev.map(p => {
                       if (p.id === projectId) {
                           return {
                               ...p,
                               nodes: p.nodes.map(n => {
                                   if (n.id === beatNodeId) {
-                                      return { ...n, data: { ...n.data, textContent: beatSheet, status: 'approved' } } as FlowNode;
+                                      return { ...n, data: { ...n.data, text: beatSheet, status: 'approved' } } as FlowNode;
+                                  }
+                                  if (n.id === outlineNodeId) {
+                                      return { ...n, data: { ...n.data, status: 'generating' } } as FlowNode;
+                                  }
+                                  return n;
+                              })
+                          };
+                      }
+                      return p;
+                  }));
+
+                  // Step 2: Generate outline from beat sheet
+                  const outline = await generateOutlineFromBeatSheet(title, seedData.genre, beatSheet);
+                  
+                  setProjects(prev => prev.map(p => {
+                      if (p.id === projectId) {
+                          return {
+                              ...p,
+                              nodes: p.nodes.map(n => {
+                                  if (n.id === outlineNodeId) {
+                                      return { ...n, data: { ...n.data, text: outline, status: 'approved' } } as FlowNode;
                                   }
                                   if (n.id === scriptNodeId) {
                                       return { ...n, data: { ...n.data, status: 'generating' } } as FlowNode;
@@ -854,17 +890,16 @@ const App: React.FC = () => {
                       return p;
                   }));
 
-                  // Now generate script based on beat sheet
-                  const script = await generateScriptFromBeatSheet(title, seedData.genre, beatSheet, 'opening');
+                  // Step 3: Generate script from outline
+                  const script = await generateScriptFromOutline(title, seedData.genre, outline, 'opening');
                   
-                  // Update script node
                   setProjects(prev => prev.map(p => {
                       if (p.id === projectId) {
                           return {
                               ...p,
                               nodes: p.nodes.map(n => {
                                   if (n.id === scriptNodeId) {
-                                      return { ...n, data: { ...n.data, textContent: script, status: 'approved' } } as FlowNode;
+                                      return { ...n, data: { ...n.data, text: script, status: 'review' } } as FlowNode;
                                   }
                                   return n;
                               })
@@ -873,14 +908,14 @@ const App: React.FC = () => {
                       return p;
                   }));
               } catch (e) {
-                  console.error("Failed to generate beat sheet/script:", e);
-                  // Mark nodes as failed (reset to draft)
+                  console.error("Failed to generate story documents:", e);
+                  // Mark nodes as failed
                   setProjects(prev => prev.map(p => {
                       if (p.id === projectId) {
                           return {
                               ...p,
                               nodes: p.nodes.map(n => {
-                                  if (n.id === beatNodeId || n.id === scriptNodeId) {
+                                  if (n.id === beatNodeId || n.id === outlineNodeId || n.id === scriptNodeId) {
                                       return { ...n, data: { ...n.data, status: 'draft', error: 'Generation failed' } } as FlowNode;
                                   }
                                   return n;
@@ -1548,9 +1583,15 @@ const App: React.FC = () => {
 
           if (item.autoGenerate) {
               let prompt = `@${item.name}`;
-              if (item.type === 'Shot' && parentAssetId) {
-                  const parentItem = oneShotItems.find(p => p.children?.some(c => c.id === item.id)); 
-                  if (parentItem) prompt = `@${parentItem.name}.${item.name}`;
+              
+              // For Shots, use the detailed description with @character references
+              // instead of just the asset reference
+              if (item.type === 'Shot') {
+                  // Shot descriptions contain the full YAML prompt with @Character references
+                  prompt = item.description;
+              } else if (item.type === 'Character' || item.type === 'Location') {
+                  // Characters and locations use simple asset reference
+                  prompt = `@${item.name}`;
               }
 
               for (let i = 0; i < config.count; i++) {

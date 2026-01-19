@@ -445,6 +445,8 @@ For each beat, provide:
 - Key emotional moments or reveals
 
 Make it compelling and specific to this story.
+
+IMPORTANT: Output ONLY the beat sheet content. Do NOT include any preamble, introduction, or meta-commentary like "Here is a beat sheet..." or "I've created...". Start directly with the first beat.
 `;
 
         return await retryWithBackoff(async () => {
@@ -464,41 +466,52 @@ Make it compelling and specific to this story.
 };
 
 /**
- * Generate Script Scene from Beat Sheet
+ * Generate Outline from Beat Sheet
+ * Converts high-level Save The Cat! beats into a detailed scene-by-scene outline
  */
-export const generateScriptFromBeatSheet = async (
+export const generateOutlineFromBeatSheet = async (
     title: string,
     genre: string,
-    beatSheet: string,
-    sceneType: 'opening' | 'climax' | 'ending' = 'opening'
+    beatSheet: string
 ): Promise<string> => {
     const ai = createAI();
     try {
-        const sceneDescriptions = {
-            opening: "the opening sequence (first 10 pages)",
-            climax: "the climax/midpoint sequence",
-            ending: "the finale/resolution"
-        };
-
-        const prompt = `Using this beat sheet, write ${sceneDescriptions[sceneType]} for "${title}" (${genre}).
+        const prompt = `You are a professional story consultant. Your task is to convert a high-level beat sheet into a detailed scene-by-scene outline for a ${genre} titled "${title}".
 
 BEAT SHEET:
 ${beatSheet}
 
-Write in proper screenplay format:
-- Scene headings (INT./EXT. LOCATION - TIME)
-- Action lines (present tense, visual descriptions)
-- Character names in CAPS when speaking
-- Dialogue with proper formatting
-- Parentheticals only when necessary
+IMPORTANT: A beat sheet is NOT a scene-by-scene outline. It's a high-level structural framework. Your job is to expand it.
 
-Focus on:
-- Visual storytelling
-- Strong opening hook
-- Character introduction through action
-- Establishing tone and world
+Create a detailed outline with the following:
 
-This should be approximately 5-10 pages of script content.
+1. **Act Structure**: Clearly divide into Act 1, Act 2A, Act 2B, and Act 3
+2. **Sequences**: Group related scenes into sequences (5-8 sequences total)
+3. **Scene Breakdown**: For each sequence, list 3-8 specific scenes with:
+   - Scene number and heading (INT./EXT. LOCATION - TIME)
+   - 2-3 sentences describing the action and character beats
+   - Key emotional moments or reveals
+   - Page count estimate
+
+Format Example:
+---
+**ACT 1 (Pages 1-25)**
+
+**Sequence 1: The Ordinary World (Pages 1-10)**
+
+1. INT. APARTMENT - MORNING (Pages 1-3)
+   Description of what happens, character introductions, establishing the status quo.
+   
+2. EXT. CITY STREET - DAY (Pages 3-5)
+   Next scene description...
+
+---
+
+Make this outline detailed enough that a screenwriter could write the actual script from it. Include character names, key dialogue moments (paraphrased, not full dialogue), and emotional arcs.
+
+The outline should cover the full story, approximately 90-120 pages of eventual script.
+
+IMPORTANT: Output ONLY the scene outline content. Do NOT include any preamble, introduction, or meta-commentary like "Here is an outline..." or "I've created...". Start directly with ACT 1.
 `;
 
         return await retryWithBackoff(async () => {
@@ -506,7 +519,79 @@ This should be approximately 5-10 pages of script content.
                 model: MODELS.TEXT_PRO,
                 contents: prompt,
                 config: {
-                    systemInstruction: "You are an award-winning screenwriter. Write vivid, cinematic screenplay pages."
+                    systemInstruction: "You are an expert story structure consultant who creates detailed scene-by-scene outlines from beat sheets."
+                }
+            });
+            return response.text || "Failed to generate outline.";
+        });
+    } catch (e) {
+        console.error("Outline Generation Error", e);
+        throw e;
+    }
+};
+
+/**
+ * Generate Script from Outline
+ * Takes a detailed scene-by-scene outline and writes actual screenplay pages
+ */
+export const generateScriptFromOutline = async (
+    title: string,
+    genre: string,
+    outline: string,
+    section: 'opening' | 'act2' | 'climax' | 'ending' = 'opening'
+): Promise<string> => {
+    const ai = createAI();
+    try {
+        const sectionDescriptions = {
+            opening: { name: "Act 1 / Opening Sequence", pages: "the first 10-15 pages", focus: "Introduce the protagonist, establish the ordinary world, and present the inciting incident" },
+            act2: { name: "Act 2A / Rising Action", pages: "pages 15-45", focus: "The protagonist pursues their goal, faces obstacles, and develops relationships" },
+            climax: { name: "Midpoint / Climax", pages: "pages 45-75", focus: "Major revelation or setback, raising the stakes" },
+            ending: { name: "Act 3 / Resolution", pages: "the final 15-25 pages", focus: "Final confrontation, resolution, and character transformation" }
+        };
+
+        const sectionInfo = sectionDescriptions[section];
+
+        const prompt = `You are an award-winning screenwriter. Write ${sectionInfo.pages} of a screenplay for "${title}" (${genre}).
+
+DETAILED OUTLINE:
+${outline}
+
+INSTRUCTIONS:
+- Write **${sectionInfo.name}** based on the outline above
+- Focus on: ${sectionInfo.focus}
+- Use PROPER SCREENPLAY FORMAT:
+  • Scene headings: INT./EXT. LOCATION - TIME (all caps, left-aligned)
+  • Action lines: Present tense, concise, visual descriptions (left-aligned)
+  • Character names: ALL CAPS above dialogue (centered)
+  • Dialogue: Natural, character-driven (centered, under character name)
+  • Parentheticals: Minimal, only when essential (centered in parentheses)
+  • Transitions: Only when necessary (CUT TO:, FADE TO:, etc.)
+
+- CRITICAL SCREENPLAY RULES:
+  • Show, don't tell - write only what we SEE and HEAR
+  • Keep action lines punchy (3-4 lines max per paragraph)
+  • White space is your friend - don't write dense blocks
+  • Each scene should have a clear purpose
+  • Character introductions should be in CAPS first time only
+
+- STORYTELLING FOCUS:
+  • Visual storytelling - every line should be filmable
+  • Strong character voices in dialogue
+  • Proper pacing and rhythm
+  • Emotional beats land clearly
+  • Genre conventions respected
+
+Write professional, shootable screenplay pages. This should read like a script ready for production.
+
+CRITICAL: Output ONLY the screenplay content in proper format. Do NOT include any preamble, introduction, or meta-commentary like "Here is the script..." or "I've written...". Start directly with the first scene heading or FADE IN.
+`;
+
+        return await retryWithBackoff(async () => {
+            const response = await ai.models.generateContent({
+                model: MODELS.TEXT_PRO,
+                contents: prompt,
+                config: {
+                    systemInstruction: "You are a professional screenwriter with multiple produced credits. Write only in proper screenplay format. Every line must be visual and filmable. Never write prose or novel-style descriptions."
                 }
             });
             return response.text || "Failed to generate script.";
@@ -515,6 +600,30 @@ This should be approximately 5-10 pages of script content.
         console.error("Script Generation Error", e);
         throw e;
     }
+};
+
+/**
+ * Legacy function for backwards compatibility
+ * Now internally uses the outline step
+ */
+export const generateScriptFromBeatSheet = async (
+    title: string,
+    genre: string,
+    beatSheet: string,
+    sceneType: 'opening' | 'climax' | 'ending' = 'opening'
+): Promise<string> => {
+    // First generate outline from beat sheet
+    const outline = await generateOutlineFromBeatSheet(title, genre, beatSheet);
+    
+    // Map old sceneType to new section parameter
+    const sectionMap: Record<typeof sceneType, 'opening' | 'act2' | 'climax' | 'ending'> = {
+        opening: 'opening',
+        climax: 'climax',
+        ending: 'ending'
+    };
+    
+    // Then generate script from outline
+    return await generateScriptFromOutline(title, genre, outline, sectionMap[sceneType]);
 };
 
 /**
