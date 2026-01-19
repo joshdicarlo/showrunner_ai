@@ -107,8 +107,43 @@ Instructions:
 - Keep it flowing and natural.
 - CRITICAL: Do NOT include the character's name in the description paragraph. We might rename them later. Focus only on their visual appearance.
 
-Example:
+CREATURE-SPECIFIC RULES (CRITICAL):
+For non-human characters (creatures, animals, aliens, robots, etc.):
+
+1. SIZE SPECIFICATION - Use EXACT measurements, NEVER comparative descriptions:
+   ✓ CORRECT: "A creature standing 2000 feet tall, weighing approximately 50,000 tons"
+   ✓ CORRECT: "A small creature about 32 inches tall at the shoulder, weighing around 175 pounds"
+   ✗ WRONG: "A creature the size of a mountain" (generates a rock with eyes)
+   ✗ WRONG: "A creature the size of a great dane" (generates a dog)
+
+2. ANATOMICAL DESCRIPTIONS - Use GENERIC anatomical terms, NEVER specific animal names:
+   ✓ CORRECT: "Reptilian scales covering its body, walks on four powerful legs"
+   ✓ CORRECT: "Elongated serpentine body with no visible limbs"
+   ✓ CORRECT: "Bipedal stance with digitigrade legs"
+   ✗ WRONG: "Like a Komodo Dragon" (generates that specific animal)
+   ✗ WRONG: "Walks like a dog" (generates a dog)
+   
+3. LOCOMOTION - Describe HOW it moves, not WHAT it moves like:
+   ✓ CORRECT: "Walks on four legs" or "Quadrupedal gait"
+   ✓ CORRECT: "Slithers along the ground"
+   ✓ CORRECT: "Flies using membranous wings"
+   ✗ WRONG: "Moves like a spider"
+   
+4. BODY STRUCTURE - Be specific about physical features:
+   ✓ CORRECT: "Six segmented legs with chitinous exoskeleton"
+   ✓ CORRECT: "Massive horned head, barrel-shaped torso, thick columnar legs"
+   ✓ CORRECT: "Sleek feline build with retractable claws"
+   ✗ WRONG: "Built like a beetle"
+   
+5. ONLY name specific Earth animals if the character IS literally that animal:
+   ✓ CORRECT: "A great dane with a grizzled gray coat" (if it's actually a dog)
+   ✓ CORRECT: "A black cat with glowing yellow eyes" (if it's actually a cat)
+
+Example (Human):
 ELYSIA, A young female mercenary appearing in her late twenties. She has a gaunt but strong build, notable for the sharp, synthetic silver tattoo covering her left eye. She wears a deep indigo, high-collared trench coat layered over dark leather armor, with a rusted pocket watch chained to her waist. Her most defining feature is a glowing, crystalline staff that emits soft purple smoke, which she carries always.
+
+Example (Creature):
+THORNBACK, A massive reptilian creature standing 45 feet tall at the shoulder, weighing approximately 80 tons. Its body is covered in dark green armored scales with bony protrusions along its spine. The creature walks on four powerful legs with three-toed feet, each toe ending in curved black claws. Its elongated head features a wide jaw filled with serrated teeth, small amber eyes set deep in bony sockets, and two curved horns protruding from the crown. A thick muscular tail extends behind, covered in the same armored plating and ending in a cluster of sharp spikes.
 `;
 
 // --- Schema Builders ---
