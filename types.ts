@@ -154,10 +154,13 @@ export interface Project {
 }
 
 export interface StorySeed {
+    id: string;
     title: string;
     logline: string;
     genre: string;
     visualStyle: string;
+    parentId?: string; // For refinements - links to parent seed
+    refinementPrompt?: string; // The prompt used to refine this from parent
 }
 
 export interface GeminiConfig {

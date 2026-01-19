@@ -14,7 +14,7 @@ import { GenerationRequest } from './components/NodeItem';
 import { DepartmentType, FlowNode, FlowConnection, Project, NodeType, ProjectAsset, StorySeed, RenderTask, OneShotItem, TimelineClip, ProjectSettings, BatchType } from './types';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES, DEFAULT_PROJECT_SETTINGS, IMAGE_MODELS_OPTIONS } from './constants';
 import { Button, Input, Modal, TextArea, ToggleGroup, QueueIndicator } from './components/UI';
-import { generateEnhancementOptions, generateSummary, generateStorySeeds, extractShotsFromScene, generateImage, generateVideo, generateCreativeText } from './services/geminiService';
+import { generateEnhancementOptions, generateSummary, generateStorySeeds, extractShotsFromScene, generateImage, generateVideo, generateCreativeText, refineSeed, enhanceProjectDescription, generateBeatSheet, generateScriptFromBeatSheet } from './services/geminiService';
 import { generateLumaVideo, generateLumaImage } from './services/lumaService';
 import { discoverAll, discoverCharacters, discoverLocations, discoverScenes } from './services/discoveryService';
 import * as GoogleDriveService from './services/googleDriveService';
@@ -23,7 +23,7 @@ import { useStorage, storageManager } from './services/storage';
 import { OneShotModal } from './components/OneShotModal';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
-import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search, User, MapPin, Clapperboard, CheckCircle, Circle, ChevronDown, ChevronRight, Play } from 'lucide-react';
+import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search, User, MapPin, Clapperboard, CheckCircle, Circle, ChevronDown, ChevronRight, Play, Edit3, GitBranch, RefreshCw, FileText } from 'lucide-react';
 
 type View = 'dashboard' | 'project';
 
@@ -178,6 +178,11 @@ const App: React.FC = () => {
       const activeProj = projectsRef.current.find(p => p.id === currentProjectIdRef.current);
       const asset = activeProj?.assets.find(a => a.id === task.assetId);
       
+      // Debug logging for prompt resolution
+      console.log('[handleTaskExecution] Task prompt:', task.prompt);
+      console.log('[handleTaskExecution] Available assets:', activeProj?.assets.map(a => ({ title: a.title, id: a.id })));
+      console.log('[handleTaskExecution] Target asset:', asset?.title, asset?.id);
+      
       const { resolved, matchedAssets } = resolvePrompt(
           task.prompt, 
           activeProj?.assets, 
@@ -185,6 +190,9 @@ const App: React.FC = () => {
           activeProj?.settings || DEFAULT_PROJECT_SETTINGS,
           task.config?.styleId 
       );
+      
+      console.log('[handleTaskExecution] Resolved prompt:', resolved.substring(0, 200));
+      console.log('[handleTaskExecution] Matched assets:', matchedAssets.map(a => a.title));
       
       task.submittedPrompt = resolved;
       
@@ -529,21 +537,87 @@ const App: React.FC = () => {
   // The old Sheets-based sync was causing 400 errors
   // Projects now sync via GoogleDriveStorage.saveProject() which uses project.json files
 
+  // New Project Modal State
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectGenre, setNewProjectGenre] = useState('');
+  const [newProjectVisualStyle, setNewProjectVisualStyle] = useState('');
+  const [descriptionEnhancements, setDescriptionEnhancements] = useState<string[]>([]);
+  const [isEnhancingDescription, setIsEnhancingDescription] = useState(false);
+  const [expandedSeedId, setExpandedSeedId] = useState<string | null>(null);
+  const [seedRefinementPrompt, setSeedRefinementPrompt] = useState('');
+  const [isRefiningSeed, setIsRefiningSeed] = useState(false);
+  const [editingSeedId, setEditingSeedId] = useState<string | null>(null);
+  const [editingSeedTitle, setEditingSeedTitle] = useState('');
+
   const resetProjectModal = () => {
       setNewProjectTitle('');
+      setNewProjectDescription('');
+      setNewProjectGenre('');
+      setNewProjectVisualStyle('');
+      setDescriptionEnhancements([]);
       setCreationMode('blank');
       setProjectSeedPrompt('');
       setGeneratedSeeds([]);
       setSelectedSeedIdx(null);
+      setExpandedSeedId(null);
+      setSeedRefinementPrompt('');
+      setEditingSeedId(null);
       setAutoGenAssets(true);
       setIsCreateProjectOpen(false);
   }
 
   const [projectSeedPrompt, setProjectSeedPrompt] = useState('');
 
+  const handleEnhanceProjectDescription = async () => {
+      if (!newProjectDescription.trim()) return;
+      setIsEnhancingDescription(true);
+      try {
+          const options = await enhanceProjectDescription(newProjectDescription);
+          setDescriptionEnhancements(options);
+      } finally {
+          setIsEnhancingDescription(false);
+      }
+  };
+
+  const handleRefineSeed = async (seedId: string) => {
+      const seed = generatedSeeds.find(s => s.id === seedId);
+      if (!seed || !seedRefinementPrompt.trim()) return;
+      
+      setIsRefiningSeed(true);
+      try {
+          const refined = await refineSeed(seed, seedRefinementPrompt);
+          if (refined) {
+              setGeneratedSeeds(prev => [...prev, refined]);
+              setSeedRefinementPrompt('');
+              setExpandedSeedId(refined.id);
+              // Auto-select the new refinement
+              setSelectedSeedIdx(generatedSeeds.length); // Will be the new index after adding
+          }
+      } finally {
+          setIsRefiningSeed(false);
+      }
+  };
+
+  const handleUpdateSeedTitle = (seedId: string, newTitle: string) => {
+      setGeneratedSeeds(prev => prev.map(s => 
+          s.id === seedId ? { ...s, title: newTitle } : s
+      ));
+      setEditingSeedId(null);
+  };
+
+  // Helper to get seed tree structure (parent seeds + their refinements)
+  const getSeedTree = () => {
+      const rootSeeds = generatedSeeds.filter(s => !s.parentId);
+      return rootSeeds.map(root => ({
+          ...root,
+          children: generatedSeeds.filter(s => s.parentId === root.id)
+      }));
+  };
+
   const handleRollDice = async () => {
       setIsGeneratingSeeds(true);
       setGeneratedSeeds([]);
+      setExpandedSeedId(null);
       try {
           const seeds = await generateStorySeeds(projectSeedPrompt);
           setGeneratedSeeds(seeds);
@@ -554,75 +628,100 @@ const App: React.FC = () => {
 
   const handleCreateProject = async () => {
       let title = newProjectTitle;
-      let summary = '';
+      let summary = newProjectDescription || '';
       let initialAssets: ProjectAsset[] = [];
       let initialNodes: FlowNode[] = [];
       let type: Project['type'] = 'Feature';
-      let visualStyle = '';
+      let visualStyle = newProjectVisualStyle || '';
+      let genre = newProjectGenre || '';
+      let seedData: { genre: string; logline: string } | null = null;
 
       if (creationMode === 'blank') {
           if (!newProjectTitle) return;
+          // Use blank project fields for seedData if we're auto-generating
+          if (autoGenAssets && summary) {
+              seedData = { genre: genre || 'Drama', logline: summary };
+          }
+          // Create story bible for blank projects too if we have description
+          if (summary) {
+              initialAssets.push({
+                  id: `asset-bible-${Date.now()}`,
+                  department: DepartmentType.STORY,
+                  title: "Story Bible",
+                  description: `Logline: ${summary}${genre ? `\n\nGenre: ${genre}` : ''}${visualStyle ? `\n\nStyle Notes: ${visualStyle}` : ''}`,
+                  visualStyle: visualStyle,
+                  summary: summary,
+                  status: 'active'
+              });
+          }
       } else {
           if (selectedSeedIdx === null || !generatedSeeds[selectedSeedIdx]) return;
           const seed = generatedSeeds[selectedSeedIdx];
           title = seed.title;
           summary = seed.logline;
-          visualStyle = seed.visualStyle; 
+          visualStyle = seed.visualStyle;
+          genre = seed.genre;
+          seedData = { genre: seed.genre, logline: seed.logline };
           
           initialAssets.push({
               id: `asset-bible-${Date.now()}`,
               department: DepartmentType.STORY,
               title: "Story Bible",
-              description: `Logline: ${summary}\n\nGenre: ${seed.genre}\n\nStyle Notes: ${visualStyle}`,
+              description: `Logline: ${summary}\n\nGenre: ${genre}\n\nStyle Notes: ${visualStyle}`,
               visualStyle: visualStyle,
               summary: summary,
               status: 'active'
           });
+      }
 
-          if (autoGenAssets) {
-             const groupId = `group-seed-${Date.now()}`;
-             initialNodes.push({
-                id: groupId,
-                type: NodeType.GROUP,
-                department: DepartmentType.WRITERS_ROOM,
-                position: {x: 100, y: 100},
-                width: 950,
-                height: 550,
-                data: { label: "Seed Generation", collapsed: false }
-             });
-             initialNodes.push({
-                 id: `seed-beat-${Date.now()}`,
-                 type: NodeType.AI_TEXT_GEN,
-                 department: DepartmentType.WRITERS_ROOM,
-                 parentId: groupId,
-                 position: { x: 120, y: 160 },
-                 width: 400,
-                 height: 400,
-                 data: {
-                     prompt: `Write a beat sheet for a ${seed.genre} film called "${title}".\nLogline: ${summary}`,
-                     status: 'draft'
-                 }
-             });
-             initialNodes.push({
-                 id: `seed-script-${Date.now()}`,
-                 type: NodeType.AI_TEXT_GEN,
-                 department: DepartmentType.WRITERS_ROOM,
-                 parentId: groupId,
-                 position: { x: 540, y: 160 },
-                 width: 400,
-                 height: 400,
-                 data: {
-                     prompt: `Write the opening sequence script for "${title}".\nGenre: ${seed.genre}.\nLogline: ${summary}`,
-                     status: 'draft'
-                 }
-             });
-          }
+      // Auto-generate beat sheet and script nodes (for both blank and seed modes)
+      if (autoGenAssets && seedData) {
+         const groupId = `group-seed-${Date.now()}`;
+         const beatNodeId = `seed-beat-${Date.now()}`;
+         const scriptNodeId = `seed-script-${Date.now()}`;
+         
+         initialNodes.push({
+            id: groupId,
+            type: NodeType.GROUP,
+            department: DepartmentType.WRITERS_ROOM,
+            position: {x: 100, y: 100},
+            width: 950,
+            height: 550,
+            data: { label: "Seed Generation", collapsed: false }
+         });
+         initialNodes.push({
+             id: beatNodeId,
+             type: NodeType.AI_TEXT_GEN,
+             department: DepartmentType.WRITERS_ROOM,
+             parentId: groupId,
+             position: { x: 120, y: 160 },
+             width: 400,
+             height: 400,
+             data: {
+                 prompt: `Beat Sheet for "${title}"`,
+                 status: 'generating',
+                 label: 'Beat Sheet'
+             }
+         });
+         initialNodes.push({
+             id: scriptNodeId,
+             type: NodeType.AI_TEXT_GEN,
+             department: DepartmentType.WRITERS_ROOM,
+             parentId: groupId,
+             position: { x: 540, y: 160 },
+             width: 400,
+             height: 400,
+             data: {
+                 prompt: `Opening Sequence Script for "${title}"`,
+                 status: 'pending',
+                 label: 'Opening Script'
+             }
+         });
       }
 
       let driveData = {};
       if (isDriveConnected && !isMockDrive) {
           try {
-              // Use new storage system to create project structure
               const tempProject: Project = {
                   id: `p-${Date.now()}`,
                   title,
@@ -646,8 +745,9 @@ const App: React.FC = () => {
           }
       }
 
+      const projectId = `p-${Date.now()}`;
       const newProj: Project = {
-          id: `p-${Date.now()}`,
+          id: projectId,
           title,
           summary,
           type,
@@ -663,6 +763,74 @@ const App: React.FC = () => {
       setCurrentProjectId(newProj.id);
       setView('project');
       resetProjectModal();
+
+      // Auto-generate beat sheet and script if enabled
+      if (autoGenAssets && seedData && creationMode === 'seed') {
+          const beatNodeId = initialNodes.find(n => n.data.label === 'Beat Sheet')?.id;
+          const scriptNodeId = initialNodes.find(n => n.data.label === 'Opening Script')?.id;
+          
+          if (beatNodeId && scriptNodeId) {
+              // Generate beat sheet first
+              try {
+                  const beatSheet = await generateBeatSheet(title, seedData.genre, seedData.logline);
+                  
+                  // Update beat sheet node
+                  setProjects(prev => prev.map(p => {
+                      if (p.id === projectId) {
+                          return {
+                              ...p,
+                              nodes: p.nodes.map(n => {
+                                  if (n.id === beatNodeId) {
+                                      return { ...n, data: { ...n.data, textContent: beatSheet, status: 'approved' } } as FlowNode;
+                                  }
+                                  if (n.id === scriptNodeId) {
+                                      return { ...n, data: { ...n.data, status: 'generating' } } as FlowNode;
+                                  }
+                                  return n;
+                              })
+                          };
+                      }
+                      return p;
+                  }));
+
+                  // Now generate script based on beat sheet
+                  const script = await generateScriptFromBeatSheet(title, seedData.genre, beatSheet, 'opening');
+                  
+                  // Update script node
+                  setProjects(prev => prev.map(p => {
+                      if (p.id === projectId) {
+                          return {
+                              ...p,
+                              nodes: p.nodes.map(n => {
+                                  if (n.id === scriptNodeId) {
+                                      return { ...n, data: { ...n.data, textContent: script, status: 'approved' } } as FlowNode;
+                                  }
+                                  return n;
+                              })
+                          };
+                      }
+                      return p;
+                  }));
+              } catch (e) {
+                  console.error("Failed to generate beat sheet/script:", e);
+                  // Mark nodes as failed (reset to draft)
+                  setProjects(prev => prev.map(p => {
+                      if (p.id === projectId) {
+                          return {
+                              ...p,
+                              nodes: p.nodes.map(n => {
+                                  if (n.id === beatNodeId || n.id === scriptNodeId) {
+                                      return { ...n, data: { ...n.data, status: 'draft', error: 'Generation failed' } } as FlowNode;
+                                  }
+                                  return n;
+                              })
+                          };
+                      }
+                      return p;
+                  }));
+              }
+          }
+      }
   };
 
   const handleUpdateProjectSettings = (settings: ProjectSettings) => {
@@ -1405,19 +1573,26 @@ const App: React.FC = () => {
 
       itemsToProcess.forEach(item => processItem(item));
 
-      // Update state and ref synchronously before queuing tasks
-      // This ensures resolvePrompt can find the newly created assets
-      setProjects(prev => {
-          const updated = prev.map(p => {
+      // CRITICAL: Sync projectsRef BEFORE queuing tasks so executor can resolve @references
+      if (newAssets.length > 0) {
+          // First, compute the updated projects array
+          const updatedProjects = projectsRef.current.map(p => {
               if (p.id === currentProjectIdRef.current) {
                   return { ...p, assets: [...p.assets, ...newAssets] };
               }
               return p;
           });
-          // Sync the ref immediately so queue executor has access to new assets
-          projectsRef.current = updated;
-          return updated;
-      });
+          
+          // Sync the ref IMMEDIATELY before any async operations
+          projectsRef.current = updatedProjects;
+          
+          // Then update React state (this is async but ref is already synced)
+          setProjects(updatedProjects);
+      }
+
+      // Queue tasks - ref is now guaranteed to have new assets
+      console.log('[handleExecuteOneShot] Queuing tasks with projectsRef assets:', 
+          projectsRef.current.find(p => p.id === currentProjectIdRef.current)?.assets.map(a => a.title));
 
       if (primaryTasks.length > 0) {
           primaryTasks.forEach(t => queueService.add(t));
@@ -1651,17 +1826,27 @@ const App: React.FC = () => {
     });
 
     // Update projects with new assets (only non-duplicates)
+    // CRITICAL: Sync projectsRef BEFORE queuing tasks so executor can resolve @references
     if (newAssets.length > 0) {
-        setProjects(prev => prev.map(p => {
+        // First, compute the updated projects array
+        const updatedProjects = projectsRef.current.map(p => {
             if (p.id === currentProjectId) {
                 return { ...p, assets: [...p.assets, ...newAssets] };
             }
             return p;
-        }));
+        });
+        
+        // Sync the ref IMMEDIATELY before any async operations
+        projectsRef.current = updatedProjects;
+        
+        // Then update React state (this is async but ref is already synced)
+        setProjects(updatedProjects);
     }
     
-    // Queue all generation tasks
+    // Queue all generation tasks - ref is now guaranteed to have new assets
     if (tasks.length > 0) {
+        console.log('[handleApproveAnalysis] Queuing tasks with projectsRef assets:', 
+            projectsRef.current.find(p => p.id === currentProjectId)?.assets.map(a => a.title));
         tasks.forEach(task => queueService.add(task));
     }
     
@@ -2143,7 +2328,7 @@ const App: React.FC = () => {
         </main>
 
         {isCreateProjectOpen && (
-             <Modal title="Create New Project" onClose={resetProjectModal}>
+             <Modal title="Create New Project" onClose={resetProjectModal} maxWidth="max-w-3xl">
                  <div className="space-y-6">
                      <div className="flex bg-zinc-950 p-1 rounded-lg border border-zinc-800">
                          <button 
@@ -2166,6 +2351,62 @@ const App: React.FC = () => {
                                 <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Project Title</label>
                                 <Input autoFocus value={newProjectTitle} onChange={(e) => setNewProjectTitle(e.target.value)} placeholder="e.g. The Matrix 2" />
                             </div>
+                            <div>
+                                <div className="flex items-center justify-between mb-1">
+                                    <label className="block text-xs font-bold text-zinc-500 uppercase">Logline</label>
+                                    <button 
+                                        onClick={handleEnhanceProjectDescription}
+                                        disabled={!newProjectDescription.trim() || isEnhancingDescription}
+                                        className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isEnhancingDescription ? <Loader2 size={12} className="animate-spin"/> : <Sparkles size={12}/>}
+                                        Enhance with AI
+                                    </button>
+                                </div>
+                                <TextArea 
+                                    value={newProjectDescription} 
+                                    onChange={(e) => setNewProjectDescription(e.target.value)} 
+                                    placeholder="A brief description of your project's story, themes, or concept..."
+                                    rows={2}
+                                />
+                            </div>
+                            
+                            {/* Enhancement Options */}
+                            {descriptionEnhancements.length > 0 && (
+                                <div className="space-y-2">
+                                    <label className="block text-xs font-bold text-zinc-500 uppercase">Select an Enhanced Version</label>
+                                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                                        {descriptionEnhancements.map((option, idx) => (
+                                            <div 
+                                                key={idx}
+                                                onClick={() => { setNewProjectDescription(option); setDescriptionEnhancements([]); }}
+                                                className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg cursor-pointer hover:bg-zinc-800 hover:border-blue-500/50 transition-all text-sm text-zinc-300"
+                                            >
+                                                {option}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Genre</label>
+                                    <Input 
+                                        value={newProjectGenre} 
+                                        onChange={(e) => setNewProjectGenre(e.target.value)} 
+                                        placeholder="e.g. Sci-Fi Thriller"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">Visual Style</label>
+                                    <Input 
+                                        value={newProjectVisualStyle} 
+                                        onChange={(e) => setNewProjectVisualStyle(e.target.value)} 
+                                        placeholder="e.g. Neon Noir, Gritty Realism"
+                                    />
+                                </div>
+                            </div>
                         </div>
                      ) : (
                         <div className="space-y-4">
@@ -2178,33 +2419,193 @@ const App: React.FC = () => {
                                         placeholder='e.g. "A cyberpunk detective story in Neo Tokyo"'
                                     />
                                     <Button onClick={handleRollDice} disabled={isGeneratingSeeds} icon={Dice5}>
-                                        {isGeneratingSeeds ? '...' : 'Roll'}
+                                        {isGeneratingSeeds ? <Loader2 size={14} className="animate-spin"/> : 'Roll'}
                                     </Button>
                                 </div>
                             </div>
                             
+                            {/* Seeds in Row/Accordion Format with Tree View */}
                             {generatedSeeds.length > 0 && (
-                                <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto p-1">
-                                    {generatedSeeds.map((seed, idx) => (
-                                        <div 
-                                            key={idx}
-                                            onClick={() => setSelectedSeedIdx(idx)}
-                                            className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedSeedIdx === idx ? 'bg-blue-900/20 border-blue-500 ring-1 ring-blue-500' : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800'}`}
-                                        >
-                                            <div className="font-bold text-sm text-white mb-1">{seed.title}</div>
-                                            <div className="text-[10px] text-zinc-400 mb-2">{seed.genre}</div>
-                                            <div className="text-xs text-zinc-500 line-clamp-2">{seed.logline}</div>
-                                        </div>
-                                    ))}
+                                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                                    {getSeedTree().map((seed, idx) => {
+                                        const isExpanded = expandedSeedId === seed.id;
+                                        const isSelected = selectedSeedIdx !== null && generatedSeeds[selectedSeedIdx]?.id === seed.id;
+                                        const seedIndex = generatedSeeds.findIndex(s => s.id === seed.id);
+                                        
+                                        return (
+                                            <div key={seed.id} className="space-y-2">
+                                                {/* Parent Seed Row */}
+                                                <div 
+                                                    className={`border rounded-lg transition-all ${isSelected ? 'bg-blue-900/20 border-blue-500 ring-1 ring-blue-500' : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'}`}
+                                                >
+                                                    {/* Header Row - Always visible */}
+                                                    <div 
+                                                        className="p-3 flex items-start gap-3 cursor-pointer"
+                                                        onClick={() => setSelectedSeedIdx(seedIndex)}
+                                                    >
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); setExpandedSeedId(isExpanded ? null : seed.id); }}
+                                                            className="text-zinc-500 hover:text-white transition-colors mt-0.5"
+                                                        >
+                                                            {isExpanded ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+                                                        </button>
+                                                        
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                {editingSeedId === seed.id ? (
+                                                                    <input
+                                                                        autoFocus
+                                                                        value={editingSeedTitle}
+                                                                        onChange={(e) => setEditingSeedTitle(e.target.value)}
+                                                                        onBlur={() => { handleUpdateSeedTitle(seed.id, editingSeedTitle); }}
+                                                                        onKeyDown={(e) => { if (e.key === 'Enter') handleUpdateSeedTitle(seed.id, editingSeedTitle); }}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-white font-bold focus:outline-none focus:border-blue-500"
+                                                                    />
+                                                                ) : (
+                                                                    <span className="font-bold text-sm text-white">{seed.title}</span>
+                                                                )}
+                                                                <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded shrink-0">{seed.genre}</span>
+                                                            </div>
+                                                            {!isExpanded && (
+                                                                <div className="text-xs text-zinc-500 line-clamp-1">{seed.logline}</div>
+                                                            )}
+                                                        </div>
+                                                        
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); setEditingSeedId(seed.id); setEditingSeedTitle(seed.title); }}
+                                                            className="text-zinc-600 hover:text-blue-400 transition-colors shrink-0"
+                                                            title="Edit title"
+                                                        >
+                                                            <Edit3 size={14}/>
+                                                        </button>
+                                                        
+                                                        {isSelected && <Check size={16} className="text-blue-400 shrink-0"/>}
+                                                    </div>
+                                                    
+                                                    {/* Expanded Content */}
+                                                    {isExpanded && (
+                                                        <div className="px-3 pb-3 space-y-3 border-t border-zinc-800/50 pt-3">
+                                                            <div>
+                                                                <div className="text-[10px] font-bold text-zinc-500 uppercase mb-1">Logline</div>
+                                                                <div className="text-sm text-zinc-300">{seed.logline}</div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] font-bold text-zinc-500 uppercase mb-1">Visual Style</div>
+                                                                <div className="text-sm text-zinc-400">{seed.visualStyle}</div>
+                                                            </div>
+                                                            
+                                                            {/* Refinement Input */}
+                                                            <div className="pt-2 border-t border-zinc-800/50">
+                                                                <div className="text-[10px] font-bold text-zinc-500 uppercase mb-1 flex items-center gap-1">
+                                                                    <GitBranch size={10}/> Refine This Idea
+                                                                </div>
+                                                                <div className="flex gap-2">
+                                                                    <Input
+                                                                        value={seedRefinementPrompt}
+                                                                        onChange={(e) => setSeedRefinementPrompt(e.target.value)}
+                                                                        placeholder='e.g. "Make it horror instead of sci-fi" or "Add time travel"'
+                                                                        className="text-xs"
+                                                                    />
+                                                                    <Button 
+                                                                        onClick={() => handleRefineSeed(seed.id)}
+                                                                        disabled={isRefiningSeed || !seedRefinementPrompt.trim()}
+                                                                        size="sm"
+                                                                    >
+                                                                        {isRefiningSeed ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
+                                                                    </Button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                
+                                                {/* Child Refinements (Tree View) */}
+                                                {seed.children && seed.children.length > 0 && (
+                                                    <div className="ml-6 space-y-2 border-l-2 border-zinc-800 pl-3">
+                                                        {seed.children.map((child) => {
+                                                            const childIsExpanded = expandedSeedId === child.id;
+                                                            const childIndex = generatedSeeds.findIndex(s => s.id === child.id);
+                                                            const childIsSelected = selectedSeedIdx === childIndex;
+                                                            
+                                                            return (
+                                                                <div 
+                                                                    key={child.id}
+                                                                    className={`border rounded-lg transition-all ${childIsSelected ? 'bg-purple-900/20 border-purple-500 ring-1 ring-purple-500' : 'bg-zinc-900/50 border-zinc-800 hover:border-zinc-700'}`}
+                                                                >
+                                                                    <div 
+                                                                        className="p-2 flex items-start gap-2 cursor-pointer"
+                                                                        onClick={() => setSelectedSeedIdx(childIndex)}
+                                                                    >
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); setExpandedSeedId(childIsExpanded ? null : child.id); }}
+                                                                            className="text-zinc-500 hover:text-white transition-colors mt-0.5"
+                                                                        >
+                                                                            {childIsExpanded ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
+                                                                        </button>
+                                                                        
+                                                                        <GitBranch size={12} className="text-purple-400 mt-0.5 shrink-0"/>
+                                                                        <div className="flex-1 min-w-0">
+                                                                            <div className="flex items-center gap-2 mb-0.5">
+                                                                                <span className="font-medium text-xs text-white">{child.title}</span>
+                                                                                <span className="text-[9px] bg-purple-900/30 text-purple-300 px-1.5 py-0.5 rounded shrink-0">{child.genre}</span>
+                                                                            </div>
+                                                                            {!childIsExpanded && (
+                                                                                <div className="text-[11px] text-zinc-500 line-clamp-1">{child.logline}</div>
+                                                                            )}
+                                                                        </div>
+                                                                        {childIsSelected && <Check size={14} className="text-purple-400 shrink-0"/>}
+                                                                    </div>
+                                                                    
+                                                                    {childIsExpanded && (
+                                                                        <div className="px-2 pb-2 space-y-2 border-t border-zinc-800/50 pt-2">
+                                                                            <div className="text-[9px] text-purple-400 italic">Refined from: "{child.refinementPrompt}"</div>
+                                                                            <div className="text-xs text-zinc-300">{child.logline}</div>
+                                                                            <div className="text-[10px] text-zinc-500">{child.visualStyle}</div>
+                                                                            
+                                                                            {/* Allow further refinement */}
+                                                                            <div className="pt-2 border-t border-zinc-800/50">
+                                                                                <div className="flex gap-2">
+                                                                                    <Input
+                                                                                        value={seedRefinementPrompt}
+                                                                                        onChange={(e) => setSeedRefinementPrompt(e.target.value)}
+                                                                                        placeholder='Refine further...'
+                                                                                        className="text-xs"
+                                                                                    />
+                                                                                    <Button 
+                                                                                        onClick={() => handleRefineSeed(child.id)}
+                                                                                        disabled={isRefiningSeed || !seedRefinementPrompt.trim()}
+                                                                                        size="sm"
+                                                                                    >
+                                                                                        {isRefiningSeed ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
+                                                                                    </Button>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             )}
-
-                            <div className="flex items-center gap-2">
-                                <input type="checkbox" checked={autoGenAssets} onChange={e => setAutoGenAssets(e.target.checked)} id="autogen" />
-                                <label htmlFor="autogen" className="text-xs text-zinc-400">Auto-generate Script & Beat Sheet</label>
-                            </div>
                         </div>
                      )}
+
+                     {/* Auto-generate checkbox - shown for both modes */}
+                     <div className="flex items-center gap-2 pt-2 border-t border-zinc-800/50">
+                         <input type="checkbox" checked={autoGenAssets} onChange={e => setAutoGenAssets(e.target.checked)} id="autogen" />
+                         <label htmlFor="autogen" className="text-xs text-zinc-400 flex items-center gap-1">
+                             <FileText size={12}/> Auto-generate Beat Sheet & Opening Script
+                         </label>
+                         {creationMode === 'blank' && !newProjectDescription.trim() && autoGenAssets && (
+                             <span className="text-[10px] text-yellow-500 ml-2">(requires logline)</span>
+                         )}
+                     </div>
 
                      <div className="flex justify-end gap-2 pt-4 border-t border-zinc-800">
                          <Button variant="ghost" onClick={resetProjectModal}>Cancel</Button>

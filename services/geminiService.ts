@@ -298,12 +298,219 @@ export const generateStorySeeds = async (userPrompt: string): Promise<StorySeed[
             });
         });
 
-        return JSON.parse(response.text || "[]");
+        const parsed = JSON.parse(response.text || "[]");
+        // Add IDs to seeds
+        return parsed.map((seed: any, idx: number) => ({
+            ...seed,
+            id: `seed-${Date.now()}-${idx}`
+        }));
     } catch (e) {
         console.error("Story Seed Gen Error", e);
         return [];
     }
 }
+
+/**
+ * Refine a Story Seed based on user modification request
+ */
+export const refineSeed = async (
+    parentSeed: StorySeed, 
+    refinementPrompt: string
+): Promise<StorySeed | null> => {
+    const ai = createAI();
+    try {
+        const prompt = `You are refining an existing story concept based on user feedback.
+
+ORIGINAL CONCEPT:
+Title: ${parentSeed.title}
+Genre: ${parentSeed.genre}
+Logline: ${parentSeed.logline}
+Visual Style: ${parentSeed.visualStyle}
+
+USER MODIFICATION REQUEST: "${refinementPrompt}"
+
+Create a refined version of this concept that incorporates the user's request while maintaining coherence.
+The refinement should feel like a natural evolution of the original idea.
+`;
+
+        const response = await retryWithBackoff(async () => {
+            return await ai.models.generateContent({
+                model: MODELS.TEXT_FAST,
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            title: { type: Type.STRING },
+                            logline: { type: Type.STRING },
+                            genre: { type: Type.STRING },
+                            visualStyle: { type: Type.STRING }
+                        }
+                    }
+                }
+            });
+        });
+
+        const parsed = JSON.parse(response.text || "{}");
+        return {
+            ...parsed,
+            id: `seed-${Date.now()}-refined`,
+            parentId: parentSeed.id,
+            refinementPrompt
+        };
+    } catch (e) {
+        console.error("Seed Refinement Error", e);
+        return null;
+    }
+};
+
+/**
+ * Enhance a project description into multiple detailed options
+ */
+export const enhanceProjectDescription = async (description: string): Promise<string[]> => {
+    const ai = createAI();
+    try {
+        const prompt = `Take this brief project description and expand it into 4 different compelling, detailed logline/pitch variations.
+        
+        Each variation should:
+        - Be 2-3 sentences max
+        - Add specific details, stakes, and hook
+        - Take a slightly different creative angle
+        - Be suitable as a movie/TV pitch
+        
+        Brief Description: "${description}"
+        `;
+
+        const response = await retryWithBackoff(async () => {
+            return await ai.models.generateContent({
+                model: MODELS.TEXT_FAST,
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING }
+                    }
+                }
+            });
+        });
+
+        return JSON.parse(response.text || "[]");
+    } catch (e) {
+        console.error("Enhance Description Error", e);
+        return [];
+    }
+};
+
+/**
+ * Generate Beat Sheet from story concept
+ */
+export const generateBeatSheet = async (
+    title: string,
+    genre: string,
+    logline: string
+): Promise<string> => {
+    const ai = createAI();
+    try {
+        const prompt = `Write a detailed beat sheet for a ${genre} film/series called "${title}".
+
+Logline: ${logline}
+
+Use the Save The Cat! beat sheet structure:
+1. Opening Image
+2. Theme Stated
+3. Set-Up
+4. Catalyst
+5. Debate
+6. Break into Two
+7. B Story
+8. Fun and Games
+9. Midpoint
+10. Bad Guys Close In
+11. All Is Lost
+12. Dark Night of the Soul
+13. Break into Three
+14. Finale
+15. Final Image
+
+For each beat, provide:
+- The beat name
+- 2-3 sentences describing what happens
+- Key emotional moments or reveals
+
+Make it compelling and specific to this story.
+`;
+
+        return await retryWithBackoff(async () => {
+            const response = await ai.models.generateContent({
+                model: MODELS.TEXT_PRO,
+                contents: prompt,
+                config: {
+                    systemInstruction: "You are an expert screenwriter and story structure consultant."
+                }
+            });
+            return response.text || "Failed to generate beat sheet.";
+        });
+    } catch (e) {
+        console.error("Beat Sheet Generation Error", e);
+        throw e;
+    }
+};
+
+/**
+ * Generate Script Scene from Beat Sheet
+ */
+export const generateScriptFromBeatSheet = async (
+    title: string,
+    genre: string,
+    beatSheet: string,
+    sceneType: 'opening' | 'climax' | 'ending' = 'opening'
+): Promise<string> => {
+    const ai = createAI();
+    try {
+        const sceneDescriptions = {
+            opening: "the opening sequence (first 10 pages)",
+            climax: "the climax/midpoint sequence",
+            ending: "the finale/resolution"
+        };
+
+        const prompt = `Using this beat sheet, write ${sceneDescriptions[sceneType]} for "${title}" (${genre}).
+
+BEAT SHEET:
+${beatSheet}
+
+Write in proper screenplay format:
+- Scene headings (INT./EXT. LOCATION - TIME)
+- Action lines (present tense, visual descriptions)
+- Character names in CAPS when speaking
+- Dialogue with proper formatting
+- Parentheticals only when necessary
+
+Focus on:
+- Visual storytelling
+- Strong opening hook
+- Character introduction through action
+- Establishing tone and world
+
+This should be approximately 5-10 pages of script content.
+`;
+
+        return await retryWithBackoff(async () => {
+            const response = await ai.models.generateContent({
+                model: MODELS.TEXT_PRO,
+                contents: prompt,
+                config: {
+                    systemInstruction: "You are an award-winning screenwriter. Write vivid, cinematic screenplay pages."
+                }
+            });
+            return response.text || "Failed to generate script.";
+        });
+    } catch (e) {
+        console.error("Script Generation Error", e);
+        throw e;
+    }
+};
 
 /**
  * Extract Characters from Script
