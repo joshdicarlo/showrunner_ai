@@ -92,13 +92,15 @@ export const generateImage = async (
 ): Promise<GenerationResult> => {
     const model = options.model || MODELS.IMAGE_GEN;
     
-    // Resolve prompt with @ references
+    // Resolve prompt with @ references, stripping video-only fields for image generation
     const { resolved, matchedAssets } = resolvePrompt(
         options.prompt,
         options.projectAssets,
         options.activeAsset,
         options.projectSettings,
-        options.styleId
+        options.styleId,
+        false, // debug
+        'image' // Strip video-only fields
     );
     
     // Get reference images
@@ -242,12 +244,15 @@ export const editImage = async (
 ): Promise<GenerationResult> => {
     const geminiClient = getGeminiClient();
     
-    // Resolve prompt
+    // Resolve prompt, stripping video-only fields
     const { resolved } = resolvePrompt(
         prompt,
         options?.projectAssets,
         options?.activeAsset,
-        options?.projectSettings
+        options?.projectSettings,
+        null, // styleId
+        false, // debug
+        'image' // Strip video-only fields
     );
     
     console.log(`[GenerationService] Editing image:`, resolved.substring(0, 50) + "...");

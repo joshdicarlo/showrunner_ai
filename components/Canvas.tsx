@@ -393,8 +393,12 @@ export const Canvas: React.FC<CanvasProps> = ({
       const node = nodes.find(n => n.id === selectedNodeIds[0]); 
       if (!node) return; 
       
+      // Determine generation type based on node type
+      const genType = node.type === NodeType.AI_VIDEO_GEN ? 'video' : 
+                      node.type === NodeType.AI_TEXT_GEN ? 'text' : 'image';
+      
       const rawPrompt = node.data.prompt || node.data.text || ""; 
-      const { resolved, matchedAssets, trace } = resolvePrompt(rawPrompt, projectAssets, activeAsset, projectSettings, node.data.styleId, true); 
+      const { resolved, matchedAssets, trace } = resolvePrompt(rawPrompt, projectAssets, activeAsset, projectSettings, node.data.styleId, true, genType); 
       
       let referenceImages: string[] = []; 
       if (node.data.referenceImageUrl) { 

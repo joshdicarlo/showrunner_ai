@@ -534,7 +534,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
     setProgressMsg("Writing...");
     setError(null);
     try {
-      const { resolved } = resolvePrompt(node.data.prompt || "", projectAssets, activeAsset, projectSettings);
+      const { resolved } = resolvePrompt(node.data.prompt || "", projectAssets, activeAsset, projectSettings, null, false, 'text');
       const result = await GeminiService.generateCreativeText(resolved);
       const newHistory = addToHistory('text', result);
       onUpdate(node.id, { ...node.data, text: result, status: 'review', history: newHistory });
@@ -587,7 +587,9 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
           projectAssets, 
           activeAsset, 
           projectSettings,
-          node.data.styleId 
+          node.data.styleId,
+          false, // debug
+          'image' // Strip video-only fields
       );
       const model = node.data.model || MODELS.IMAGE_GEN;
 
@@ -642,7 +644,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       setProgressMsg("Editing...");
       setError(null);
       try {
-          const { resolved } = resolvePrompt(node.data.prompt || "Enhance this", projectAssets, activeAsset, projectSettings);
+          const { resolved } = resolvePrompt(node.data.prompt || "Enhance this", projectAssets, activeAsset, projectSettings, null, false, 'image');
           const result = await GeminiService.editImage(node.data.imageUrl, resolved);
           const newHistory = addToHistory('image', result);
           onUpdate(node.id, { 
@@ -701,7 +703,9 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
               projectAssets, 
               activeAsset, 
               projectSettings,
-              node.data.styleId 
+              node.data.styleId,
+              false, // debug
+              'video' // Keep all fields for video
           );
           
           let refImage = node.data.imageUrl;

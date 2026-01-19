@@ -16,19 +16,24 @@ interface AIStudioWindow {
 const SHOT_PROMPT_TEMPLATE = `
 ### SHOT PROMPT TEMPLATE (MANDATORY STRUCTURE)
 
-Action: [What is happening? Rule: You MUST use the @Character syntax for the FIRST mention of ANY known character in this specific shot. Subsequent mentions in the same shot must use just the Name.]
-Environment_Context: [Where are they? Example: At dawn, with floating islands in the background.]
-Camera: [Shot type, angle, movement, style. Example: Aerial shot, cinematic style, 35mm.]
-Lighting: [Mood, time of day, atmosphere. Example: Dramatic lighting, epic mood, ethereal lights.]
-Audio_Cues: [Specific music or sounds. Example: Subtle squelching sounds of fruit being crushed.]
-Dialogue: [Short spoken lines, max 8 seconds. Example: (KNIGHT) "The journey ends here."]
-Set: [The primary @Set reference. Example: @Mist_Forest_Set]
+--- IMAGE & VIDEO (Always included) ---
+Visual: [Static scene composition - describe as if frozen in a painting. Character positions, poses, expressions, spatial relationships. Use @Character for FIRST mention of any known character. Example: @Knight kneels before the throne, head bowed, sword laid flat across both palms. The King looms above, one hand raised.]
+Set: [Setting, atmosphere, location. Use @Set if applicable. Example: A cavernous throne room at dusk, dust motes drifting through shafts of golden light. @Throne_Room]
+Lighting: [Mood, time of day, light sources. Example: Dramatic side-lighting, warm amber tones from tall windows.]
+Camera: [Shot type, angle, lens. Example: Low angle, medium shot, 35mm anamorphic.]
+Style: [Visual style, film reference, color palette. Example: Cinematic, Ridley Scott epic, desaturated palette.]
+
+--- VIDEO ONLY (Stripped for image generation) ---
+Action: [What happens over time - movement, changes. Example: Knight slowly rises, grips sword hilt, turns to face the approaching enemy.]
+Camera_Motion: [Camera movement during shot. Example: Slow dolly in. Or: Static.]
+Dialogue: [Spoken lines, max 8 seconds. Example: (KNIGHT) "I accept your charge." Leave blank if none.]
+Audio: [Music, sound effects. Example: Swelling orchestral tension, armor clanking. Leave blank if none.]
 
 IMPORTANT SYNTAX RULES:
-1. KEYS (e.g. Action) must NEVER contain '@'.
+1. KEYS (e.g. Visual, Action) must NEVER contain '@'.
 2. CHARACTERS (STRICT ENFORCEMENT): 
    - Scan the scene for ALL characters present.
-   - For EACH character, find their FIRST occurrence in any field (Action, Dialogue, etc).
+   - For EACH character, find their FIRST occurrence in any field (Visual, Action, Dialogue, etc).
    - You MUST prefix that FIRST occurrence with '@' (e.g., "@Zax").
    - Do NOT use '@' for any subsequent mentions of that same character in the same shot.
    - Failure to use '@' on the first mention will break the visualization pipeline.

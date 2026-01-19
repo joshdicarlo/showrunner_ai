@@ -186,6 +186,7 @@ const App: React.FC = () => {
       
       // Debug logging for prompt resolution
       console.log('[handleTaskExecution] Task prompt:', task.prompt);
+      console.log('[handleTaskExecution] Task type:', task.type);
       console.log('[handleTaskExecution] Available assets:', activeProj?.assets.map(a => ({ title: a.title, id: a.id })));
       console.log('[handleTaskExecution] Target asset:', asset?.title, asset?.id);
       
@@ -194,7 +195,9 @@ const App: React.FC = () => {
           activeProj?.assets, 
           asset,
           activeProj?.settings || DEFAULT_PROJECT_SETTINGS,
-          task.config?.styleId 
+          task.config?.styleId,
+          false, // debug
+          task.type // Pass generation type to strip video-only fields for images
       );
       
       console.log('[handleTaskExecution] Resolved prompt:', resolved.substring(0, 200));

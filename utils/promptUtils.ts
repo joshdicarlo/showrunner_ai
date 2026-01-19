@@ -1,23 +1,64 @@
 
 import { ProjectAsset, DepartmentType, ProjectSettings } from '../types';
 
+// Video-only fields that should be stripped for image generation
+const VIDEO_ONLY_FIELDS = ['Action', 'Camera_Motion', 'Dialogue', 'Audio'];
+
+/**
+ * Strips video-only fields from a structured shot prompt.
+ * These fields (Action, Camera_Motion, Dialogue, Audio) are only relevant for video generation.
+ */
+export const stripVideoOnlyFields = (text: string): string => {
+    let result = text;
+    
+    for (const field of VIDEO_ONLY_FIELDS) {
+        // Match field patterns like "Action: [content]" or "Action: content until next field or end"
+        // Pattern 1: Field with bracketed content
+        const bracketPattern = new RegExp(`${field}:\\s*\\[[^\\]]*\\]\\s*`, 'gi');
+        result = result.replace(bracketPattern, '');
+        
+        // Pattern 2: Field with content until next known field or end of string
+        // This handles cases where the content isn't in brackets
+        const linePattern = new RegExp(`^${field}:.*$`, 'gim');
+        result = result.replace(linePattern, '');
+    }
+    
+    // Clean up any leftover "--- VIDEO ONLY ---" section headers
+    result = result.replace(/---\s*VIDEO ONLY[^-]*---/gi, '');
+    
+    // Clean up excessive whitespace/newlines
+    result = result.replace(/\n{3,}/g, '\n\n').trim();
+    
+    return result;
+};
+
 export const resolvePrompt = (
     text: string, 
     projectAssets: ProjectAsset[] = [], 
     activeAsset: ProjectAsset | undefined,
     projectSettings?: ProjectSettings,
     overrideStyleId?: string | null, // If passed, overrides all other style logic. Pass "none" to force no style.
-    debug: boolean = false
+    debug: boolean = false,
+    generationType: 'image' | 'video' | 'text' = 'image' // NEW: Determines which fields to include
 ): { resolved: string, trace: string[], matchedAssets: ProjectAsset[] } => {
     let resolved = text;
     const trace: string[] = [];
     const matchedAssets: Set<ProjectAsset> = new Set();
 
-    if (debug) trace.push(`[Start] Input: "${text}"`);
+    if (debug) trace.push(`[Start] Input: "${text}" (type: ${generationType})`);
 
     if (!text) return { resolved: "", trace, matchedAssets: [] };
 
     try {
+        // --- 0. Strip video-only fields for image generation ---
+        if (generationType === 'image') {
+            const before = resolved;
+            resolved = stripVideoOnlyFields(resolved);
+            if (debug && before !== resolved) {
+                trace.push(`[Video Fields] Stripped Action, Camera_Motion, Dialogue, Audio for image generation`);
+            }
+        }
+
         // --- 1. Style Resolution ---
         // Determine the effective style to apply
         let appliedStyleId: string | undefined = undefined;
