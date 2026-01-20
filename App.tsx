@@ -100,7 +100,35 @@ const App: React.FC = () => {
   // Storage hook for Google Drive/future storage backends
   const storage = useStorage();
   
-  const activeProject = projects.find(p => p.id === currentProjectId);
+  // Active project with automatic migration for modelDefaults
+  const activeProject = useMemo(() => {
+    const project = projects.find(p => p.id === currentProjectId);
+    if (!project) return undefined;
+    
+    // Migrate old projects to have modelDefaults
+    if (project.settings && !project.settings.modelDefaults) {
+      const migratedProject = {
+        ...project,
+        settings: {
+          ...project.settings,
+          modelDefaults: {
+            image: 'luma-photon-1',
+            video: 'luma-ray-2',
+            refineCharacter: 'gemini-3-pro-image-preview',
+            turntable: 'luma-ray-2',
+            editImage: 'gemini-3-pro-image-preview',
+          }
+        }
+      };
+      
+      // Persist the migration
+      setProjects(prev => prev.map(p => p.id === currentProjectId ? migratedProject : p));
+      
+      return migratedProject;
+    }
+    
+    return project;
+  }, [projects, currentProjectId]);
   
   const projectsRef = useRef(projects);
   const currentProjectIdRef = useRef(currentProjectId);
@@ -1261,6 +1289,15 @@ const App: React.FC = () => {
         defaultRatio = "1:1";
     }
 
+    // Use asset's default image model if set, otherwise project default, then fallback to luma-photon-1
+    const imageModel = activeAsset.defaultModels?.image || 
+                      activeProject.settings?.modelDefaults?.image || 
+                      'luma-photon-1'; // Default to Luma instead of MODELS.IMAGE_GEN
+
+    console.log('[handleGenerateConcepts] Asset defaultModels:', activeAsset.defaultModels);
+    console.log('[handleGenerateConcepts] Project modelDefaults:', activeProject.settings?.modelDefaults);
+    console.log('[handleGenerateConcepts] Selected imageModel:', imageModel);
+
     for (let i = 0; i < count; i++) {
         const childX = startX + padding + (i * (nodeWidth + gap));
         const childY = startY + 60;
@@ -1280,7 +1317,8 @@ const App: React.FC = () => {
                 aspectRatio: defaultRatio,
                 status: 'pending',
                 tag: 'concept',
-                styleId: styleId 
+                styleId: styleId,
+                model: imageModel
             }
         });
         
@@ -1293,7 +1331,7 @@ const App: React.FC = () => {
             config: {
                 styleId: styleId,
                 aspectRatio: defaultRatio,
-                model: MODELS.IMAGE_GEN,
+                model: imageModel,
                 targetNodeId: nodeId 
             },
             batchId,

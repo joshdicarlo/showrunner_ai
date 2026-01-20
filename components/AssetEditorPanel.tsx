@@ -44,6 +44,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     
     // Default Models State
     const [defaultModels, setDefaultModels] = useState<Partial<ModelDefaults>>(asset.defaultModels || {});
+    const [showModelsSection, setShowModelsSection] = useState(false);
     
     // Hidden Prompt State
     const [overrideHidden, setOverrideHidden] = useState(asset.overrideHiddenPrompt || false);
@@ -140,7 +141,14 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     };
 
     const handleModelChange = (modelType: keyof ModelDefaults, value: string) => {
-        const newModels = { ...defaultModels, [modelType]: value };
+        const newModels = { ...defaultModels };
+        // If empty string (use project default), remove the override
+        if (value === '') {
+            delete newModels[modelType];
+        } else {
+            newModels[modelType] = value;
+        }
+        console.log('[AssetEditorPanel] handleModelChange:', modelType, value, 'newModels:', newModels);
         setDefaultModels(newModels);
         onUpdate({ ...asset, defaultModels: newModels });
     };
@@ -209,97 +217,6 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                             projectSettings={projectSettings}
                             className="w-full justify-between"
                         />
-                    </div>
-                </div>
-
-                {/* Default Models Section */}
-                <div className="space-y-3 pt-4 border-t border-zinc-800">
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs uppercase font-bold text-zinc-500 flex items-center gap-2">
-                            <Cpu size={12} className="text-purple-500" />
-                            Default Models
-                        </label>
-                    </div>
-                    
-                    <div className="space-y-2">
-                        {/* Image Model */}
-                        <div>
-                            <label className="text-[10px] text-zinc-600 mb-1 block">Image Generation</label>
-                            <Select
-                                value={defaultModels.image || projectSettings?.modelDefaults?.image || 'luma-photon-1'}
-                                onChange={(e) => handleModelChange('image', e.target.value)}
-                                className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
-                            >
-                                <option value="">Use Project Default</option>
-                                {IMAGE_MODELS_OPTIONS.map(opt => (
-                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                ))}
-                            </Select>
-                        </div>
-
-                        {/* Video Model */}
-                        <div>
-                            <label className="text-[10px] text-zinc-600 mb-1 block">Video Generation</label>
-                            <Select
-                                value={defaultModels.video || projectSettings?.modelDefaults?.video || 'luma-ray-2'}
-                                onChange={(e) => handleModelChange('video', e.target.value)}
-                                className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
-                            >
-                                <option value="">Use Project Default</option>
-                                {VIDEO_MODELS_OPTIONS.map(opt => (
-                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                ))}
-                            </Select>
-                        </div>
-
-                        {/* Refine Character Model (for Casting department) */}
-                        {asset.department === DepartmentType.CASTING_WARDROBE && (
-                            <div>
-                                <label className="text-[10px] text-zinc-600 mb-1 block">Refine Character</label>
-                                <Select
-                                    value={defaultModels.refineCharacter || projectSettings?.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview'}
-                                    onChange={(e) => handleModelChange('refineCharacter', e.target.value)}
-                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
-                                >
-                                    <option value="">Use Project Default</option>
-                                    {IMAGE_MODELS_OPTIONS.map(opt => (
-                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                    ))}
-                                </Select>
-                            </div>
-                        )}
-
-                        {/* Turntable Model */}
-                        {asset.department === DepartmentType.CASTING_WARDROBE && (
-                            <div>
-                                <label className="text-[10px] text-zinc-600 mb-1 block">Turntable</label>
-                                <Select
-                                    value={defaultModels.turntable || projectSettings?.modelDefaults?.turntable || 'luma-ray-2'}
-                                    onChange={(e) => handleModelChange('turntable', e.target.value)}
-                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
-                                >
-                                    <option value="">Use Project Default</option>
-                                    {VIDEO_MODELS_OPTIONS.map(opt => (
-                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                    ))}
-                                </Select>
-                            </div>
-                        )}
-
-                        {/* Edit Image Model */}
-                        <div>
-                            <label className="text-[10px] text-zinc-600 mb-1 block">Edit Image</label>
-                            <Select
-                                value={defaultModels.editImage || projectSettings?.modelDefaults?.editImage || 'gemini-3-pro-image-preview'}
-                                onChange={(e) => handleModelChange('editImage', e.target.value)}
-                                className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
-                            >
-                                <option value="">Use Project Default</option>
-                                {IMAGE_MODELS_OPTIONS.map(opt => (
-                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                ))}
-                            </Select>
-                        </div>
                     </div>
                 </div>
 
@@ -413,6 +330,106 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                         </div>
                     </div>
                 )}
+
+                {/* Default Models Section (Accordion at Bottom) */}
+                <div className="border-t border-zinc-800 pt-4">
+                    <button
+                        onClick={() => setShowModelsSection(!showModelsSection)}
+                        className="w-full flex items-center justify-between mb-2 hover:bg-zinc-900/30 p-2 rounded transition-colors"
+                    >
+                        <label className="text-xs uppercase font-bold text-zinc-500 flex items-center gap-2 cursor-pointer">
+                            <Cpu size={12} className="text-purple-500" />
+                            Default Models
+                        </label>
+                        <ChevronDown 
+                            size={14} 
+                            className={`text-zinc-500 transition-transform ${showModelsSection ? 'rotate-180' : ''}`}
+                        />
+                    </button>
+                    
+                    {showModelsSection && (
+                        <div className="space-y-2 mt-2">
+                            {/* Image Model */}
+                            <div>
+                                <label className="text-[10px] text-zinc-600 mb-1 block">Image Generation</label>
+                                <Select
+                                    value={defaultModels.image || ''}
+                                    onChange={(e) => handleModelChange('image', e.target.value)}
+                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                >
+                                    <option value="">Use Project Default ({projectSettings?.modelDefaults?.image || 'luma-photon-1'})</option>
+                                    {IMAGE_MODELS_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </Select>
+                            </div>
+
+                            {/* Video Model */}
+                            <div>
+                                <label className="text-[10px] text-zinc-600 mb-1 block">Video Generation</label>
+                                <Select
+                                    value={defaultModels.video || ''}
+                                    onChange={(e) => handleModelChange('video', e.target.value)}
+                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                >
+                                    <option value="">Use Project Default ({projectSettings?.modelDefaults?.video || 'luma-ray-2'})</option>
+                                    {VIDEO_MODELS_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </Select>
+                            </div>
+
+                            {/* Refine Character Model (for Casting department) */}
+                            {asset.department === DepartmentType.CASTING_WARDROBE && (
+                                <div>
+                                    <label className="text-[10px] text-zinc-600 mb-1 block">Refine Character</label>
+                                    <Select
+                                        value={defaultModels.refineCharacter || ''}
+                                        onChange={(e) => handleModelChange('refineCharacter', e.target.value)}
+                                        className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                    >
+                                        <option value="">Use Project Default ({projectSettings?.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview'})</option>
+                                        {IMAGE_MODELS_OPTIONS.map(opt => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </Select>
+                                </div>
+                            )}
+
+                            {/* Turntable Model */}
+                            {asset.department === DepartmentType.CASTING_WARDROBE && (
+                                <div>
+                                    <label className="text-[10px] text-zinc-600 mb-1 block">Turntable</label>
+                                    <Select
+                                        value={defaultModels.turntable || ''}
+                                        onChange={(e) => handleModelChange('turntable', e.target.value)}
+                                        className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                    >
+                                        <option value="">Use Project Default ({projectSettings?.modelDefaults?.turntable || 'luma-ray-2'})</option>
+                                        {VIDEO_MODELS_OPTIONS.map(opt => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </Select>
+                                </div>
+                            )}
+
+                            {/* Edit Image Model */}
+                            <div>
+                                <label className="text-[10px] text-zinc-600 mb-1 block">Edit Image</label>
+                                <Select
+                                    value={defaultModels.editImage || ''}
+                                    onChange={(e) => handleModelChange('editImage', e.target.value)}
+                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                >
+                                    <option value="">Use Project Default ({projectSettings?.modelDefaults?.editImage || 'gemini-3-pro-image-preview'})</option>
+                                    {IMAGE_MODELS_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </Select>
+                            </div>
+                        </div>
+                    )}
+                </div>
 
                 {/* Advanced: Hidden Prompt (Moved to bottom) */}
                 <div className="border-t border-zinc-800 pt-4 pb-4">
