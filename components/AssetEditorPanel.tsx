@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { ProjectAsset, DepartmentType, ProjectSettings } from '../types';
+import { ProjectAsset, DepartmentType, ProjectSettings, ModelDefaults } from '../types';
 import { Input, TextArea, Button, Select } from './UI';
-import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace, Settings, Eye, EyeOff, ChevronDown, Frame, XCircle, Code as CodeIcon } from 'lucide-react';
+import { RefreshCw, Info, Sparkles, Tag, Image as ImageIcon, FileText, User, Layers, ScanFace, Settings, Eye, EyeOff, ChevronDown, Frame, XCircle, Code as CodeIcon, Cpu } from 'lucide-react';
 import { generateSummary } from '../services/geminiService';
 import { StyleSelector } from './StyleSelector';
+import { IMAGE_MODELS_OPTIONS, VIDEO_MODELS_OPTIONS } from '../constants';
 
 interface AssetEditorPanelProps {
     asset: ProjectAsset;
@@ -41,6 +42,9 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
     const [isGenerating, setIsGenerating] = useState(false);
     const [conceptCount, setConceptCount] = useState(4);
     
+    // Default Models State
+    const [defaultModels, setDefaultModels] = useState<Partial<ModelDefaults>>(asset.defaultModels || {});
+    
     // Hidden Prompt State
     const [overrideHidden, setOverrideHidden] = useState(asset.overrideHiddenPrompt || false);
     const [hiddenPrompt, setHiddenPrompt] = useState(asset.hiddenPrompt || "");
@@ -74,6 +78,7 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
         
         setDescription(desc);
         setStyleId(asset.styleId || "");
+        setDefaultModels(asset.defaultModels || {});
         setOverrideHidden(asset.overrideHiddenPrompt || false);
         setHiddenPrompt(asset.hiddenPrompt || "");
     }, [asset.id, asset.description, asset.department]);
@@ -132,6 +137,12 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
         const val = e.target.value;
         setHiddenPrompt(val);
         onUpdate({ ...asset, hiddenPrompt: val });
+    };
+
+    const handleModelChange = (modelType: keyof ModelDefaults, value: string) => {
+        const newModels = { ...defaultModels, [modelType]: value };
+        setDefaultModels(newModels);
+        onUpdate({ ...asset, defaultModels: newModels });
     };
 
     const handleRegenerateSummary = async () => {
@@ -198,6 +209,97 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
                             projectSettings={projectSettings}
                             className="w-full justify-between"
                         />
+                    </div>
+                </div>
+
+                {/* Default Models Section */}
+                <div className="space-y-3 pt-4 border-t border-zinc-800">
+                    <div className="flex items-center justify-between">
+                        <label className="text-xs uppercase font-bold text-zinc-500 flex items-center gap-2">
+                            <Cpu size={12} className="text-purple-500" />
+                            Default Models
+                        </label>
+                    </div>
+                    
+                    <div className="space-y-2">
+                        {/* Image Model */}
+                        <div>
+                            <label className="text-[10px] text-zinc-600 mb-1 block">Image Generation</label>
+                            <Select
+                                value={defaultModels.image || projectSettings?.modelDefaults?.image || 'luma-photon-1'}
+                                onChange={(e) => handleModelChange('image', e.target.value)}
+                                className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                            >
+                                <option value="">Use Project Default</option>
+                                {IMAGE_MODELS_OPTIONS.map(opt => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </Select>
+                        </div>
+
+                        {/* Video Model */}
+                        <div>
+                            <label className="text-[10px] text-zinc-600 mb-1 block">Video Generation</label>
+                            <Select
+                                value={defaultModels.video || projectSettings?.modelDefaults?.video || 'luma-ray-2'}
+                                onChange={(e) => handleModelChange('video', e.target.value)}
+                                className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                            >
+                                <option value="">Use Project Default</option>
+                                {VIDEO_MODELS_OPTIONS.map(opt => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </Select>
+                        </div>
+
+                        {/* Refine Character Model (for Casting department) */}
+                        {asset.department === DepartmentType.CASTING_WARDROBE && (
+                            <div>
+                                <label className="text-[10px] text-zinc-600 mb-1 block">Refine Character</label>
+                                <Select
+                                    value={defaultModels.refineCharacter || projectSettings?.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview'}
+                                    onChange={(e) => handleModelChange('refineCharacter', e.target.value)}
+                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                >
+                                    <option value="">Use Project Default</option>
+                                    {IMAGE_MODELS_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </Select>
+                            </div>
+                        )}
+
+                        {/* Turntable Model */}
+                        {asset.department === DepartmentType.CASTING_WARDROBE && (
+                            <div>
+                                <label className="text-[10px] text-zinc-600 mb-1 block">Turntable</label>
+                                <Select
+                                    value={defaultModels.turntable || projectSettings?.modelDefaults?.turntable || 'luma-ray-2'}
+                                    onChange={(e) => handleModelChange('turntable', e.target.value)}
+                                    className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                                >
+                                    <option value="">Use Project Default</option>
+                                    {VIDEO_MODELS_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </Select>
+                            </div>
+                        )}
+
+                        {/* Edit Image Model */}
+                        <div>
+                            <label className="text-[10px] text-zinc-600 mb-1 block">Edit Image</label>
+                            <Select
+                                value={defaultModels.editImage || projectSettings?.modelDefaults?.editImage || 'gemini-3-pro-image-preview'}
+                                onChange={(e) => handleModelChange('editImage', e.target.value)}
+                                className="w-full text-xs bg-zinc-950 border-zinc-700 text-zinc-200"
+                            >
+                                <option value="">Use Project Default</option>
+                                {IMAGE_MODELS_OPTIONS.map(opt => (
+                                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                ))}
+                            </Select>
+                        </div>
                     </div>
                 </div>
 

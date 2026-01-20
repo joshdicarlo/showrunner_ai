@@ -115,9 +115,18 @@ export interface ProjectAsset {
   driveId?: string; // Folder ID or File ID in Drive
   status?: 'active' | 'archived';
   timelineData?: TimelineData; // For Editorial Sequences
+  defaultModels?: Partial<ModelDefaults>; // Asset-specific model overrides
 }
 
 // --- New Settings Types ---
+
+export interface ModelDefaults {
+    image: string; // Default model for image generation
+    video: string; // Default model for video generation
+    refineCharacter: string; // Model for character refinement
+    turntable: string; // Model for turntable/3D views
+    editImage: string; // Model for image editing
+}
 
 export interface VisualStyle {
     id: string;
@@ -137,6 +146,7 @@ export interface ProjectSettings {
     styles: VisualStyle[];
     assetConfigs: Partial<Record<DepartmentType, AssetTypeConfig>>;
     concurrentGenerations?: number;
+    modelDefaults?: ModelDefaults; // Default models for different generation types
 }
 
 export interface Project {

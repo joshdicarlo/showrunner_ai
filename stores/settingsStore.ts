@@ -11,7 +11,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { AIProvider } from '../types';
+import { AIProvider, ModelDefaults } from '../types';
 
 // ============================================================================
 // Types
@@ -29,6 +29,7 @@ interface GenerationDefaults {
     defaultAspectRatio: string;
     concurrentGenerations: number;
     autoApprove: boolean;
+    modelDefaults: ModelDefaults; // Default models for different generation types
 }
 
 interface UserPreferences {
@@ -104,6 +105,13 @@ const DEFAULT_GENERATION_DEFAULTS: GenerationDefaults = {
     defaultAspectRatio: '16:9',
     concurrentGenerations: 3,
     autoApprove: false,
+    modelDefaults: {
+        image: 'luma-photon-1', // Luma
+        video: 'luma-ray-2', // Luma Ray 3 (using ray-2 as latest available)
+        refineCharacter: 'gemini-3-pro-image-preview', // Gemini 3 Pro
+        turntable: 'luma-ray-2', // Luma Ray 3
+        editImage: 'gemini-3-pro-image-preview', // Gemini 3 Pro (Nano Banana)
+    },
 };
 
 const DEFAULT_PREFERENCES: UserPreferences = {

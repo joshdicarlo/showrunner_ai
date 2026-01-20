@@ -1,9 +1,9 @@
 
 import React, { useState } from 'react';
-import { ProjectSettings, DepartmentType, VisualStyle } from '../types';
-import { DEPARTMENTS } from '../constants';
+import { ProjectSettings, DepartmentType, VisualStyle, ModelDefaults } from '../types';
+import { DEPARTMENTS, IMAGE_MODELS_OPTIONS, VIDEO_MODELS_OPTIONS } from '../constants';
 import { Modal, Button, Select } from './UI';
-import { Plus, Trash2, Save, Search, Settings, Palette, FileJson, Check } from 'lucide-react';
+import { Plus, Trash2, Save, Search, Settings, Palette, FileJson, Check, Cpu } from 'lucide-react';
 
 interface SettingsModalProps {
     settings: ProjectSettings;
@@ -12,7 +12,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
-    const [activeTab, setActiveTab] = useState<'general' | 'styles' | 'assets'>('general');
+    const [activeTab, setActiveTab] = useState<'general' | 'styles' | 'assets' | 'models'>('general');
     const [localSettings, setLocalSettings] = useState<ProjectSettings>(JSON.parse(JSON.stringify(settings)));
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -104,6 +104,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, 
                         >
                             <FileJson size={14} /> Asset Defaults
                         </button>
+                        <button 
+                            onClick={() => setActiveTab('models')} 
+                            className={`w-full text-left px-4 py-1.5 text-xs hover:bg-[#2a2d2e] flex items-center gap-2 ${activeTab === 'models' ? 'bg-[#37373d] text-white border-l-2 border-[#007fd4]' : 'text-zinc-400 border-l-2 border-transparent'}`}
+                        >
+                            <Cpu size={14} /> Default Models
+                        </button>
                     </div>
                     <div className="p-2 border-t border-[#2b2b2b]">
                         <Button size="sm" onClick={addStyle} variant="secondary" className="w-full justify-start text-xs h-8 bg-[#3c3c3c] hover:bg-[#4c4c4c] border-none text-zinc-300">
@@ -120,6 +126,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, 
                             {activeTab === 'general' && "User > Commonly Used"}
                             {activeTab === 'styles' && "User > Visual Styles"}
                             {activeTab === 'assets' && "User > Asset Defaults"}
+                            {activeTab === 'models' && "User > Default Models"}
                         </span>
                     </div>
 
@@ -268,6 +275,156 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, 
                                             </div>
                                         );
                                     })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* --- MODELS --- */}
+                        {activeTab === 'models' && (
+                            <div className="max-w-4xl">
+                                <h2 className="text-lg font-medium text-zinc-100 mb-1">Default Models</h2>
+                                <p className={descClass}>
+                                    Configure which AI models to use by default for different generation types.
+                                </p>
+
+                                <div className="mt-6 space-y-6">
+                                    {/* Images */}
+                                    <div className="pl-3 border-l-2 border-[#2b2b2b]">
+                                        <h3 className="text-sm font-bold text-zinc-200 mb-3">Image Generation</h3>
+                                        <div className="grid grid-cols-1 gap-4">
+                                            <div>
+                                                <label className={labelClass}>Default Image Model</label>
+                                                <p className={descClass}>Used for general image generation and concept art.</p>
+                                                <Select 
+                                                    value={localSettings.modelDefaults?.image || 'luma-photon-1'}
+                                                    onChange={(e) => setLocalSettings({
+                                                        ...localSettings,
+                                                        modelDefaults: {
+                                                            ...localSettings.modelDefaults,
+                                                            image: e.target.value,
+                                                            video: localSettings.modelDefaults?.video || 'luma-ray-2',
+                                                            refineCharacter: localSettings.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview',
+                                                            turntable: localSettings.modelDefaults?.turntable || 'luma-ray-2',
+                                                            editImage: localSettings.modelDefaults?.editImage || 'gemini-3-pro-image-preview',
+                                                        }
+                                                    })}
+                                                    className="bg-[#3c3c3c] border-transparent focus:border-[#007fd4] rounded-none text-sm py-1.5 w-full"
+                                                >
+                                                    {IMAGE_MODELS_OPTIONS.map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </Select>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Videos */}
+                                    <div className="pl-3 border-l-2 border-[#2b2b2b]">
+                                        <h3 className="text-sm font-bold text-zinc-200 mb-3">Video Generation</h3>
+                                        <div className="grid grid-cols-1 gap-4">
+                                            <div>
+                                                <label className={labelClass}>Default Video Model</label>
+                                                <p className={descClass}>Used for standard video generation.</p>
+                                                <Select 
+                                                    value={localSettings.modelDefaults?.video || 'luma-ray-2'}
+                                                    onChange={(e) => setLocalSettings({
+                                                        ...localSettings,
+                                                        modelDefaults: {
+                                                            ...localSettings.modelDefaults,
+                                                            image: localSettings.modelDefaults?.image || 'luma-photon-1',
+                                                            video: e.target.value,
+                                                            refineCharacter: localSettings.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview',
+                                                            turntable: localSettings.modelDefaults?.turntable || 'luma-ray-2',
+                                                            editImage: localSettings.modelDefaults?.editImage || 'gemini-3-pro-image-preview',
+                                                        }
+                                                    })}
+                                                    className="bg-[#3c3c3c] border-transparent focus:border-[#007fd4] rounded-none text-sm py-1.5 w-full"
+                                                >
+                                                    {VIDEO_MODELS_OPTIONS.map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </Select>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Custom Functions */}
+                                    <div className="pl-3 border-l-2 border-[#2b2b2b]">
+                                        <h3 className="text-sm font-bold text-zinc-200 mb-3">Custom Functions</h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div>
+                                                <label className={labelClass}>Refine Character</label>
+                                                <p className={descClass}>Model for character refinement and dataset generation.</p>
+                                                <Select 
+                                                    value={localSettings.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview'}
+                                                    onChange={(e) => setLocalSettings({
+                                                        ...localSettings,
+                                                        modelDefaults: {
+                                                            ...localSettings.modelDefaults,
+                                                            image: localSettings.modelDefaults?.image || 'luma-photon-1',
+                                                            video: localSettings.modelDefaults?.video || 'luma-ray-2',
+                                                            refineCharacter: e.target.value,
+                                                            turntable: localSettings.modelDefaults?.turntable || 'luma-ray-2',
+                                                            editImage: localSettings.modelDefaults?.editImage || 'gemini-3-pro-image-preview',
+                                                        }
+                                                    })}
+                                                    className="bg-[#3c3c3c] border-transparent focus:border-[#007fd4] rounded-none text-sm py-1.5 w-full"
+                                                >
+                                                    {IMAGE_MODELS_OPTIONS.map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </Select>
+                                            </div>
+                                            
+                                            <div>
+                                                <label className={labelClass}>Turntable</label>
+                                                <p className={descClass}>Model for generating turntable/360° views.</p>
+                                                <Select 
+                                                    value={localSettings.modelDefaults?.turntable || 'luma-ray-2'}
+                                                    onChange={(e) => setLocalSettings({
+                                                        ...localSettings,
+                                                        modelDefaults: {
+                                                            ...localSettings.modelDefaults,
+                                                            image: localSettings.modelDefaults?.image || 'luma-photon-1',
+                                                            video: localSettings.modelDefaults?.video || 'luma-ray-2',
+                                                            refineCharacter: localSettings.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview',
+                                                            turntable: e.target.value,
+                                                            editImage: localSettings.modelDefaults?.editImage || 'gemini-3-pro-image-preview',
+                                                        }
+                                                    })}
+                                                    className="bg-[#3c3c3c] border-transparent focus:border-[#007fd4] rounded-none text-sm py-1.5 w-full"
+                                                >
+                                                    {VIDEO_MODELS_OPTIONS.map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </Select>
+                                            </div>
+                                            
+                                            <div>
+                                                <label className={labelClass}>Edit Image</label>
+                                                <p className={descClass}>Model for image editing operations (Nano Banana).</p>
+                                                <Select 
+                                                    value={localSettings.modelDefaults?.editImage || 'gemini-3-pro-image-preview'}
+                                                    onChange={(e) => setLocalSettings({
+                                                        ...localSettings,
+                                                        modelDefaults: {
+                                                            ...localSettings.modelDefaults,
+                                                            image: localSettings.modelDefaults?.image || 'luma-photon-1',
+                                                            video: localSettings.modelDefaults?.video || 'luma-ray-2',
+                                                            refineCharacter: localSettings.modelDefaults?.refineCharacter || 'gemini-3-pro-image-preview',
+                                                            turntable: localSettings.modelDefaults?.turntable || 'luma-ray-2',
+                                                            editImage: e.target.value,
+                                                        }
+                                                    })}
+                                                    className="bg-[#3c3c3c] border-transparent focus:border-[#007fd4] rounded-none text-sm py-1.5 w-full"
+                                                >
+                                                    {IMAGE_MODELS_OPTIONS.map(opt => (
+                                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                                    ))}
+                                                </Select>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         )}

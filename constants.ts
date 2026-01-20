@@ -122,5 +122,12 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
         [DepartmentType.CASTING_WARDROBE]: { hiddenPrompt: "framing: wide angle, full-body" },
         [DepartmentType.SET_DESIGN]: { hiddenPrompt: "wide shot, establishing shot, detailed environment, architectural visualization" },
         [DepartmentType.PRODUCTION]: { hiddenPrompt: "" }
+    },
+    modelDefaults: {
+        image: 'luma-photon-1', // Luma
+        video: 'luma-ray-2', // Luma Ray 3 (using ray-2 as latest available)
+        refineCharacter: 'gemini-3-pro-image-preview', // Gemini 3 Pro
+        turntable: 'luma-ray-2', // Luma Ray 3
+        editImage: 'gemini-3-pro-image-preview', // Gemini 3 Pro (Nano Banana)
     }
 };
