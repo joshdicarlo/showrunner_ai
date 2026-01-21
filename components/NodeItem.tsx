@@ -48,6 +48,8 @@ interface NodeItemProps {
     onContextMenu?: (e: React.MouseEvent, id: string) => void;
     /** Callback to request generation through the central queue */
     onRequestGeneration?: (request: GenerationRequest) => void;
+    /** Callback when image is clicked to open lightbox */
+    onImageClick?: () => void;
     activeAsset?: ProjectAsset;
     isThumbnail?: boolean;
     isDragOver?: boolean;
@@ -924,7 +926,8 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                          <img 
                             src={node.data.imageUrl} 
                             alt="Generated" 
-                            className={`rounded border border-zinc-700 ${expanded ? 'max-h-full max-w-full object-contain' : 'max-h-full max-w-full object-contain'}`} 
+                            className={`rounded border border-zinc-700 ${expanded ? 'max-h-full max-w-full object-contain' : 'max-h-full max-w-full object-contain'}`}
+                            onDoubleClick={(e) => { e.stopPropagation(); onImageClick?.(); }}
                          />
                          
                          {!expanded && (
@@ -1018,7 +1021,7 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                  >
                      {node.data.imageUrl ? (
                          <>
-                            <img src={node.data.imageUrl} className={`w-full h-full ${expanded ? 'object-contain' : 'object-cover'}`} />
+                            <img src={node.data.imageUrl} className={`w-full h-full ${expanded ? 'object-contain' : 'object-cover'}`} onDoubleClick={(e) => { e.stopPropagation(); onImageClick?.(); }} />
                             {isThumbnail && !expanded && (
                                 <div className="absolute bottom-2 right-2 bg-blue-600 text-white p-1.5 rounded shadow-lg border border-blue-400">
                                     <User size={12} fill="currentColor" />

@@ -1294,10 +1294,6 @@ const App: React.FC = () => {
                       activeProject.settings?.modelDefaults?.image || 
                       'luma-photon-1'; // Default to Luma instead of MODELS.IMAGE_GEN
 
-    console.log('[handleGenerateConcepts] Asset defaultModels:', activeAsset.defaultModels);
-    console.log('[handleGenerateConcepts] Project modelDefaults:', activeProject.settings?.modelDefaults);
-    console.log('[handleGenerateConcepts] Selected imageModel:', imageModel);
-
     for (let i = 0; i < count; i++) {
         const childX = startX + padding + (i * (nodeWidth + gap));
         const childY = startY + 60;

@@ -148,7 +148,6 @@ export const AssetEditorPanel: React.FC<AssetEditorPanelProps> = ({
         } else {
             newModels[modelType] = value;
         }
-        console.log('[AssetEditorPanel] handleModelChange:', modelType, value, 'newModels:', newModels);
         setDefaultModels(newModels);
         onUpdate({ ...asset, defaultModels: newModels });
     };

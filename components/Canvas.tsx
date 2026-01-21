@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData, ProjectSettings } from '../types';
 import { NodeItem, GenerationRequest } from './NodeItem';
 import { Button, Input, Modal, ToggleGroup } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus, HardDrive, Cloud, CloudOff, Database } from 'lucide-react';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus, HardDrive, Cloud, CloudOff, Database, LayoutGrid, Grid3x3, Loader2, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 
@@ -62,6 +62,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [offset, setOffset] = useState<Position>({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const [showArchived, setShowArchived] = useState(false);
+  const [viewMode, setViewMode] = useState<'normal' | 'images-only'>('normal');
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [lightboxNodeId, setLightboxNodeId] = useState<string | null>(null);
   
   // Undo History
   const [history, setHistory] = useState<HistoryState[]>([]);
@@ -194,24 +197,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       });
   }, [setNodes, setConnections]);
 
-  // ... (Shortcuts & Interaction Handlers omitted for brevity, same as before) ...
-  // Re-adding essential effects
-  useEffect(() => {
-      const handleKeyDown = (e: KeyboardEvent) => {
-          const tagName = (e.target as HTMLElement).tagName;
-          const isInput = ['INPUT', 'TEXTAREA'].includes(tagName);
-          if (e.code === 'Space' && !e.repeat && !isInput) setIsSpacePressed(true);
-          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !isInput) { e.preventDefault(); performUndo(); }
-          if (e.key === 'Tab' && !isInput) { e.preventDefault(); setTabMenu({ x: mousePosRef.current.x, y: mousePosRef.current.y, visible: true, search: '', selectedIndex: 0 }); setContextMenu(null); }
-          if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput && selectedNodeIds.length > 0) deleteSelectedNodes();
-          if (e.key.toLowerCase() === 'f' && !isInput) frameSelection();
-      };
-      const handleKeyUp = (e: KeyboardEvent) => { if (e.code === 'Space') setIsSpacePressed(false); };
-      window.addEventListener('keydown', handleKeyDown);
-      window.addEventListener('keyup', handleKeyUp);
-      return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [selectedNodeIds, nodes, offset, scale, performUndo]);
-
+  // Define visibleNodes before using it in effects
   const visibleNodes = useMemo(() => nodes.filter(n => {
       const matchDept = n.department === currentDept;
       const matchAsset = n.assetId === (currentAssetId || undefined);
@@ -219,6 +205,41 @@ export const Canvas: React.FC<CanvasProps> = ({
       if (n.parentId) { const parent = nodes.find(p => p.id === n.parentId); if (parent && parent.data.collapsed) return false; }
       return matchDept && matchAsset && notArchived;
   }), [nodes, currentDept, currentAssetId, showArchived]);
+
+  // ... (Shortcuts & Interaction Handlers omitted for brevity, same as before) ...
+  // Re-adding essential effects
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          const tagName = (e.target as HTMLElement).tagName;
+          const isInput = ['INPUT', 'TEXTAREA'].includes(tagName);
+          
+          // Lightbox navigation
+          if (lightboxNodeId && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+              e.preventDefault();
+              const mediaNodes = visibleNodes.filter(n => n.data.imageUrl || n.data.videoUrl);
+              const currentIndex = mediaNodes.findIndex(n => n.id === lightboxNodeId);
+              if (currentIndex === -1) return;
+              
+              if (e.key === 'ArrowLeft' && currentIndex > 0) {
+                  setLightboxNodeId(mediaNodes[currentIndex - 1].id);
+              } else if (e.key === 'ArrowRight' && currentIndex < mediaNodes.length - 1) {
+                  setLightboxNodeId(mediaNodes[currentIndex + 1].id);
+              }
+              return;
+          }
+          
+          if (e.code === 'Space' && !e.repeat && !isInput) setIsSpacePressed(true);
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !isInput) { e.preventDefault(); performUndo(); }
+          if (e.key === 'Tab' && !isInput) { e.preventDefault(); setTabMenu({ x: mousePosRef.current.x, y: mousePosRef.current.y, visible: true, search: '', selectedIndex: 0 }); setContextMenu(null); }
+          if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput && selectedNodeIds.length > 0) deleteSelectedNodes();
+          if (e.key.toLowerCase() === 'f' && !isInput) frameSelection();
+          if (e.key === 'Escape' && lightboxNodeId) setLightboxNodeId(null);
+      };
+      const handleKeyUp = (e: KeyboardEvent) => { if (e.code === 'Space') setIsSpacePressed(false); };
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
+  }, [selectedNodeIds, nodes, offset, scale, performUndo, lightboxNodeId, visibleNodes]);
 
   useEffect(() => { setOffset({ x: 0, y: 0 }); setScale(1); setSelectedNodeIds([]); setContextMenu(null); setHistory([]); }, [currentDept, currentAssetId]);
   useEffect(() => { if (focusNodes && focusNodes.length > 0) frameSelection(focusNodes); }, [focusNodes]);
@@ -506,9 +527,97 @@ export const Canvas: React.FC<CanvasProps> = ({
         <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: `${20 * scale}px ${20 * scale}px`, transform: `translate(${offset.x % (20 * scale)}px, ${offset.y % (20 * scale)}px)` }} />
         <div ref={canvasRef} className={`w-full h-full ${interactionMode === 'panning' || isSpacePressed ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
             <div className="origin-top-left w-full h-full absolute top-0 left-0 canvas-layer" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
-                {visibleNodes.map(node => (
-                    <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onContextMenu={handleNodeContextMenu} onRequestGeneration={onRequestGeneration} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} />
-                ))}
+                {viewMode === 'normal' ? (
+                    visibleNodes.map(node => (
+                        <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onContextMenu={handleNodeContextMenu} onRequestGeneration={onRequestGeneration} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} onImageClick={() => setLightboxNodeId(node.id)} />
+                    ))
+                ) : (
+                    visibleNodes.filter(n => n.data.imageUrl || n.data.videoUrl || n.data.status === 'generating' || n.data.status === 'pending').map(node => {
+                        // Calculate aspect ratio for proper sizing
+                        const baseSize = 300;
+                        const aspectRatio = node.data.aspectRatio || '1:1';
+                        const [w, h] = aspectRatio.split(':').map(Number);
+                        const ratio = w / h;
+                        const width = ratio >= 1 ? baseSize : baseSize * ratio;
+                        const height = ratio >= 1 ? baseSize / ratio : baseSize;
+                        
+                        return (
+                            <div 
+                                key={node.id}
+                                className={`absolute cursor-pointer group transition-transform hover:scale-105 hover:z-50 ${selectedNodeIds.includes(node.id) ? 'ring-4 ring-blue-500 rounded-lg' : ''}`}
+                                style={{ 
+                                    left: node.position.x, 
+                                    top: node.position.y,
+                                    width: `${width}px`,
+                                    height: `${height}px`,
+                                }}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleNodeSelect(node.id, e.shiftKey);
+                                }}
+                                onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    if (node.data.imageUrl || node.data.videoUrl) {
+                                        setLightboxNodeId(node.id);
+                                    }
+                                }}
+                                onMouseEnter={() => setHoveredNodeId(node.id)}
+                                onMouseLeave={() => setHoveredNodeId(null)}
+                                onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
+                                title={`${node.data.status || 'pending'}\n${node.data.prompt || node.data.text || ''}`}
+                            >
+                                {/* Loading State */}
+                                {(node.data.status === 'generating' || node.data.status === 'pending') && !node.data.imageUrl && !node.data.videoUrl ? (
+                                    <div className="w-full h-full bg-zinc-900 rounded-lg shadow-xl flex flex-col items-center justify-center border-2 border-zinc-700">
+                                        <Loader2 size={48} className="animate-spin text-blue-500 mb-4" />
+                                        <span className="text-xs text-zinc-400">Generating...</span>
+                                    </div>
+                                ) : node.data.videoUrl && hoveredNodeId === node.id ? (
+                                    <video 
+                                        src={node.data.videoUrl} 
+                                        autoPlay 
+                                        loop 
+                                        muted 
+                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black"
+                                    />
+                                ) : node.data.imageUrl ? (
+                                    <img 
+                                        src={node.data.imageUrl} 
+                                        alt={node.data.prompt || ''}
+                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black"
+                                    />
+                                ) : node.data.videoUrl ? (
+                                    <video 
+                                        src={node.data.videoUrl}
+                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black"
+                                    />
+                                ) : null}
+                                
+                                {/* Status Badge */}
+                                {node.data.imageUrl || node.data.videoUrl ? (
+                                    <div className={`absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-bold uppercase shadow-lg ${
+                                        node.data.status === 'approved' ? 'bg-green-500 text-white' :
+                                        node.data.status === 'review' ? 'bg-yellow-500 text-black' :
+                                        node.data.status === 'archived' ? 'bg-zinc-600 text-white' :
+                                        node.data.status === 'generating' ? 'bg-blue-500 text-white' :
+                                        'bg-zinc-700 text-white'
+                                    }`}>
+                                        {node.data.status || 'draft'}
+                                    </div>
+                                ) : null}
+                                
+                                {/* Tooltip on Hover */}
+                                {(node.data.imageUrl || node.data.videoUrl) && (
+                                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3 rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <div className="text-white text-xs line-clamp-3">
+                                            {node.data.prompt || node.data.text || 'No prompt'}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })
+                )}
             </div>
         </div>
         {selectionBox && ( <div className="absolute border border-blue-500 bg-blue-500/20 pointer-events-none z-50" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.w, height: selectionBox.h }} /> )}
@@ -580,7 +689,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         )}
         {/* ... TabMenu, Toolbar, Hints, DebugModal (Same) ... */}
         {tabMenu && ( <div className="fixed z-50 flex flex-col bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-64 overflow-hidden animate-in fade-in zoom-in-95 duration-100" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(e) => e.stopPropagation()}> <div className="p-2 border-b border-zinc-800 flex items-center gap-2"> <Search size={14} className="text-zinc-500" /> <input autoFocus className="bg-transparent text-sm text-white focus:outline-none w-full placeholder-zinc-600" placeholder="Search nodes..." value={tabMenu.search} onChange={(e) => setTabMenu({...tabMenu, search: e.target.value, selectedIndex: 0})} onKeyDown={handleTabMenuKeyDown} /> </div> <div className="max-h-60 overflow-y-auto p-1"> {filteredMenuNodes.map((item, idx) => ( <button key={item.type} onClick={() => { addNodeAtLocation(item.type, tabMenu.x, tabMenu.y); setTabMenu(null); }} className={`w-full text-left px-3 py-2 rounded flex items-center gap-3 transition-colors ${idx === tabMenu.selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`} > <item.icon size={16} className={idx === tabMenu.selectedIndex ? 'text-white' : 'text-zinc-500'} /> <div> <div className="text-xs font-bold">{item.label}</div> <div className={`text-[10px] ${idx === tabMenu.selectedIndex ? 'text-blue-200' : 'text-zinc-500'}`}>{item.desc}</div> </div> </button> ))} {filteredMenuNodes.length === 0 && ( <div className="p-3 text-xs text-zinc-500 text-center">No matching nodes</div> )} </div> <div className="bg-zinc-950 px-2 py-1 text-[9px] text-zinc-600 border-t border-zinc-800 flex justify-between"> <span>Create: ⏎</span> <span>Navigate: ↑↓</span> </div> </div> )}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.TEXT_INPUT)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_TEXT_GEN)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_GEN)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_EDIT)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_VIDEO_GEN)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.TEXT_INPUT)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_TEXT_GEN)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_GEN)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_EDIT)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_VIDEO_GEN)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant={viewMode === 'images-only' ? 'primary' : 'ghost'} onClick={() => setViewMode(viewMode === 'normal' ? 'images-only' : 'normal')} title={viewMode === 'normal' ? 'Images Only View' : 'Normal View'}> <Grid3x3 size={16} className={viewMode === 'images-only' ? 'text-white' : 'text-zinc-500'}/> </Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
         <div className="absolute top-4 right-4 flex flex-col items-end gap-1 pointer-events-none opacity-50"> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">TAB for Menu</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">F to Frame</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">Ctrl+Z Undo</div> </div>
         {showDebugModal && debugTrace && ( 
             <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl"> 
@@ -766,6 +875,111 @@ export const Canvas: React.FC<CanvasProps> = ({
                 </div> 
             </Modal> 
         )}
+
+        {/* Lightbox Modal for Expanded Images */}
+        {lightboxNodeId && (() => {
+            const node = nodes.find(n => n.id === lightboxNodeId);
+            if (!node || (!node.data.imageUrl && !node.data.videoUrl)) return null;
+            
+            const mediaNodes = visibleNodes.filter(n => n.data.imageUrl || n.data.videoUrl);
+            const currentIndex = mediaNodes.findIndex(n => n.id === lightboxNodeId);
+            const hasPrev = currentIndex > 0;
+            const hasNext = currentIndex < mediaNodes.length - 1;
+            
+            return (
+                <div 
+                    className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center"
+                    onClick={() => setLightboxNodeId(null)}
+                >
+                    {/* Close Button */}
+                    <button
+                        onClick={() => setLightboxNodeId(null)}
+                        className="absolute top-4 right-4 p-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-white transition-colors z-10"
+                    >
+                        <X size={24} />
+                    </button>
+                    
+                    {/* Previous Button */}
+                    {hasPrev && (
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setLightboxNodeId(mediaNodes[currentIndex - 1].id);
+                            }}
+                            className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-zinc-800/80 hover:bg-zinc-700 rounded-lg text-white transition-colors z-10"
+                        >
+                            <ChevronLeft size={32} />
+                        </button>
+                    )}
+                    
+                    {/* Next Button */}
+                    {hasNext && (
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setLightboxNodeId(mediaNodes[currentIndex + 1].id);
+                            }}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-zinc-800/80 hover:bg-zinc-700 rounded-lg text-white transition-colors z-10"
+                        >
+                            <ChevronRight size={32} />
+                        </button>
+                    )}
+                    
+                    {/* Image/Video Container */}
+                    <div 
+                        className="max-w-[90vw] max-h-[90vh] flex flex-col items-center"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {node.data.videoUrl ? (
+                            <video
+                                src={node.data.videoUrl}
+                                controls
+                                autoPlay
+                                loop
+                                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+                            />
+                        ) : (
+                            <img
+                                src={node.data.imageUrl!}
+                                alt={node.data.prompt || ''}
+                                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+                            />
+                        )}
+                        
+                        {/* Info Bar */}
+                        <div className="mt-4 bg-zinc-900/90 backdrop-blur px-6 py-3 rounded-lg max-w-3xl">
+                            <div className="flex items-center gap-3 mb-2">
+                                <div className={`px-2 py-1 rounded text-xs font-bold uppercase ${
+                                    node.data.status === 'approved' ? 'bg-green-500 text-white' :
+                                    node.data.status === 'review' ? 'bg-yellow-500 text-black' :
+                                    node.data.status === 'archived' ? 'bg-zinc-600 text-white' :
+                                    'bg-blue-500 text-white'
+                                }`}>
+                                    {node.data.status || 'draft'}
+                                </div>
+                                <div className="text-xs text-zinc-400">
+                                    {currentIndex + 1} / {mediaNodes.length}
+                                </div>
+                                {node.data.model && (
+                                    <div className="text-xs text-zinc-500 font-mono">
+                                        {node.data.model}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="text-sm text-zinc-300">
+                                {node.data.prompt || node.data.text || 'No prompt'}
+                            </div>
+                        </div>
+                        
+                        {/* Keyboard Hints */}
+                        <div className="mt-2 flex gap-4 text-xs text-zinc-600">
+                            <span>← → Navigate</span>
+                            <span>ESC Close</span>
+                        </div>
+                    </div>
+                </div>
+            );
+        })()}
     </div>
   );
 };
