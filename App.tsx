@@ -21,6 +21,7 @@ import * as GoogleDriveService from './services/googleDriveService';
 import { createRenderQueue } from './services/renderQueue';
 import { useStorage, storageManager } from './services/storage';
 import { OneShotModal } from './components/OneShotModal';
+import { ScriptNodeSelector } from './components/ScriptNodeSelector';
 import { resolvePrompt, resolveReferenceImages } from './utils/promptUtils';
 import { TEMPLATES } from './data/templates';
 import { FolderPlus, Film, Layout, CornerUpLeft, Sparkles, Check, Wand2, Dice5, Cloud, Loader2, CloudOff, Grid, List, LayoutGrid, Scissors, Layers, Plus, ArrowRight, Clock, Star, Zap, Search, User, MapPin, Clapperboard, CheckCircle, Circle, ChevronDown, ChevronRight, Play, Edit3, GitBranch, RefreshCw, FileText, Archive, Trash2, MoreVertical, ArchiveRestore, Eye, EyeOff } from 'lucide-react';
@@ -57,6 +58,7 @@ const App: React.FC = () => {
   const [isCreateAssetOpen, setIsCreateAssetOpen] = useState(false);
   const [showEnhanceModal, setShowEnhanceModal] = useState(false);
   const [isAnalyzeModalOpen, setIsAnalyzeModalOpen] = useState(false);
+  const [isScriptSelectorOpen, setIsScriptSelectorOpen] = useState(false);
   const [isOneShotModalOpen, setIsOneShotModalOpen] = useState(false);
   const [isRenderQueueOpen, setIsRenderQueueOpen] = useState(false); 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -1553,24 +1555,28 @@ const App: React.FC = () => {
       });
   }, []);
 
+  // Opens the script node selector before discovery
   const handleOneShotBreakdown = async () => {
       if (!activeProject) return;
+      setIsScriptSelectorOpen(true);
+  };
+
+  // Performs discovery on the selected script nodes
+  const handleDiscoverFromSelectedNodes = async (selectedNodeIds: string[]) => {
+      if (!activeProject || selectedNodeIds.length === 0) return;
+      
+      setIsScriptSelectorOpen(false);
       setOneShotItems([]);
       setAnalysisThinking('');
       setIsOneShotModalOpen(true);
       setIsAnalyzing(true);
 
       try {
-          const scriptNodes = activeProject.nodes.filter(n => 
-              n.department === DepartmentType.WRITERS_ROOM && 
-              n.type === NodeType.AI_TEXT_GEN && 
-              n.data.status === 'approved' && 
-              n.data.text
-          );
+          const scriptNodes = activeProject.nodes.filter(n => selectedNodeIds.includes(n.id));
           const fullText = scriptNodes.map(n => n.data.text).join('\n\n');
           
           // Log which nodes are being analyzed for debugging
-          console.log(`[One-Shot Discovery] Analyzing ${scriptNodes.length} APPROVED script node(s):`, 
+          console.log(`[One-Shot Discovery] Analyzing ${scriptNodes.length} selected script node(s):`, 
               scriptNodes.map(n => ({
                   id: n.id,
                   type: n.type,
@@ -1582,7 +1588,7 @@ const App: React.FC = () => {
           console.log(`[One-Shot Discovery] Total script text length: ${fullText.length} characters`);
           
           if (!fullText) {
-              alert("No approved scripts found to analyze. Please mark a script as 'Approved' in the Writers Room.");
+              alert("Selected scripts contain no text. Please select scripts with content.");
               setIsOneShotModalOpen(false);
               setIsAnalyzing(false);
               return;
@@ -3313,6 +3319,16 @@ const App: React.FC = () => {
                      </div>
                  </div>
              </Modal>
+        )}
+
+        {isScriptSelectorOpen && activeProject && (
+            <ScriptNodeSelector
+                nodes={activeProject.nodes}
+                onClose={() => setIsScriptSelectorOpen(false)}
+                onConfirm={handleDiscoverFromSelectedNodes}
+                title="Select Scripts to Analyze"
+                description="Choose which script nodes to include in discovery. Only selected scripts will be analyzed for characters, locations, and scenes."
+            />
         )}
 
         {isOneShotModalOpen && (
