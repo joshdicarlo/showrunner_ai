@@ -34,7 +34,7 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            type: NodeType.GROUP,
            department: DepartmentType.WRITERS_ROOM,
            position: { x: 50, y: 50 },
-           width: 850,
+           width: 1250,
            height: 550,
            data: { label: "Sequence 1", collapsed: false }
        },
@@ -48,7 +48,46 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            data: { 
                prompt: 'Write a beat sheet for a chase scene in an asteroid field.', 
                text: `1. **The Signal**: @Zax and his copilot **Orbit** receive a distress call from the rebel leader **Kira**.\n2. **The Ambush**: The warlord **Vorg** intercepts the transmission and launches his fleet.\n3. **The Maneuver**: @Zax flies into the asteroid field while **Orbit** calculates the odds.\n4. **The Crash**: They are hit by **Vorg**'s cannon but **Kira** pulls them from the wreckage just in time.`,
-               status: 'review' 
+               status: 'approved' 
+           },
+           width: 350, height: 400
+       },
+       // Outline
+       { 
+           id: 'n-outline', 
+           type: NodeType.AI_TEXT_GEN, 
+           department: DepartmentType.WRITERS_ROOM,
+           parentId: 'seq-group',
+           position: {x: 480, y: 120}, 
+           data: { 
+               prompt: 'Expand the beat sheet into a detailed scene outline with action descriptions and character moments.', 
+               text: `## SEQUENCE 1: THE ASTEROID CHASE
+
+### BEAT 1 — THE SIGNAL
+- **Location**: INT. STARFIGHTER COCKPIT – DEEP SPACE
+- **Action**: @Zax pilots through routine starfield. Warning lights blink softly. **Orbit** hovers near nav-com, optic lens scanning.
+- **Inciting Incident**: Distress transmission crackles in—**Kira**'s voice, urgent and distorted, requesting immediate extraction.
+- **Character Beat**: Zax and Orbit share a tense glance. Without hesitation, Zax commits: "Send her our coordinates. Full burn."
+
+### BEAT 2 — THE AMBUSH
+- **Location**: EXT. SPACE / INT. VORG'S FLAGSHIP
+- **Action**: Before Orbit can respond, the transmission warps. Stars ahead darken as a massive warship emerges from hyperspace, followed by an armada.
+- **Villain Introduction**: **Vorg**, armored and imposing, watches from his bridge. "Lock onto the source. No one answers Kira but me."
+- **Stakes Raised**: Weapons charge. Alarms scream in Zax's cockpit.
+
+### BEAT 3 — THE MANEUVER
+- **Location**: EXT. ASTEROID FIELD / INT. COCKPIT
+- **Action**: Zax spots the asteroid field and dives in. Chaotic tumbling rocks. Laser fire slices past, shattering asteroids into spinning debris.
+- **Tension Builder**: Orbit projects survival probability: 0.7%. Emits a mournful hum.
+- **Character Beat**: Zax, defiant: "I've flown worse."
+
+### BEAT 4 — THE CRASH
+- **Location**: EXT. SPACE / INT. COCKPIT / EXT. WRECKAGE
+- **Action**: Blinding flash—Vorg's heavy cannon slams into the fighter. Ship spins out, trailing fire. Hull rips open. Decompression howls.
+- **Rescue**: Rebel transport swoops in. **Kira**, battle-worn, reaches out from the open hatch as the wreck breaks apart.
+- **Resolution**: "I've got you. Let go!" Zax grabs her hand. Orbit zips into the hold. The starfighter explodes behind them.
+- **Tag**: Safe inside, Kira smiles grimly: "Took you long enough." Zax grins: "You always know how to make an entrance."`,
+               status: 'approved' 
            },
            width: 350, height: 400
        },
@@ -58,9 +97,9 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            type: NodeType.AI_TEXT_GEN, 
            department: DepartmentType.WRITERS_ROOM,
            parentId: 'seq-group',
-           position: {x: 480, y: 120}, 
+           position: {x: 880, y: 120}, 
            data: { 
-               prompt: 'Convert the beat sheet into a script scene.', 
+               prompt: 'Convert the outline into a properly formatted screenplay scene.', 
                text: `### INT. STARFIGHTER COCKPIT – DEEP SPACE
 
 Stars streak past the cockpit canopy. WARNING LIGHTS blink softly.
