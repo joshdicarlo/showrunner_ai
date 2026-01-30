@@ -45,6 +45,7 @@ interface NodeItemProps {
     onDelete: (id: string) => void;
     onUpdate: (id: string, data: any) => void;
     onDragStart: (e: React.MouseEvent, id: string) => void;
+    onResizeStart?: (e: React.MouseEvent, id: string, corner?: 'nw' | 'ne' | 'sw' | 'se') => void;
     onContextMenu?: (e: React.MouseEvent, id: string) => void;
     /** Callback to request generation through the central queue */
     onRequestGeneration?: (request: GenerationRequest) => void;
@@ -359,7 +360,7 @@ const MarkdownToolbar: React.FC<{
 );
 
 const NodeItemComponent: React.FC<NodeItemProps> = ({ 
-    node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onContextMenu, onRequestGeneration,
+    node, isSelected, onSelect, onDelete, onUpdate, onDragStart, onResizeStart, onContextMenu, onRequestGeneration,
     activeAsset, isThumbnail, isDragOver, projectAssets, assetThumbnails = {}, refinedImagesMap = {}, approvedImagesMap = {}, projectSettings
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1410,6 +1411,17 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
             </>
           )}
       </div>
+      )}
+
+      {/* Resize Handle */}
+      {onResizeStart && (
+        <div
+          className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize group/resize z-50"
+          onMouseDown={(e) => onResizeStart(e, node.id)}
+        >
+          <div className="absolute bottom-1 right-1 w-2 h-2 border-r-2 border-b-2 border-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+          <div className={`absolute bottom-0.5 right-0.5 w-3 h-3 border-r-2 border-b-2 border-blue-500 opacity-0 transition-opacity ${isSelected ? 'opacity-100' : ''}`} />
+        </div>
       )}
     </div>
   );

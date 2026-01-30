@@ -1,9 +1,10 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { FlowNode, FlowConnection, NodeType, Position, DepartmentType, ProjectAsset, NodeData, ProjectSettings } from '../types';
 import { NodeItem, GenerationRequest } from './NodeItem';
 import { Button, Input, Modal, ToggleGroup } from './UI';
-import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus, HardDrive, Cloud, CloudOff, Database, LayoutGrid, Grid3x3, Loader2, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ZoomIn, ZoomOut, Type, Image as ImageIcon, Sparkles, Video, Archive, UserCheck, FolderPlus, Search, Trash2, MousePointer2, Scan, Group, FileText, ScanFace, Rotate3d, Smile, Bug, Code as CodeIcon, Copy, BookmarkPlus, HardDrive, Cloud, CloudOff, Database, LayoutGrid, Grid3x3, Loader2, X, ChevronLeft, ChevronRight, Magnet } from 'lucide-react';
 import { DEPARTMENTS, MODELS, VIDEO_MODEL_CAPABILITIES } from '../constants';
 import { resolvePrompt, resolveReferenceImages } from '../utils/promptUtils';
 
@@ -70,13 +71,26 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [history, setHistory] = useState<HistoryState[]>([]);
   
   // Interaction Modes
-  const [interactionMode, setInteractionMode] = useState<'none' | 'panning' | 'selecting' | 'draggingNode'>('none');
+  const [interactionMode, setInteractionMode] = useState<'none' | 'panning' | 'selecting' | 'draggingNode' | 'resizingNode'>('none');
   
   const [dragStart, setDragStart] = useState<Position>({ x: 0, y: 0 }); // Client coordinates
   const [selectionBox, setSelectionBox] = useState<{x: number, y: number, w: number, h: number} | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [dragTargetGroupId, setDragTargetGroupId] = useState<string | null>(null); // Highlighted group on drag
+  
+  // Resize State
+  const [resizingNodeId, setResizingNodeId] = useState<string | null>(null);
+  const [resizeStartDimensions, setResizeStartDimensions] = useState<{w: number, h: number} | null>(null);
+  const [resizeCorner, setResizeCorner] = useState<'nw' | 'ne' | 'sw' | 'se' | null>(null);
+  const [resizeStartPosition, setResizeStartPosition] = useState<Position | null>(null);
+  
+  // Snapping State
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [snapToObjects, setSnapToObjects] = useState(true);
+  const gridSize = 20;
+  const snapThreshold = 10;
+  const [alignmentLines, setAlignmentLines] = useState<{type: 'horizontal' | 'vertical', position: number}[]>([]);
   
   // Menus
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, nodeId: string | null } | null>(null);
@@ -358,6 +372,25 @@ export const Canvas: React.FC<CanvasProps> = ({
       e.stopPropagation(); setContextMenu(null); setTabMenu(null); saveHistory(); isDraggingRef.current = false; setInteractionMode('draggingNode'); setDraggingNodeId(id);
       setSelectedNodeIds(prev => e.shiftKey ? (prev.includes(id) ? prev.filter(nid => nid !== id) : [...prev, id]) : (!prev.includes(id) ? [id] : prev));
   }, [saveHistory]);
+  const onNodeResizeStart = useCallback((e: React.MouseEvent, id: string, corner: 'nw' | 'ne' | 'sw' | 'se' = 'se') => {
+      e.stopPropagation();
+      e.preventDefault();
+      setContextMenu(null);
+      setTabMenu(null);
+      saveHistory();
+      const node = nodes.find(n => n.id === id);
+      if (!node) return;
+      setInteractionMode('resizingNode');
+      setResizingNodeId(id);
+      setResizeCorner(corner);
+      setDragStart({ x: e.clientX, y: e.clientY });
+      setResizeStartDimensions({ 
+          w: node.width || (node.type === NodeType.GROUP ? 400 : 288), 
+          h: node.height || (node.type === NodeType.GROUP ? 400 : 300) 
+      });
+      setResizeStartPosition({ x: node.position.x, y: node.position.y });
+      setSelectedNodeIds([id]);
+  }, [saveHistory, nodes]);
   const handleNodeContextMenu = useCallback((e: React.MouseEvent, nodeId: string) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, nodeId }); setTabMenu(null); }, []);
 
   const handleSetThumbnailAction = () => { 
@@ -510,12 +543,168 @@ export const Canvas: React.FC<CanvasProps> = ({
     mousePosRef.current = { x: e.clientX, y: e.clientY }; const rect = canvasRef.current?.getBoundingClientRect(); if (!rect) return;
     if (interactionMode === 'panning') { setOffset(prev => ({ x: prev.x + e.movementX, y: prev.y + e.movementY })); } 
     else if (interactionMode === 'selecting') { const currentX = e.clientX - rect.left; const currentY = e.clientY - rect.top; const x = Math.min(dragStart.x - rect.left, currentX); const y = Math.min(dragStart.y - rect.top, currentY); const w = Math.abs(currentX - (dragStart.x - rect.left)); const h = Math.abs(currentY - (dragStart.y - rect.top)); setSelectionBox({ x, y, w, h }); } 
-    else if (interactionMode === 'draggingNode' && draggingNodeId) { isDraggingRef.current = true; const zoomFactor = scale; const deltaX = e.movementX / zoomFactor; const deltaY = e.movementY / zoomFactor; const mouseX = (e.clientX - rect.left - offset.x) / scale; const mouseY = (e.clientY - rect.top - offset.y) / scale; const targetGroup = visibleNodes.find(n => n.type === NodeType.GROUP && n.id !== draggingNodeId && !selectedNodeIds.includes(n.id) && mouseX >= n.position.x && mouseX <= n.position.x + (n.width || 400) && mouseY >= n.position.y && mouseY <= n.position.y + (n.height || 400)); setDragTargetGroupId(targetGroup ? targetGroup.id : null); setNodes(prev => { const movingIds = new Set<string>(); movingIds.add(draggingNodeId); if (selectedNodeIds.includes(draggingNodeId)) { selectedNodeIds.forEach(id => movingIds.add(id)); } const nodesToMove = new Set<string>(movingIds); prev.forEach(n => { if (movingIds.has(n.id) && n.type === NodeType.GROUP) { prev.forEach(child => { if (child.parentId === n.id) nodesToMove.add(child.id); }); } }); return prev.map(n => { if (nodesToMove.has(n.id)) { return { ...n, position: { x: n.position.x + deltaX, y: n.position.y + deltaY } }; } return n; }); }); }
+    else if (interactionMode === 'resizingNode' && resizingNodeId && resizeStartDimensions && resizeStartPosition) {
+        const deltaX = (e.clientX - dragStart.x) / scale;
+        const deltaY = (e.clientY - dragStart.y) / scale;
+        const node = nodes.find(n => n.id === resizingNodeId);
+        const isGroup = node?.type === NodeType.GROUP;
+        const isMedia = node?.type === NodeType.AI_IMAGE_GEN || node?.type === NodeType.AI_VIDEO_GEN || node?.type === NodeType.AI_IMAGE_EDIT;
+        const minW = isGroup ? 200 : 100;
+        const minH = isGroup ? 150 : 100;
+        
+        let newW = resizeStartDimensions.w;
+        let newH = resizeStartDimensions.h;
+        let newX = resizeStartPosition.x;
+        let newY = resizeStartPosition.y;
+        
+        const corner = resizeCorner || 'se';
+        
+        // For media nodes in images-only view, maintain aspect ratio
+        const aspectRatio = resizeStartDimensions.w / resizeStartDimensions.h;
+        
+        if (corner === 'se') {
+            if (isMedia && viewMode === 'images-only') {
+                const avgDelta = (deltaX + deltaY) / 2;
+                newW = Math.max(minW, resizeStartDimensions.w + avgDelta);
+                newH = newW / aspectRatio;
+            } else {
+                newW = Math.max(minW, resizeStartDimensions.w + deltaX);
+                newH = Math.max(minH, resizeStartDimensions.h + deltaY);
+            }
+        } else if (corner === 'sw') {
+            if (isMedia && viewMode === 'images-only') {
+                const avgDelta = (-deltaX + deltaY) / 2;
+                newW = Math.max(minW, resizeStartDimensions.w + avgDelta);
+                newH = newW / aspectRatio;
+                newX = resizeStartPosition.x + resizeStartDimensions.w - newW;
+            } else {
+                newW = Math.max(minW, resizeStartDimensions.w - deltaX);
+                newH = Math.max(minH, resizeStartDimensions.h + deltaY);
+                newX = resizeStartPosition.x + resizeStartDimensions.w - newW;
+            }
+        } else if (corner === 'ne') {
+            if (isMedia && viewMode === 'images-only') {
+                const avgDelta = (deltaX - deltaY) / 2;
+                newW = Math.max(minW, resizeStartDimensions.w + avgDelta);
+                newH = newW / aspectRatio;
+                newY = resizeStartPosition.y + resizeStartDimensions.h - newH;
+            } else {
+                newW = Math.max(minW, resizeStartDimensions.w + deltaX);
+                newH = Math.max(minH, resizeStartDimensions.h - deltaY);
+                newY = resizeStartPosition.y + resizeStartDimensions.h - newH;
+            }
+        } else if (corner === 'nw') {
+            if (isMedia && viewMode === 'images-only') {
+                const avgDelta = (-deltaX - deltaY) / 2;
+                newW = Math.max(minW, resizeStartDimensions.w + avgDelta);
+                newH = newW / aspectRatio;
+                newX = resizeStartPosition.x + resizeStartDimensions.w - newW;
+                newY = resizeStartPosition.y + resizeStartDimensions.h - newH;
+            } else {
+                newW = Math.max(minW, resizeStartDimensions.w - deltaX);
+                newH = Math.max(minH, resizeStartDimensions.h - deltaY);
+                newX = resizeStartPosition.x + resizeStartDimensions.w - newW;
+                newY = resizeStartPosition.y + resizeStartDimensions.h - newH;
+            }
+        }
+        
+        setNodes(prev => prev.map(n => n.id === resizingNodeId ? { ...n, position: { x: newX, y: newY }, width: newW, height: newH } : n));
+    }
+    else if (interactionMode === 'draggingNode' && draggingNodeId) { 
+        isDraggingRef.current = true; 
+        const zoomFactor = scale; 
+        let deltaX = e.movementX / zoomFactor; 
+        let deltaY = e.movementY / zoomFactor; 
+        const mouseX = (e.clientX - rect.left - offset.x) / scale; 
+        const mouseY = (e.clientY - rect.top - offset.y) / scale; 
+        const targetGroup = visibleNodes.find(n => n.type === NodeType.GROUP && n.id !== draggingNodeId && !selectedNodeIds.includes(n.id) && mouseX >= n.position.x && mouseX <= n.position.x + (n.width || 400) && mouseY >= n.position.y && mouseY <= n.position.y + (n.height || 400)); 
+        setDragTargetGroupId(targetGroup ? targetGroup.id : null); 
+        
+        // Apply grid snapping if enabled
+        if (snapToGrid) {
+            const node = nodes.find(n => n.id === draggingNodeId);
+            if (node) {
+                const newX = Math.round((node.position.x + deltaX) / gridSize) * gridSize;
+                const newY = Math.round((node.position.y + deltaY) / gridSize) * gridSize;
+                deltaX = newX - node.position.x;
+                deltaY = newY - node.position.y;
+            }
+        }
+        
+        // Calculate object snapping if enabled
+        if (snapToObjects) {
+            const movingNode = nodes.find(n => n.id === draggingNodeId);
+            if (movingNode) {
+                const newLines: {type: 'horizontal' | 'vertical', position: number}[] = [];
+                const nodeW = movingNode.width || 288;
+                const nodeH = movingNode.height || 300;
+                const tentativeX = movingNode.position.x + deltaX;
+                const tentativeY = movingNode.position.y + deltaY;
+                
+                // Get edges of the moving node
+                const movingEdgesX = [tentativeX, tentativeX + nodeW / 2, tentativeX + nodeW];
+                const movingEdgesY = [tentativeY, tentativeY + nodeH / 2, tentativeY + nodeH];
+                
+                // Check against other nodes
+                const otherNodes = visibleNodes.filter(n => n.id !== draggingNodeId && !selectedNodeIds.includes(n.id));
+                let snapDeltaX: number | null = null;
+                let snapDeltaY: number | null = null;
+                
+                for (const other of otherNodes) {
+                    const otherW = other.width || 288;
+                    const otherH = other.height || 300;
+                    const otherEdgesX = [other.position.x, other.position.x + otherW / 2, other.position.x + otherW];
+                    const otherEdgesY = [other.position.y, other.position.y + otherH / 2, other.position.y + otherH];
+                    
+                    // Check X alignment
+                    if (snapDeltaX === null) {
+                        for (let i = 0; i < movingEdgesX.length; i++) {
+                            for (const targetX of otherEdgesX) {
+                                if (Math.abs(movingEdgesX[i] - targetX) < snapThreshold) {
+                                    snapDeltaX = targetX - movingEdgesX[i];
+                                    newLines.push({ type: 'vertical', position: targetX });
+                                    break;
+                                }
+                            }
+                            if (snapDeltaX !== null) break;
+                        }
+                    }
+                    
+                    // Check Y alignment
+                    if (snapDeltaY === null) {
+                        for (let i = 0; i < movingEdgesY.length; i++) {
+                            for (const targetY of otherEdgesY) {
+                                if (Math.abs(movingEdgesY[i] - targetY) < snapThreshold) {
+                                    snapDeltaY = targetY - movingEdgesY[i];
+                                    newLines.push({ type: 'horizontal', position: targetY });
+                                    break;
+                                }
+                            }
+                            if (snapDeltaY !== null) break;
+                        }
+                    }
+                }
+                
+                if (snapDeltaX !== null) deltaX += snapDeltaX;
+                if (snapDeltaY !== null) deltaY += snapDeltaY;
+                setAlignmentLines(newLines);
+            }
+        }
+        
+        setNodes(prev => { 
+            const movingIds = new Set<string>(); 
+            movingIds.add(draggingNodeId); 
+            if (selectedNodeIds.includes(draggingNodeId)) { selectedNodeIds.forEach(id => movingIds.add(id)); } 
+            const nodesToMove = new Set<string>(movingIds); 
+            prev.forEach(n => { if (movingIds.has(n.id) && n.type === NodeType.GROUP) { prev.forEach(child => { if (child.parentId === n.id) nodesToMove.add(child.id); }); } }); 
+            return prev.map(n => { if (nodesToMove.has(n.id)) { return { ...n, position: { x: n.position.x + deltaX, y: n.position.y + deltaY } }; } return n; }); 
+        }); 
+    }
   };
   const handleMouseUp = (e: React.MouseEvent) => { 
     if (interactionMode === 'selecting' && selectionBox) { const selLeft = (selectionBox.x - offset.x) / scale; const selTop = (selectionBox.y - offset.y) / scale; const selRight = (selectionBox.x + selectionBox.w - offset.x) / scale; const selBottom = (selectionBox.y + selectionBox.h - offset.y) / scale; const newSelected = visibleNodes.filter(n => { const nodeX = n.position.x; const nodeY = n.position.y; const nodeW = n.width || 288; const nodeH = n.height || 300; return (selLeft < nodeX + nodeW && selRight > nodeX && selTop < nodeY + nodeH && selBottom > nodeY); }).map(n => n.id); setSelectedNodeIds(prev => [...new Set([...prev, ...newSelected])]); }
     if (interactionMode === 'draggingNode' && dragTargetGroupId) { const targetGroup = nodes.find(n => n.id === dragTargetGroupId); if (targetGroup) { const nodesToDrop = selectedNodeIds.length > 0 ? selectedNodeIds : [draggingNodeId!]; const allChildrenIds = nodes.filter(n => n.parentId === dragTargetGroupId).map(n => n.id); const newMemberIds = nodesToDrop; const unionIds = [...new Set([...allChildrenIds, ...newMemberIds])]; const members = nodes.filter(n => unionIds.includes(n.id)); if (members.length > 0) { const padding = 40; const headerHeight = 50; const minX = Math.min(...members.map(n => n.position.x), targetGroup.position.x + padding); const minY = Math.min(...members.map(n => n.position.y), targetGroup.position.y + padding + headerHeight); const maxX = Math.max(...members.map(n => n.position.x + (n.width || 300)), targetGroup.position.x + (targetGroup.width || 400) - padding); const maxY = Math.max(...members.map(n => n.position.y + (n.height || 300)), targetGroup.position.x + (targetGroup.height || 400) - padding); setNodes(prev => prev.map(n => { if (n.id === dragTargetGroupId) { return { ...n, position: { x: minX - padding, y: minY - padding - headerHeight }, width: (maxX - minX) + (padding * 2), height: (maxY - minY) + (padding * 2) + headerHeight }; } if (newMemberIds.includes(n.id)) { return { ...n, parentId: dragTargetGroupId }; } return n; })); } } }
-    setInteractionMode('none'); setSelectionBox(null); setDraggingNodeId(null); setDragTargetGroupId(null);
+    setInteractionMode('none'); setSelectionBox(null); setDraggingNodeId(null); setDragTargetGroupId(null); setResizingNodeId(null); setResizeStartDimensions(null); setResizeCorner(null); setResizeStartPosition(null); setAlignmentLines([]);
   };
   // Replaced with manual passive:false listener above
   const handleCanvasContextMenu = (e: React.MouseEvent) => { e.preventDefault(); if (interactionMode !== 'none') return; setContextMenu({ x: e.clientX, y: e.clientY, nodeId: null }); };
@@ -524,27 +713,93 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   return (
     <div className="w-full h-full bg-black relative overflow-hidden font-sans select-none" onContextMenu={handleCanvasContextMenu}>
-        <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: `${20 * scale}px ${20 * scale}px`, transform: `translate(${offset.x % (20 * scale)}px, ${offset.y % (20 * scale)}px)` }} />
+        <div 
+            className={`absolute inset-0 pointer-events-none transition-opacity ${snapToGrid ? 'opacity-30' : 'opacity-10'}`} 
+            style={{ 
+                backgroundImage: snapToGrid 
+                    ? `linear-gradient(to right, rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.1) 1px, transparent 1px)`
+                    : 'radial-gradient(#fff 1px, transparent 1px)', 
+                backgroundSize: `${gridSize * scale}px ${gridSize * scale}px`, 
+                transform: `translate(${offset.x % (gridSize * scale)}px, ${offset.y % (gridSize * scale)}px)` 
+            }} 
+        />
         <div ref={canvasRef} className={`w-full h-full ${interactionMode === 'panning' || isSpacePressed ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
             <div className="origin-top-left w-full h-full absolute top-0 left-0 canvas-layer" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
                 {viewMode === 'normal' ? (
                     visibleNodes.map(node => (
-                        <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onContextMenu={handleNodeContextMenu} onRequestGeneration={onRequestGeneration} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} onImageClick={() => setLightboxNodeId(node.id)} />
+                        <NodeItem key={node.id} node={node} isSelected={selectedNodeIds.includes(node.id)} onSelect={handleNodeSelect} onDelete={deleteNode} onUpdate={updateNodeData} onDragStart={onNodeDragStart} onResizeStart={onNodeResizeStart} onContextMenu={handleNodeContextMenu} onRequestGeneration={onRequestGeneration} activeAsset={activeAsset} isThumbnail={activeAsset?.thumbnailUrl === node.data.imageUrl} isDragOver={dragTargetGroupId === node.id} projectAssets={projectAssets} assetThumbnails={onSetThumbnail ? {} : undefined} refinedImagesMap={refinedImagesMap} approvedImagesMap={approvedImagesMap} projectSettings={projectSettings} onImageClick={() => setLightboxNodeId(node.id)} />
                     ))
                 ) : (
-                    visibleNodes.filter(n => n.data.imageUrl || n.data.videoUrl || n.data.status === 'generating' || n.data.status === 'pending').map(node => {
-                        // Calculate aspect ratio for proper sizing
-                        const baseSize = 300;
+                    // Images-Only View: Show media nodes, writer nodes, and group frames
+                    visibleNodes.filter(n => 
+                        n.data.imageUrl || 
+                        n.data.videoUrl || 
+                        n.data.status === 'generating' || 
+                        n.data.status === 'pending' ||
+                        n.type === NodeType.TEXT_INPUT ||
+                        n.type === NodeType.AI_TEXT_GEN ||
+                        n.type === NodeType.GROUP
+                    ).map(node => {
+                        // Group nodes render as simple frames
+                        if (node.type === NodeType.GROUP) {
+                            return (
+                                <div
+                                    key={node.id}
+                                    className={`absolute border-2 border-dashed border-zinc-600/50 rounded-xl transition-colors ${selectedNodeIds.includes(node.id) ? 'border-blue-500 ring-2 ring-blue-500/30' : 'hover:border-zinc-500'}`}
+                                    style={{
+                                        left: node.position.x,
+                                        top: node.position.y,
+                                        width: node.width || 400,
+                                        height: node.height || 400,
+                                    }}
+                                    onClick={(e) => { e.stopPropagation(); setSelectedNodeIds([node.id]); }}
+                                    onMouseDown={(e) => { e.stopPropagation(); onNodeDragStart(e, node.id); }}
+                                    onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
+                                >
+                                    {node.data.label && (
+                                        <div className="absolute -top-6 left-3 text-xs text-zinc-500 bg-black/70 px-2 py-0.5 rounded">
+                                            {node.data.label}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
+                        
+                        // Writer nodes render as clean text blocks
+                        if (node.type === NodeType.TEXT_INPUT || node.type === NodeType.AI_TEXT_GEN) {
+                            return (
+                                <div
+                                    key={node.id}
+                                    className={`absolute transition-all ${selectedNodeIds.includes(node.id) ? 'ring-2 ring-blue-500/50 rounded-lg' : ''}`}
+                                    style={{
+                                        left: node.position.x,
+                                        top: node.position.y,
+                                        width: node.width || 300,
+                                        maxHeight: node.height || 400,
+                                    }}
+                                    onClick={(e) => { e.stopPropagation(); setSelectedNodeIds([node.id]); }}
+                                    onMouseDown={(e) => { e.stopPropagation(); onNodeDragStart(e, node.id); }}
+                                    onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
+                                >
+                                    <div className="text-zinc-300 text-sm whitespace-pre-wrap select-text prose prose-invert prose-sm max-w-none overflow-hidden p-2">
+                                        <ReactMarkdown>{node.data.text || ''}</ReactMarkdown>
+                                    </div>
+                                </div>
+                            );
+                        }
+                        
+                        // Media nodes (images/videos)
+                        const baseSize = node.width || 300;
                         const aspectRatio = node.data.aspectRatio || '1:1';
                         const [w, h] = aspectRatio.split(':').map(Number);
                         const ratio = w / h;
-                        const width = ratio >= 1 ? baseSize : baseSize * ratio;
-                        const height = ratio >= 1 ? baseSize / ratio : baseSize;
+                        const width = node.width || (ratio >= 1 ? baseSize : baseSize * ratio);
+                        const height = node.height || (ratio >= 1 ? baseSize / ratio : baseSize);
                         
                         return (
                             <div 
                                 key={node.id}
-                                className={`absolute cursor-pointer group transition-transform hover:scale-105 hover:z-50 ${selectedNodeIds.includes(node.id) ? 'ring-4 ring-blue-500 rounded-lg' : ''}`}
+                                className={`absolute cursor-pointer group ${selectedNodeIds.includes(node.id) ? 'ring-4 ring-blue-500 rounded-lg z-50' : 'hover:z-50'}`}
                                 style={{ 
                                     left: node.position.x, 
                                     top: node.position.y,
@@ -553,7 +808,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 }}
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    handleNodeSelect(node.id, e.shiftKey);
+                                    setSelectedNodeIds([node.id]);
+                                }}
+                                onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    onNodeDragStart(e, node.id);
                                 }}
                                 onDoubleClick={(e) => {
                                     e.stopPropagation();
@@ -561,14 +820,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                                         setLightboxNodeId(node.id);
                                     }
                                 }}
-                                onMouseEnter={() => setHoveredNodeId(node.id)}
-                                onMouseLeave={() => setHoveredNodeId(null)}
+                                onMouseEnter={() => { if (interactionMode === 'none') setHoveredNodeId(node.id); }}
+                                onMouseLeave={() => { if (interactionMode === 'none') setHoveredNodeId(null); }}
                                 onContextMenu={(e) => handleNodeContextMenu(e, node.id)}
                                 title={`${node.data.status || 'pending'}\n${node.data.prompt || node.data.text || ''}`}
                             >
                                 {/* Loading State */}
                                 {(node.data.status === 'generating' || node.data.status === 'pending') && !node.data.imageUrl && !node.data.videoUrl ? (
-                                    <div className="w-full h-full bg-zinc-900 rounded-lg shadow-xl flex flex-col items-center justify-center border-2 border-zinc-700">
+                                    <div className="w-full h-full bg-zinc-900 rounded-lg shadow-xl flex flex-col items-center justify-center border-2 border-zinc-700 pointer-events-none">
                                         <Loader2 size={48} className="animate-spin text-blue-500 mb-4" />
                                         <span className="text-xs text-zinc-400">Generating...</span>
                                     </div>
@@ -578,24 +837,25 @@ export const Canvas: React.FC<CanvasProps> = ({
                                         autoPlay 
                                         loop 
                                         muted 
-                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black"
+                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black pointer-events-none"
                                     />
                                 ) : node.data.imageUrl ? (
                                     <img 
                                         src={node.data.imageUrl} 
                                         alt={node.data.prompt || ''}
-                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black"
+                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black pointer-events-none"
+                                        draggable={false}
                                     />
                                 ) : node.data.videoUrl ? (
                                     <video 
                                         src={node.data.videoUrl}
-                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black"
+                                        className="w-full h-full object-contain rounded-lg shadow-xl bg-black pointer-events-none"
                                     />
                                 ) : null}
                                 
                                 {/* Status Badge */}
-                                {node.data.imageUrl || node.data.videoUrl ? (
-                                    <div className={`absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-bold uppercase shadow-lg ${
+                                {(node.data.imageUrl || node.data.videoUrl) && (
+                                    <div className={`absolute top-2 right-2 px-2 py-1 rounded text-[10px] font-bold uppercase shadow-lg pointer-events-none ${
                                         node.data.status === 'approved' ? 'bg-green-500 text-white' :
                                         node.data.status === 'review' ? 'bg-yellow-500 text-black' :
                                         node.data.status === 'archived' ? 'bg-zinc-600 text-white' :
@@ -604,15 +864,37 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     }`}>
                                         {node.data.status || 'draft'}
                                     </div>
-                                ) : null}
+                                )}
                                 
                                 {/* Tooltip on Hover */}
                                 {(node.data.imageUrl || node.data.videoUrl) && (
-                                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3 rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-3 rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                                         <div className="text-white text-xs line-clamp-3">
                                             {node.data.prompt || node.data.text || 'No prompt'}
                                         </div>
                                     </div>
+                                )}
+                                
+                                {/* Corner Resize Handles (images-only view) */}
+                                {selectedNodeIds.includes(node.id) && (
+                                    <>
+                                        <div 
+                                            className="absolute -top-1 -left-1 w-3 h-3 bg-blue-500 border border-white rounded-sm cursor-nw-resize z-50"
+                                            onMouseDown={(e) => { e.stopPropagation(); onNodeResizeStart(e, node.id, 'nw'); }}
+                                        />
+                                        <div 
+                                            className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 border border-white rounded-sm cursor-ne-resize z-50"
+                                            onMouseDown={(e) => { e.stopPropagation(); onNodeResizeStart(e, node.id, 'ne'); }}
+                                        />
+                                        <div 
+                                            className="absolute -bottom-1 -left-1 w-3 h-3 bg-blue-500 border border-white rounded-sm cursor-sw-resize z-50"
+                                            onMouseDown={(e) => { e.stopPropagation(); onNodeResizeStart(e, node.id, 'sw'); }}
+                                        />
+                                        <div 
+                                            className="absolute -bottom-1 -right-1 w-3 h-3 bg-blue-500 border border-white rounded-sm cursor-se-resize z-50"
+                                            onMouseDown={(e) => { e.stopPropagation(); onNodeResizeStart(e, node.id, 'se'); }}
+                                        />
+                                    </>
                                 )}
                             </div>
                         );
@@ -620,6 +902,19 @@ export const Canvas: React.FC<CanvasProps> = ({
                 )}
             </div>
         </div>
+        
+        {/* Alignment Lines */}
+        {alignmentLines.map((line, i) => (
+            <div
+                key={i}
+                className="absolute pointer-events-none z-40"
+                style={line.type === 'vertical' 
+                    ? { left: line.position * scale + offset.x, top: 0, width: 1, height: '100%', backgroundColor: 'rgba(239, 68, 68, 0.5)' }
+                    : { top: line.position * scale + offset.y, left: 0, height: 1, width: '100%', backgroundColor: 'rgba(239, 68, 68, 0.5)' }
+                }
+            />
+        ))}
+        
         {selectionBox && ( <div className="absolute border border-blue-500 bg-blue-500/20 pointer-events-none z-50" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.w, height: selectionBox.h }} /> )}
 
         {contextMenu && (
@@ -689,7 +984,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         )}
         {/* ... TabMenu, Toolbar, Hints, DebugModal (Same) ... */}
         {tabMenu && ( <div className="fixed z-50 flex flex-col bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl w-64 overflow-hidden animate-in fade-in zoom-in-95 duration-100" style={{ left: tabMenu.x, top: tabMenu.y }} onClick={(e) => e.stopPropagation()}> <div className="p-2 border-b border-zinc-800 flex items-center gap-2"> <Search size={14} className="text-zinc-500" /> <input autoFocus className="bg-transparent text-sm text-white focus:outline-none w-full placeholder-zinc-600" placeholder="Search nodes..." value={tabMenu.search} onChange={(e) => setTabMenu({...tabMenu, search: e.target.value, selectedIndex: 0})} onKeyDown={handleTabMenuKeyDown} /> </div> <div className="max-h-60 overflow-y-auto p-1"> {filteredMenuNodes.map((item, idx) => ( <button key={item.type} onClick={() => { addNodeAtLocation(item.type, tabMenu.x, tabMenu.y); setTabMenu(null); }} className={`w-full text-left px-3 py-2 rounded flex items-center gap-3 transition-colors ${idx === tabMenu.selectedIndex ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800'}`} > <item.icon size={16} className={idx === tabMenu.selectedIndex ? 'text-white' : 'text-zinc-500'} /> <div> <div className="text-xs font-bold">{item.label}</div> <div className={`text-[10px] ${idx === tabMenu.selectedIndex ? 'text-blue-200' : 'text-zinc-500'}`}>{item.desc}</div> </div> </button> ))} {filteredMenuNodes.length === 0 && ( <div className="p-3 text-xs text-zinc-500 text-center">No matching nodes</div> )} </div> <div className="bg-zinc-950 px-2 py-1 text-[9px] text-zinc-600 border-t border-zinc-800 flex justify-between"> <span>Create: ⏎</span> <span>Navigate: ↑↓</span> </div> </div> )}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.TEXT_INPUT)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_TEXT_GEN)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_GEN)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_EDIT)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_VIDEO_GEN)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant={viewMode === 'images-only' ? 'primary' : 'ghost'} onClick={() => setViewMode(viewMode === 'normal' ? 'images-only' : 'normal')} title={viewMode === 'normal' ? 'Images Only View' : 'Normal View'}> <Grid3x3 size={16} className={viewMode === 'images-only' ? 'text-white' : 'text-zinc-500'}/> </Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 p-2 bg-zinc-900/80 backdrop-blur border border-zinc-800 rounded-full shadow-2xl z-40"> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.TEXT_INPUT)} title="Add Note"> <Type size={18} /> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_TEXT_GEN)} title="AI Writer"> <Sparkles size={18} className="text-blue-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_GEN)} title="Generate Image"> <ImageIcon size={18} className="text-purple-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_IMAGE_EDIT)} title="Edit Image"> <Sparkles size={18} className="text-pink-400"/> </Button> <Button variant="ghost" onClick={() => addNodeFromToolbar(NodeType.AI_VIDEO_GEN)} title="Veo Video"> <Video size={18} className="text-red-400"/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant="ghost" onClick={() => setScale(s => s - 0.1)}><ZoomOut size={16}/></Button> <span className="text-xs text-zinc-500 font-mono w-12 text-center">{Math.round(scale * 100)}%</span> <Button variant="ghost" onClick={() => setScale(s => s + 0.1)}><ZoomIn size={16}/></Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant={viewMode === 'images-only' ? 'primary' : 'ghost'} onClick={() => setViewMode(viewMode === 'normal' ? 'images-only' : 'normal')} title={viewMode === 'normal' ? 'Images Only View' : 'Normal View'}> <Grid3x3 size={16} className={viewMode === 'images-only' ? 'text-white' : 'text-zinc-500'}/> </Button> </div> <div className="flex items-center gap-1 px-2 border-r border-zinc-700"> <Button variant={snapToGrid ? 'primary' : 'ghost'} onClick={() => setSnapToGrid(!snapToGrid)} title={snapToGrid ? "Disable Grid Snap" : "Enable Grid Snap"}> <LayoutGrid size={16} className={snapToGrid ? 'text-white' : 'text-zinc-500'}/> </Button> <Button variant={snapToObjects ? 'primary' : 'ghost'} onClick={() => setSnapToObjects(!snapToObjects)} title={snapToObjects ? "Disable Object Snap" : "Enable Object Snap"}> <Magnet size={16} className={snapToObjects ? 'text-white' : 'text-zinc-500'}/> </Button> </div> <div className="flex items-center gap-1 pl-1"> <Button variant={showArchived ? 'primary' : 'ghost'} onClick={() => setShowArchived(!showArchived)} title={showArchived ? "Hide Archived" : "Show Archived"} > <Archive size={16} className={showArchived ? "text-white" : "text-zinc-500"}/> </Button> <Button variant="ghost" onClick={handleDebug} title="Debug Prompt Resolution" className="hover:text-yellow-400" > <Bug size={16} /> </Button> </div> </div>
         <div className="absolute top-4 right-4 flex flex-col items-end gap-1 pointer-events-none opacity-50"> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">TAB for Menu</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">F to Frame</div> <div className="text-[10px] text-zinc-500 bg-black/50 px-2 py-1 rounded">Ctrl+Z Undo</div> </div>
         {showDebugModal && debugTrace && ( 
             <Modal title="Prompt Resolution Debugger" onClose={() => setShowDebugModal(false)} maxWidth="max-w-4xl"> 
