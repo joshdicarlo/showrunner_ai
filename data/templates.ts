@@ -46,6 +46,7 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            parentId: 'seq-group',
            position: {x: 80, y: 120}, 
            data: { 
+               label: 'Beat Sheet',
                prompt: 'Write a beat sheet for a chase scene in an asteroid field.', 
                text: `1. **The Signal**: @Zax and his copilot **Orbit** receive a distress call from the rebel leader **Kira**.\n2. **The Ambush**: The warlord **Vorg** intercepts the transmission and launches his fleet.\n3. **The Maneuver**: @Zax flies into the asteroid field while **Orbit** calculates the odds.\n4. **The Crash**: They are hit by **Vorg**'s cannon but **Kira** pulls them from the wreckage just in time.`,
                status: 'approved' 
@@ -60,6 +61,7 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            parentId: 'seq-group',
            position: {x: 480, y: 120}, 
            data: { 
+               label: 'Outline',
                prompt: 'Expand the beat sheet into a detailed scene outline with action descriptions and character moments.', 
                text: `## SEQUENCE 1: THE ASTEROID CHASE
 
@@ -99,6 +101,7 @@ export const GALACTIC_COURIER_TEMPLATE: Project = {
            parentId: 'seq-group',
            position: {x: 880, y: 120}, 
            data: { 
+               label: 'Script - The Signal',
                prompt: 'Convert the outline into a properly formatted screenplay scene.', 
                text: `### INT. STARFIGHTER COCKPIT – DEEP SPACE
 

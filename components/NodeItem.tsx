@@ -368,6 +368,9 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [collapsedEditMode, setCollapsedEditMode] = useState(false);
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [editLabelValue, setEditLabelValue] = useState('');
+  const labelInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoStartFrameRef = useRef<HTMLInputElement>(null);
   const videoEndFrameRef = useRef<HTMLInputElement>(null);
@@ -1215,6 +1218,35 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
       }
   }
 
+  const getNodeLabel = () => node.data.label || null;
+
+  const startEditingLabel = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setEditLabelValue(node.data.label || '');
+      setIsEditingLabel(true);
+      setTimeout(() => labelInputRef.current?.focus(), 0);
+  };
+
+  const saveLabel = () => {
+      const trimmed = editLabelValue.trim();
+      onUpdate(node.id, { ...node.data, label: trimmed || undefined });
+      setIsEditingLabel(false);
+  };
+
+  const cancelEditLabel = () => {
+      setIsEditingLabel(false);
+      setEditLabelValue('');
+  };
+
+  const handleLabelKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+          e.preventDefault();
+          saveLabel();
+      } else if (e.key === 'Escape') {
+          cancelEditLabel();
+      }
+  };
+
   const isGroup = node.type === NodeType.GROUP;
   const hasHistory = node.data.history && node.data.history.length > 0;
 
@@ -1228,6 +1260,30 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
                            {!isGroup && node.data.status === 'review' && <Eye size={20}/>}
                            {getTitle()}
                        </span>
+                       {getNodeLabel() && (
+                           <span className="text-base text-zinc-400 px-2 border-l border-white/20">• {getNodeLabel()}</span>
+                       )}
+                       {isEditingLabel ? (
+                           <input
+                               ref={labelInputRef}
+                               type="text"
+                               value={editLabelValue}
+                               onChange={(e) => setEditLabelValue(e.target.value)}
+                               onBlur={saveLabel}
+                               onKeyDown={handleLabelKeyDown}
+                               onClick={(e) => e.stopPropagation()}
+                               className="text-sm bg-zinc-800 border border-zinc-600 rounded px-2 py-1 text-white outline-none focus:border-blue-500"
+                               placeholder="Enter node name..."
+                           />
+                       ) : (
+                           <button 
+                               onClick={startEditingLabel}
+                               className="text-xs text-zinc-500 hover:text-white px-2 py-1 rounded hover:bg-zinc-800 flex items-center gap-1"
+                               title="Rename node"
+                           >
+                               <Edit size={12} /> {getNodeLabel() ? 'Rename' : 'Add Name'}
+                           </button>
+                       )}
                        <span className="text-sm opacity-50 px-2 border-l border-white/20">Full Screen Mode</span>
                    </div>
                    <div className="flex items-center gap-2">
@@ -1267,18 +1323,43 @@ const NodeItemComponent: React.FC<NodeItemProps> = ({
         onDoubleClick={handleToggleExpand}
         title="Double click to expand"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
              {isGroup && (
                  <button onClick={(e) => { e.stopPropagation(); toggleCollapse(); }}>
                      {node.data.collapsed ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}
                  </button>
              )}
-             <span className="text-xs font-bold tracking-wide flex items-center gap-2">
-                {!isGroup && node.data.status === 'approved' && <CheckCircle size={12}/>}
-                {!isGroup && node.data.status === 'review' && <Eye size={12}/>}
-                {!isGroup && (node.data.status === 'generating' || node.data.status === 'pending') && <Sparkles size={12} className="animate-spin"/>}
-                {getTitle()}
-            </span>
+             {isEditingLabel ? (
+                 <input
+                     ref={labelInputRef}
+                     type="text"
+                     value={editLabelValue}
+                     onChange={(e) => setEditLabelValue(e.target.value)}
+                     onBlur={saveLabel}
+                     onKeyDown={handleLabelKeyDown}
+                     onClick={(e) => e.stopPropagation()}
+                     onMouseDown={(e) => e.stopPropagation()}
+                     className="text-xs font-bold bg-zinc-800 border border-zinc-600 rounded px-1.5 py-0.5 text-white outline-none focus:border-blue-500 min-w-0 flex-1"
+                     placeholder="Enter node name..."
+                 />
+             ) : (
+                 <div 
+                     className="flex items-center gap-2 min-w-0 cursor-pointer group/label"
+                     onClick={startEditingLabel}
+                     title="Click to rename"
+                 >
+                     <span className="text-xs font-bold tracking-wide flex items-center gap-2 shrink-0">
+                         {!isGroup && node.data.status === 'approved' && <CheckCircle size={12}/>}
+                         {!isGroup && node.data.status === 'review' && <Eye size={12}/>}
+                         {!isGroup && (node.data.status === 'generating' || node.data.status === 'pending') && <Sparkles size={12} className="animate-spin"/>}
+                         {getTitle()}
+                     </span>
+                     {getNodeLabel() && (
+                         <span className="text-xs text-zinc-400 truncate">• {getNodeLabel()}</span>
+                     )}
+                     <Edit size={10} className="text-zinc-600 opacity-0 group-hover/label:opacity-100 transition-opacity shrink-0" />
+                 </div>
+             )}
         </div>
         
         <div className="flex items-center gap-1">
