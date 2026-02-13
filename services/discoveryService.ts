@@ -73,11 +73,17 @@ const SHOT_PROMPT_TEMPLATE = `
 ### SHOT PROMPT TEMPLATE (MANDATORY STRUCTURE)
 
 --- IMAGE & VIDEO (Always included) ---
-Visual: [Static scene composition - describe as if frozen in a painting. Character positions, poses, expressions, spatial relationships. Use @Character for FIRST mention of any known character. Example: @Knight kneels before the throne, head bowed, sword laid flat across both palms. The King looms above, one hand raised.]
+Visual: [SINGLE FROZEN MOMENT — describe exactly ONE instant in time as a still photograph. NO sequential action, NO before/after, NO "then" or "as" transitions. Only what a camera would capture in a single frame: character positions, poses, expressions, spatial relationships. Use @Character for FIRST mention of any known character. Example: @Knight kneels before the throne, head bowed, sword laid flat across both palms. The King looms above, one hand raised.]
 Set: [Setting, atmosphere, location. Use @Set if applicable. Example: A cavernous throne room at dusk, dust motes drifting through shafts of golden light. @Throne_Room]
 Lighting: [Mood, time of day, light sources. Example: Dramatic side-lighting, warm amber tones from tall windows.]
 Camera: [Shot type, angle, lens. Example: Low angle, medium shot, 35mm anamorphic.]
 Style: [Visual style, film reference, color palette. Example: Cinematic, Ridley Scott epic, desaturated palette.]
+
+CRITICAL — SINGLE IMAGE RULE:
+- The Visual field MUST describe ONE single moment, NOT a sequence of events.
+- NEVER describe multiple actions, transitions, or temporal progression in Visual.
+- If you need to show progression, break it into SEPARATE shots.
+- Violating this rule causes the image generator to produce multi-panel comic layouts.
 
 --- VIDEO ONLY (Stripped for image generation) ---
 Action: [What happens over time - movement, changes. Example: Knight slowly rises, grips sword hilt, turns to face the approaching enemy.]
@@ -264,7 +270,7 @@ const buildPrompt = (scriptText: string, options: DiscoveryOptions): string => {
             : '';
             
         sections.push(`3. SCENES${options.includeShots ? ' & SHOTS' : ''}:
-   - GROUPING STRATEGY: Consolidate the script into substantial Sequences. Do NOT create tiny scenes with only 2-4 shots. A typical Sequence should be comprehensive and contain many shots (aim for 10+ shots per sequence unless the location changes drastically).
+   - GROUPING STRATEGY: Consolidate the script into substantial Sequences. Do NOT create tiny scenes with only 2-4 shots. A typical Sequence MUST contain 15-20 shots (minimum 10, never fewer). Break continuous action into more granular shot-by-shot coverage: establishing shots, reactions, inserts, cutaways, over-the-shoulders, etc. Think like a cinematographer covering every beat.
    - Scene Description: Detailed action summary${knownCharsNote}
    - Include a 'type' field for each scene (action, dialogue, montage, etc.)${options.includeShots ? `
    - Shot Description MUST use this MANDATORY YAML Structure:
