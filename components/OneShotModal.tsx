@@ -61,7 +61,10 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
             const updateRecursive = (list: OneShotItem[]): OneShotItem[] => {
                 return list.map(item => {
                     let newItem = item;
-                    if (item.type === type || (type === 'Scene' && item.type === 'Shot')) {
+                    // For autoGenerate/autoApprove, skip Scene items (they are containers)
+                    const isGenerateField = field === 'autoGenerate' || field === 'autoApprove';
+                    const shouldUpdate = item.type === type || (type === 'Scene' && item.type === 'Shot');
+                    if (shouldUpdate && !(isGenerateField && item.type === 'Scene')) {
                         newItem = { ...item, [field]: value };
                     }
                     if (item.children) {
@@ -80,7 +83,8 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
             const updateRecursive = (list: OneShotItem[]): OneShotItem[] => {
                 return list.map(item => {
                     let newItem = item;
-                    if (item.type === type || (type === 'Scene' && item.type === 'Shot')) {
+                    // Skip Scene items — they are containers, not generatable
+                    if ((item.type === type || (type === 'Scene' && item.type === 'Shot')) && item.type !== 'Scene') {
                         newItem = { ...item, model };
                     }
                     if (item.children) {
@@ -152,57 +156,69 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                         </div>
                     </div>
 
-                    <div className="w-32 shrink-0 px-2 flex justify-end">
-                        {item.autoGenerate && item.selected ? (
-                            <div className="relative w-full">
-                                <select 
-                                    value={item.model || MODELS.IMAGE_GEN} 
-                                    onChange={(e) => updateItem(item.id, { model: e.target.value })}
-                                    className="w-full text-[10px] py-1.5 pl-2 pr-6 h-8 bg-zinc-900 border border-zinc-700 hover:border-zinc-500 rounded text-zinc-300 appearance-none focus:ring-1 focus:ring-blue-500 transition-colors cursor-pointer outline-none"
-                                >
-                                    {IMAGE_MODELS_OPTIONS.map(m => (
-                                        <option key={m.value} value={m.value}>{m.label}</option>
-                                    ))}
-                                </select>
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
-                                    <ChevronDown size={10} />
-                                </div>
+                    {/* Model selector & Controls — hidden for Scene rows (they are containers) */}
+                    {item.type === 'Scene' ? (
+                        <>
+                            <div className="w-32 shrink-0 px-2" />
+                            <div className="flex items-center gap-2 pr-4">
+                                <span className="text-[10px] text-zinc-600 italic w-[232px] text-center">Sequence (container)</span>
                             </div>
-                        ) : <div className="w-full h-8" />}
-                    </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="w-32 shrink-0 px-2 flex justify-end">
+                                {item.autoGenerate && item.selected ? (
+                                    <div className="relative w-full">
+                                        <select 
+                                            value={item.model || MODELS.IMAGE_GEN} 
+                                            onChange={(e) => updateItem(item.id, { model: e.target.value })}
+                                            className="w-full text-[10px] py-1.5 pl-2 pr-6 h-8 bg-zinc-900 border border-zinc-700 hover:border-zinc-500 rounded text-zinc-300 appearance-none focus:ring-1 focus:ring-blue-500 transition-colors cursor-pointer outline-none"
+                                        >
+                                            {IMAGE_MODELS_OPTIONS.map(m => (
+                                                <option key={m.value} value={m.value}>{m.label}</option>
+                                            ))}
+                                        </select>
+                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
+                                            <ChevronDown size={10} />
+                                        </div>
+                                    </div>
+                                ) : <div className="w-full h-8" />}
+                            </div>
 
-                    {/* Controls */}
-                    <div className="flex items-center gap-2 pr-4">
-                        
-                        {/* Auto Generate Toggle */}
-                        <button 
-                            onClick={() => updateItem(item.id, { autoGenerate: !item.autoGenerate })}
-                            disabled={!item.selected}
-                            className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-28 justify-center font-medium h-8
-                                ${!item.selected ? 'opacity-20 cursor-not-allowed border-transparent' : 
-                                  item.autoGenerate ? 'bg-blue-900/20 text-blue-300 border-blue-800 hover:bg-blue-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
-                            `}
-                            title="Auto-Generate Image"
-                        >
-                            <Wand2 size={12} className={item.autoGenerate ? "text-blue-400" : "text-zinc-500"} />
-                            {item.autoGenerate ? "Auto-Gen" : "Manual"}
-                        </button>
+                            {/* Controls */}
+                            <div className="flex items-center gap-2 pr-4">
+                                
+                                {/* Auto Generate Toggle */}
+                                <button 
+                                    onClick={() => updateItem(item.id, { autoGenerate: !item.autoGenerate })}
+                                    disabled={!item.selected}
+                                    className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-28 justify-center font-medium h-8
+                                        ${!item.selected ? 'opacity-20 cursor-not-allowed border-transparent' : 
+                                          item.autoGenerate ? 'bg-blue-900/20 text-blue-300 border-blue-800 hover:bg-blue-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
+                                    `}
+                                    title="Auto-Generate Image"
+                                >
+                                    <Wand2 size={12} className={item.autoGenerate ? "text-blue-400" : "text-zinc-500"} />
+                                    {item.autoGenerate ? "Auto-Gen" : "Manual"}
+                                </button>
 
-                        {/* Auto Approve Toggle */}
-                        <button 
-                            onClick={() => updateItem(item.id, { autoApprove: !item.autoApprove })}
-                            disabled={!item.selected || !item.autoGenerate}
-                            className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-28 justify-center font-medium h-8
-                                ${!item.selected || !item.autoGenerate ? 'opacity-20 cursor-not-allowed border-transparent' : 
-                                  item.autoApprove ? 'bg-green-900/20 text-green-300 border-green-800 hover:bg-green-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
-                            `}
-                            title="Auto-Approve First Result"
-                        >
-                            {item.autoApprove ? <CheckCircle size={12} className="text-green-400"/> : <Circle size={12} className="text-zinc-500"/>}
-                            {item.autoApprove ? "Approved" : "Review"}
-                        </button>
+                                {/* Auto Approve Toggle */}
+                                <button 
+                                    onClick={() => updateItem(item.id, { autoApprove: !item.autoApprove })}
+                                    disabled={!item.selected || !item.autoGenerate}
+                                    className={`px-3 py-1.5 rounded flex items-center gap-2 border transition-all text-[10px] w-28 justify-center font-medium h-8
+                                        ${!item.selected || !item.autoGenerate ? 'opacity-20 cursor-not-allowed border-transparent' : 
+                                          item.autoApprove ? 'bg-green-900/20 text-green-300 border-green-800 hover:bg-green-900/30' : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'}
+                                    `}
+                                    title="Auto-Approve First Result"
+                                >
+                                    {item.autoApprove ? <CheckCircle size={12} className="text-green-400"/> : <Circle size={12} className="text-zinc-500"/>}
+                                    {item.autoApprove ? "Approved" : "Review"}
+                                </button>
 
-                    </div>
+                            </div>
+                        </>
+                    )}
                 </div>
                 {isParent && isExpanded && item.children?.map(child => renderRow(child, depth + 1))}
             </React.Fragment>
@@ -235,6 +251,7 @@ export const OneShotModal: React.FC<OneShotModalProps> = ({ items, setItems, onC
                 <button onClick={() => toggleSection(type, 'selected', false)} className="text-[10px] text-zinc-500 hover:text-white px-1">None</button>
                 <div className="w-[1px] h-3 bg-zinc-800 mx-1"/>
                 <button onClick={() => toggleSection(type, 'autoGenerate', true)} className="text-[10px] text-blue-500 hover:text-blue-400 px-1">Auto-Gen All</button>
+                <button onClick={() => toggleSection(type, 'autoApprove', true)} className="text-[10px] text-green-500 hover:text-green-400 px-1">Auto-Approve</button>
             </div>
         </div>
     );
